@@ -246,6 +246,14 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 - **split 官方结构（"随后"阶段直接引用）**：split 全在窗口内——每窗口一棵 `SplitTree`（不可变值类型），每个 split 是独立 surface（与 tab 同一 `ghostty_surface_new`，仅归属不同），SwiftUI 递归渲染，焦点走 core `goto_split` action。lightty 的"pane = 任务绑定点"精确对应 leaf。
 - cmux 的钉版本策略（备忘）：CI 用预构建 GhosttyKit + 校验和，不在开发机现编。lightty 稳定后可仿效。
 
+### 2026-08-22 重建演练：按本文档从零重建成功（新仓库 ~/project/one-thousand-plan/lightty）
+
+- **本节由重建会话补写**。原仓库 `~/project/ai/lightty` 在重建机器上不存在，完全按第 9 节路径执行：Notion 镜像 → 最小重建集落盘 → vendor 按 SHA `5851d98` 浅克隆 → 环境搭建 → GhosttyKit 构建 → 数据层 TDD + 壳层设计级重建。
+- 环境坑**全部如实复现**，文档解法全部有效：brew zig 恰为 0.16.0；Metal Toolchain 缺失（`xcodebuild -downloadComponent MetalToolchain` 解决）；zig 拉依赖 400（curl 预下载 38 依赖 + `zig fetch` 灌缓存解决）。
+- **新坑（原文档未记）**：`zig fetch <本地路径>` 必须在含 build.zig 的目录（如 vendor/ghostty）内执行，否则报 "no build.zig file found"；scratchpad 里直接跑会全部失败。
+- 重建结果对照验收标准（scripts 附件页）：① `swift test` 全绿——数据层重写为 **48 测试**（覆盖面为原 31 测试的超集）；② `.build/debug/lightty` 窗口渲染真实终端（login→zsh，oh-my-zsh/主题/透明全部生效，截图目视确认）；③ 冒烟 `ghostty_info()` 真实调用已固化在 main.swift。
+- 代码为**设计级重建**（功能等价，第 9 节预期）：LighttyCore（TaskFile/TaskStore/TaskFolderWatcher/FuzzyMatch）+ 壳层（pane header、嵌套分屏 cmd+D/cmd+shift+D、cmd+T/N、pane 导航、cmd+K 任务面板、cmd+shift+K 侧边栏、恢复流程、HandoffPrompt 收工/注入、配置对齐）。已知欠账与原版一致：IME/修饰键未接、TaskFolderWatcher 未接进壳、配置热重载未做。
+
 ---
 
 *本文件由 2026-08-21 的讨论整理生成，用作该需求后续迭代的起点。第 6、7 节为同日第二、三轮讨论的决议，冲突处以第 7 节为准；第 8 节为形态决议；第 9 节为重建与依赖锚点；第 10 节为实施进展日志。本页由 lightty 仓库 HANDOVER.md 同步，仓库为真源。*
