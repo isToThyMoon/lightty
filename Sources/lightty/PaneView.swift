@@ -37,6 +37,7 @@ final class PaneView: NSView {
         ])
 
         header.onRename = { [weak self] name in self?.rename(to: name) }
+        header.onEditingEnded = { [weak self] in self?.focusTerminal() }
         header.onFinish = { [weak self] in self?.finish() }
         header.onInject = { [weak self] in self?.inject() }
         terminal.onCloseRequest = { [weak self] in

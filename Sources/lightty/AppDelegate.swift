@@ -32,30 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let taskMenu = NSMenu(title: "任务")
         taskMenuItem.submenu = taskMenu
 
-        // cmd+N：新任务 → 独立窗口（交给 aerospace 平铺）
-        taskMenu.addItem(makeItem("新任务（新窗口）", #selector(newTaskWindow), "n"))
-        // cmd+T：新任务 → 当前窗口右侧并排 pane
-        taskMenu.addItem(makeItem("新任务（右侧 pane）", #selector(newTaskPane), "t"))
+        // 终端类动作不设菜单快捷键：按键直达 surface，由 core 按用户 config 的
+        // keybind（含默认 cmd+N/T/D/W、cmd+[]、cmd+alt+方向等）匹配后经 action_cb 回来。
+        // 菜单项仅供鼠标点选。
+        taskMenu.addItem(makeItem("新任务（新窗口）", #selector(newTaskWindow)))
+        taskMenu.addItem(makeItem("新任务（右侧 pane）", #selector(newTaskPane)))
         taskMenu.addItem(.separator())
-        // cmd+D / cmd+shift+D：分屏继承当前任务
-        taskMenu.addItem(makeItem("向右分 pane", #selector(splitRight), "d"))
-        taskMenu.addItem(makeItem("向下分 pane", #selector(splitDown), "d", [.command, .shift]))
+        taskMenu.addItem(makeItem("向右分 pane", #selector(splitRight)))
+        taskMenu.addItem(makeItem("向下分 pane", #selector(splitDown)))
+        taskMenu.addItem(makeItem("关闭 pane", #selector(closePane)))
         taskMenu.addItem(.separator())
-        taskMenu.addItem(makeItem("关闭 pane", #selector(closePane), "w"))
-        taskMenu.addItem(.separator())
-        taskMenu.addItem(makeItem("任务面板", #selector(togglePanel), "k"))
-        taskMenu.addItem(makeItem("任务侧边栏", #selector(toggleSidebar), "k", [.command, .shift]))
-
-        let navMenuItem = NSMenuItem()
-        mainMenu.addItem(navMenuItem)
-        let navMenu = NSMenu(title: "导航")
-        navMenuItem.submenu = navMenu
-        navMenu.addItem(makeItem("下一个 pane", #selector(nextPane), "]"))
-        navMenu.addItem(makeItem("上一个 pane", #selector(prevPane), "["))
-        navMenu.addItem(makeItem("左 pane", #selector(paneLeft), String(UnicodeScalar(NSLeftArrowFunctionKey)!), [.command, .option]))
-        navMenu.addItem(makeItem("右 pane", #selector(paneRight), String(UnicodeScalar(NSRightArrowFunctionKey)!), [.command, .option]))
-        navMenu.addItem(makeItem("上 pane", #selector(paneUp), String(UnicodeScalar(NSUpArrowFunctionKey)!), [.command, .option]))
-        navMenu.addItem(makeItem("下 pane", #selector(paneDown), String(UnicodeScalar(NSDownArrowFunctionKey)!), [.command, .option]))
+        // lightty 拓展功能才有自己的快捷键：cmd+K 任务侧边栏（悬浮左侧，唯一任务入口）
+        taskMenu.addItem(makeItem("任务侧边栏", #selector(toggleSidebar), "k"))
 
         NSApp.mainMenu = mainMenu
     }
@@ -63,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeItem(
         _ title: String,
         _ action: Selector,
-        _ key: String,
+        _ key: String = "",
         _ mods: NSEvent.ModifierFlags = [.command]
     ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
@@ -84,8 +72,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.newTaskPaneRight()
     }
 
-    @objc private func splitRight() { AppState.shared.keyWindowController?.splitActivePane(vertical: true) }
-    @objc private func splitDown() { AppState.shared.keyWindowController?.splitActivePane(vertical: false) }
+    @objc private func splitRight() {
+        guard let c = AppState.shared.keyWindowController, let pane = c.activePane else { return }
+        c.split(pane, direction: .right)
+    }
+
+    @objc private func splitDown() {
+        guard let c = AppState.shared.keyWindowController, let pane = c.activePane else { return }
+        c.split(pane, direction: .down)
+    }
 
     @objc private func closePane() {
         guard let controller = AppState.shared.keyWindowController,
@@ -93,13 +88,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.close(pane: pane)
     }
 
-    @objc private func togglePanel() { TaskPanelController.shared.toggle() }
-    @objc private func toggleSidebar() { SidebarController.shared.toggle() }
-
-    @objc private func nextPane() { AppState.shared.keyWindowController?.focusPane(offset: 1) }
-    @objc private func prevPane() { AppState.shared.keyWindowController?.focusPane(offset: -1) }
-    @objc private func paneLeft() { AppState.shared.keyWindowController?.focusPane(direction: .leading) }
-    @objc private func paneRight() { AppState.shared.keyWindowController?.focusPane(direction: .trailing) }
-    @objc private func paneUp() { AppState.shared.keyWindowController?.focusPane(direction: .top) }
-    @objc private func paneDown() { AppState.shared.keyWindowController?.focusPane(direction: .bottom) }
+    @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
 }

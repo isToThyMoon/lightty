@@ -5,7 +5,7 @@ import AppKit
 /// 语义状态点（绿/橙/灰）是唯一例外。
 /// ⚠️ 必须 clipsToBounds：layer 化后自绘内容会落在超出 bounds 的 ContentLayer 上，
 /// 半透明底色会整张盖住终端（docs/libghostty-embedding.md 透明排查实录）。
-final class PaneHeaderView: NSView {
+final class PaneHeaderView: NSView, NSTextFieldDelegate {
     static let height: CGFloat = 24
 
     enum Dot {
@@ -25,6 +25,8 @@ final class PaneHeaderView: NSView {
     var onRename: ((String) -> Void)?
     var onFinish: (() -> Void)?
     var onInject: (() -> Void)?
+    /// 改名编辑结束（提交或取消）后回调，pane 用它把焦点还给终端
+    var onEditingEnded: (() -> Void)?
 
     private let dotView = NSView()
     private let nameLabel = NSTextField(labelWithString: "")
@@ -63,10 +65,19 @@ final class PaneHeaderView: NSView {
         nameLabel.textColor = cfg.foregroundColor
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        nameEditor.font = .systemFont(ofSize: 11)
+        // 编辑器贴 header 样式：无边框、无焦点环，前景色随配置，底色用前景色淡化
+        nameEditor.font = nameLabel.font
         nameEditor.isHidden = true
-        nameEditor.target = self
-        nameEditor.action = #selector(commitRename)
+        nameEditor.isBordered = false
+        nameEditor.drawsBackground = false
+        nameEditor.textColor = cfg.foregroundColor
+        nameEditor.focusRingType = .none
+        nameEditor.placeholderString = "任务名"
+        nameEditor.wantsLayer = true
+        nameEditor.layer?.backgroundColor = cfg.foregroundColor.withAlphaComponent(0.12).cgColor
+        nameEditor.layer?.cornerRadius = 3
+        nameEditor.delegate = self
+        (nameEditor.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         for (button, action) in [(finishButton, #selector(finishTapped)),
                                  (injectButton, #selector(injectTapped))] {
@@ -94,9 +105,11 @@ final class PaneHeaderView: NSView {
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
 
+            // 与 label 同字体同 cell 内边距，基线对齐 → 进出编辑态文字零位移
             nameEditor.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            nameEditor.centerYAnchor.constraint(equalTo: centerYAnchor),
-            nameEditor.widthAnchor.constraint(equalToConstant: 180),
+            nameEditor.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
+            nameEditor.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            nameEditor.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
 
             finishButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             finishButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -116,18 +129,42 @@ final class PaneHeaderView: NSView {
     }
 
     func beginRename() {
+        // 占位符延续原 title（半透明前景色）：切入编辑态时文字内容与位置都不跳
+        let cfg = GhosttyRuntime.shared.configValues
+        nameEditor.placeholderAttributedString = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: nameLabel.font!,
+                .foregroundColor: cfg.foregroundColor.withAlphaComponent(0.4),
+            ])
         nameEditor.stringValue = title == "未命名" ? "" : title
         nameEditor.isHidden = false
         nameLabel.isHidden = true
         window?.makeFirstResponder(nameEditor)
     }
 
-    @objc private func commitRename() {
-        let name = nameEditor.stringValue.trimmingCharacters(in: .whitespaces)
+    /// Enter/失焦提交，Esc 取消（空名视为取消）
+    private func endRename(commit: Bool) {
+        guard !nameEditor.isHidden else { return }
         nameEditor.isHidden = true
         nameLabel.isHidden = false
-        guard !name.isEmpty else { return }
-        onRename?(name)
+        let name = nameEditor.stringValue.trimmingCharacters(in: .whitespaces)
+        if commit, !name.isEmpty, name != title {
+            onRename?(name)
+        }
+        onEditingEnded?()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        endRename(commit: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            endRename(commit: false)
+            return true
+        }
+        return false
     }
 
     @objc private func finishTapped() { onFinish?() }

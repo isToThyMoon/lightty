@@ -55,7 +55,9 @@ final class GhosttyRuntime {
             // 任意线程 → 主队列 tick，全进程仅此一处
             DispatchQueue.main.async { GhosttyRuntime.shared?.tick() }
         }
-        rt.action_cb = { _, _, _ in false }
+        rt.action_cb = { _, target, action in
+            GhosttyRuntime.handleAction(target: target, action: action)
+        }
         rt.read_clipboard_cb = { userdata, location, state in
             GhosttyRuntime.readClipboard(userdata, location: location, state: state)
         }
@@ -94,6 +96,105 @@ final class GhosttyRuntime {
 
     func tick() {
         ghostty_app_tick(app)
+    }
+
+    // MARK: - action 派发
+    // 快捷键完全交给 core：core 读 ~/.config/ghostty/config 的 keybind（含默认值）
+    // 匹配后经此回调壳层执行。壳层不自设快捷键（lightty 拓展功能除外，见 AppDelegate）。
+
+    private static func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+        // target surface → (窗口控制器, pane)
+        func locate() -> (TerminalWindowController, PaneView)? {
+            guard target.tag == GHOSTTY_TARGET_SURFACE,
+                  let surface = target.target.surface,
+                  let ud = ghostty_surface_userdata(surface) else { return nil }
+            let view = Unmanaged<TerminalSurfaceView>.fromOpaque(ud).takeUnretainedValue()
+            for controller in AppState.shared.windowControllers {
+                if let pane = controller.panes().first(where: { $0.terminal === view }) {
+                    return (controller, pane)
+                }
+            }
+            return nil
+        }
+
+        switch action.tag {
+        case GHOSTTY_ACTION_NEW_WINDOW:
+            DispatchQueue.main.async { AppState.shared.newWindow() }
+            return true
+
+        case GHOSTTY_ACTION_NEW_TAB:
+            // lightty 语义（HANDOVER 8.2 定稿）：cmd+T = 新任务 pane 并排右侧，
+            // 原生 tab 方案已实测被否。keybind 仍是 ghostty 的 new_tab。
+            DispatchQueue.main.async { locate()?.0.newTaskPaneRight() }
+            return true
+
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            let direction: TerminalWindowController.SplitDirection
+            switch action.action.new_split {
+            case GHOSTTY_SPLIT_DIRECTION_RIGHT: direction = .right
+            case GHOSTTY_SPLIT_DIRECTION_DOWN: direction = .down
+            case GHOSTTY_SPLIT_DIRECTION_LEFT: direction = .left
+            case GHOSTTY_SPLIT_DIRECTION_UP: direction = .up
+            default: return false
+            }
+            DispatchQueue.main.async {
+                guard let (controller, pane) = locate() else { return }
+                controller.split(pane, direction: direction)
+            }
+            return true
+
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            let goto_ = action.action.goto_split
+            DispatchQueue.main.async {
+                guard let (controller, _) = locate() else { return }
+                switch goto_ {
+                case GHOSTTY_GOTO_SPLIT_PREVIOUS: controller.focusPane(offset: -1)
+                case GHOSTTY_GOTO_SPLIT_NEXT: controller.focusPane(offset: 1)
+                case GHOSTTY_GOTO_SPLIT_UP: controller.focusPane(direction: .top)
+                case GHOSTTY_GOTO_SPLIT_LEFT: controller.focusPane(direction: .leading)
+                case GHOSTTY_GOTO_SPLIT_DOWN: controller.focusPane(direction: .bottom)
+                case GHOSTTY_GOTO_SPLIT_RIGHT: controller.focusPane(direction: .trailing)
+                default: break
+                }
+            }
+            return true
+
+        case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+            DispatchQueue.main.async { locate()?.0.equalizeAllSplits() }
+            return true
+
+        case GHOSTTY_ACTION_RESIZE_SPLIT:
+            let resize = action.action.resize_split
+            let direction: TerminalWindowController.SplitDirection
+            switch resize.direction {
+            case GHOSTTY_RESIZE_SPLIT_UP: direction = .up
+            case GHOSTTY_RESIZE_SPLIT_DOWN: direction = .down
+            case GHOSTTY_RESIZE_SPLIT_LEFT: direction = .left
+            case GHOSTTY_RESIZE_SPLIT_RIGHT: direction = .right
+            default: return false
+            }
+            let amount = CGFloat(resize.amount)
+            DispatchQueue.main.async {
+                guard let (controller, pane) = locate() else { return }
+                controller.resizeSplit(pane, direction: direction, amount: amount)
+            }
+            return true
+
+        case GHOSTTY_ACTION_CLOSE_TAB, GHOSTTY_ACTION_CLOSE_WINDOW:
+            DispatchQueue.main.async { locate()?.0.window?.close() }
+            return true
+
+        case GHOSTTY_ACTION_QUIT:
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            return true
+
+        case GHOSTTY_ACTION_RING_BELL:
+            DispatchQueue.main.async { NSSound.beep() }
+            return true
+
+        default:
+            return false
+        }
     }
 
     // MARK: - config 读取

@@ -254,6 +254,13 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 - 重建结果对照验收标准（scripts 附件页）：① `swift test` 全绿——数据层重写为 **48 测试**（覆盖面为原 31 测试的超集）；② `.build/debug/lightty` 窗口渲染真实终端（login→zsh，oh-my-zsh/主题/透明全部生效，截图目视确认）；③ 冒烟 `ghostty_info()` 真实调用已固化在 main.swift。
 - 代码为**设计级重建**（功能等价，第 9 节预期）：LighttyCore（TaskFile/TaskStore/TaskFolderWatcher/FuzzyMatch）+ 壳层（pane header、嵌套分屏 cmd+D/cmd+shift+D、cmd+T/N、pane 导航、cmd+K 任务面板、cmd+shift+K 侧边栏、恢复流程、HandoffPrompt 收工/注入、配置对齐）。已知欠账与原版一致：IME/修饰键未接、TaskFolderWatcher 未接进壳、配置热重载未做。
 
+### 2026-08-23 重建后首轮实测修正（快捷键架构 + 侧边栏形态修订）
+
+- **快捷键架构对齐官方壳（用户定为原则）**：壳层不自设终端类快捷键。按键进 surface → core 按 `~/.config/ghostty/config` keybind（含默认值）匹配 → `action_cb` 回调壳层执行（new_split 四方向 / goto_split / equalize_splits / resize_split / new_window / close / quit）；`new_tab` 映射为「新任务 pane 并排右侧」（8.2 语义不变，键位归 ghostty）。补了官方壳的 `performKeyEquivalent` + `key_is_binding` 路径防 cmd 组合键被 AppKit 吞。壳层只保留 lightty 拓展键。
+- **分屏尺寸对齐 Ghostty**：新 pane 与当前 pane 对半分、其余不动；反向包裹时外层尺寸不变；cmd+T 顶层各列均分。
+- **形态修订（推翻 8.2 两点）**：cmd+K 独立居中任务面板**取消**，并入**窗口内悬浮左侧侧边栏**（悬浮卡片：内缩/圆角/投影，非常驻、非 split pane），理由：减少视觉转换成本。侧边栏 = 任务管理唯一入口：列表页（全部任务、运行中置顶、模糊搜索、双击/回车跳转或恢复、Esc 收起、点击卡片外自动收起）↔ 详情页（md 正文与状态编辑、脏编辑钉住）。cmd+shift+K 废弃。
+- pane header 改名编辑器精修：与 label 同字体、firstBaseline 对齐、占位符延续原 title（零位移）；Enter 提交 / Esc 取消 / 失焦提交，结束后焦点回终端。
+
 ---
 
 *本文件由 2026-08-21 的讨论整理生成，用作该需求后续迭代的起点。第 6、7 节为同日第二、三轮讨论的决议，冲突处以第 7 节为准；第 8 节为形态决议；第 9 节为重建与依赖锚点；第 10 节为实施进展日志。本页由 lightty 仓库 HANDOVER.md 同步，仓库为真源。*

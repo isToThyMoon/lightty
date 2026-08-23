@@ -111,8 +111,27 @@ final class TerminalSurfaceView: NSView {
         _ = keyAction(GHOSTTY_ACTION_RELEASE, event: event)
     }
 
-    private func keyAction(_ action: ghostty_input_action_e, event: NSEvent) -> Bool {
-        guard let surface else { return false }
+    /// cmd 组合键先于 keyDown 走这里；凡 core 认领的 keybind
+    /// （用户 config + ghostty 默认，如 cmd+D/cmd+T/cmd+[]）直接转发，
+    /// 不让 AppKit 菜单/系统吃掉。壳层菜单只保留 lightty 拓展键。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              window?.isKeyWindow == true,
+              window?.firstResponder === self,
+              let surface else { return false }
+
+        var keyEvent = makeKeyEvent(GHOSTTY_ACTION_PRESS, event: event)
+        var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
+        let isBinding = (event.characters ?? "").withCString { ptr -> Bool in
+            keyEvent.text = ptr
+            return ghostty_surface_key_is_binding(surface, keyEvent, &bindingFlags)
+        }
+        guard isBinding else { return false }
+        keyDown(with: event)
+        return true
+    }
+
+    private func makeKeyEvent(_ action: ghostty_input_action_e, event: NSEvent) -> ghostty_input_key_s {
         var keyEvent = ghostty_input_key_s()
         keyEvent.action = action
         keyEvent.keycode = UInt32(event.keyCode)
@@ -127,6 +146,12 @@ final class TerminalSurfaceView: NSView {
            let cp = chars.unicodeScalars.first {
             keyEvent.unshifted_codepoint = cp.value
         }
+        return keyEvent
+    }
+
+    private func keyAction(_ action: ghostty_input_action_e, event: NSEvent) -> Bool {
+        guard let surface else { return false }
+        var keyEvent = makeKeyEvent(action, event: event)
 
         // 控制字符不进 text：物理键 + 修饰键交给 core 自己编码
         let text = event.characters ?? ""
