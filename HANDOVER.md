@@ -277,6 +277,30 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 - **环境净化**：lightty 被别的 agent/终端拉起时会继承 `CLAUDE_CODE_CHILD_SESSION` 等会话标记并传给 pane shell（pane 里 claude 被当嵌套子会话、关 transcript）。main.swift 启动时统一 unsetenv，对齐 Finder 启动的干净登录环境。
 - **配置覆盖层**：`~/.config/lightty/config`（ghostty 语法，load_default/recursive 之后、finalize 之前叠加），lightty 专属视觉差异的唯一入口，不污染 ghostty 本体配置。
 
+### 2026-08-24 当前状态快照（接手从这里开始）
+
+**仓库**：github.com/isToThyMoon/lightty（public，main，真源）；本机 `~/project/one-thousand-plan/lightty`。构建：`vendor/ghostty` 按第 9 节 SHA 取 → `zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast` → `scripts/sync-ghosttykit.sh` → `swift build`；`swift test` 48 全绿。
+
+**已落地并实测的功能面**：
+- 数据层 LighttyCore：TaskFile/TaskStore/TaskFolderWatcher/FuzzyMatch（格式见 docs/task-format.md）
+- 窗口：原生标题栏操作栏（三键 + 侧边栏按钮，幂等重装）+ 标题栏水洗底；窗口尺寸由 core INITIAL_SIZE 决定（isRestorable=false）
+- pane：header（灰点未命名 → 双击命名落盘绿点；收工/注入按钮实时嵌路径；基线对齐的改名编辑器）；任务绑定粒度 = pane
+- 分屏/快捷键：**全部由 core keybind 驱动**（action_cb：new_split 四方向/goto_split/equalize/resize/new_window/close/quit；new_tab 映射新任务 pane）；分屏对半分、外层不动
+- 任务侧边栏（cmd+K / 标题栏按钮）：一体式覆盖层，列表（搜索/运行中置顶/双击跳转或恢复）↔ 详情（md 正文与状态编辑、脏编辑钉住）；收起 = 按钮/cmd+K/Esc
+- 恢复流程：摘要确认 → 开绑定窗口，不自动注入（由「注入」按钮承担）
+- 配置：视觉铁律 + `~/.config/lightty/config` 覆盖层；启动时净化继承的 agent 会话环境标记
+- 调试：`LIGHTTY_DEBUG_LAYOUT=1` → 尺寸日志 + 顶部构成彩色标尺（蓝标题栏底/红 header 底/绿 grid row0/橙行界）
+
+**顶部空白归因定案**（标尺实测）：标题栏 28 + header 24（chrome，功能本体）→ padding-y + balance 余数（用户 ghostty 配置，≈16.5pt）→ 内容 row0 零浪费；prompt 上的空行是 starship add_newline。渲染层与真 Ghostty 完全一致。
+
+**已知欠账（按优先级建议）**：
+1. TaskFolderWatcher 未接壳：任务文件外部变更后 header/侧边栏不自动刷新
+2. IME（NSTextInputClient）/修饰键 flagsChanged/换屏 set_display_id/遮挡 set_occlusion 未接
+3. 配置热重载（改 config 需重启）；unfocused-split-opacity/fill 未接
+4. "随后"阶段未做：等待输入检测（●/⏳状态标记）、menu bar 图标、系统通知、tab 分组
+5. 恢复流程的 `claude --resume` 快捷方式随"去预填"一并移除，30 天内同工具续做场景如需找回需另设计交互
+6. 打包分发（现在是 `.build/debug/lightty` 裸二进制，无 app bundle/图标/签名）；性能与内存对照 Ghostty 本体未做
+
 ---
 
 *本文件由 2026-08-21 的讨论整理生成，用作该需求后续迭代的起点。第 6、7 节为同日第二、三轮讨论的决议，冲突处以第 7 节为准；第 8 节为形态决议；第 9 节为重建与依赖锚点；第 10 节为实施进展日志。本页由 lightty 仓库 HANDOVER.md 同步，仓库为真源。*
