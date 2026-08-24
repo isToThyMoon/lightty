@@ -54,7 +54,7 @@
 
 | 配置项 | 我们的实现 | 官方出处 | 状态 |
 |---|---|---|---|
-| 配置加载顺序 | default_files → recursive_files → finalize | Ghostty.Config.swift loadConfig | 对齐（**有意跳过 load_cli_args**：lightty 的命令行属于自己） |
+| 配置加载顺序 | default_files → recursive_files → **lightty overlay** → finalize | Ghostty.Config.swift loadConfig | 对齐 + **有意扩展**：跳过 load_cli_args（命令行属于自己）；最后叠加 `~/.config/lightty/config`（同 ghostty 语法的专属覆盖，如压顶部 padding 抵偿标题栏+header chrome；文件内 config-file 包含不递归展开） |
 | background / foreground | ghostty_config_get + color struct | 同式 | 对齐 |
 | background-opacity | Double get，<1 时窗口非不透明 + 白 0.001 背景 | TerminalWindow.syncAppearance | 对齐 |
 | background-blur | ghostty_set_window_background_blur（窗口就绪后） | 同 API | 对齐 |

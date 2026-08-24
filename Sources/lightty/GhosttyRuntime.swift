@@ -41,10 +41,18 @@ final class GhosttyRuntime {
             fatalError("ghostty_init failed")
         }
 
-        // 加载顺序对齐官方壳；有意跳过 load_cli_args（lightty 的命令行属于自己）
+        // 加载顺序对齐官方壳；有意跳过 load_cli_args（lightty 的命令行属于自己）。
+        // 有意扩展：最后叠加 ~/.config/lightty/config（同 ghostty 语法，只写差异项）——
+        // lightty 专属视觉覆盖（如压缩顶部 padding 抵偿标题栏+header 的 chrome），
+        // 不污染 ~/.config/ghostty/config。该文件内的 config-file 包含不做递归展开。
         guard let config = ghostty_config_new() else { fatalError("ghostty_config_new failed") }
         ghostty_config_load_default_files(config)
         ghostty_config_load_recursive_files(config)
+        let overlay = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/lightty/config").path
+        if FileManager.default.fileExists(atPath: overlay) {
+            ghostty_config_load_file(config, overlay)
+        }
         ghostty_config_finalize(config)
         self.configValues = Self.readConfigValues(config)
 
