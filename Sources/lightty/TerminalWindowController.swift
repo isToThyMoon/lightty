@@ -8,7 +8,7 @@ import LighttyCore
 final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private let rootContainer = NSView()
     private var sidebarView: TaskSidebar?
-    private var sidebarClickMonitor: Any?
+    private weak var sidebarButton: NSButton?
 
     init(initialPane: PaneView = PaneView()) {
         let window = TerminalWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640))
@@ -18,14 +18,39 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         rootContainer.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = rootContainer
+        installTitlebarBackdrop(on: window)
         installTitlebarAccessory(on: window)
         install(pane: initialPane)
         setRoot(initialPane)
     }
 
+    /// 标题栏条的水洗底：与终端/pane header 同公式（background × background-opacity），
+    /// 否则透明标题栏露出裸模糊壁纸，与下方内容割裂。侧边栏展开时其自身水洗层
+    /// 覆盖左段，同色无缝。
+    private func installTitlebarBackdrop(on window: NSWindow) {
+        guard let contentView = window.contentView,
+              let themeFrame = contentView.superview else { return }
+        let cfg = GhosttyRuntime.shared.configValues
+        let wash = NSView()
+        wash.wantsLayer = true
+        wash.layer?.backgroundColor = cfg.backgroundColor
+            .withAlphaComponent(cfg.backgroundOpacity).cgColor
+        wash.translatesAutoresizingMaskIntoConstraints = false
+        themeFrame.addSubview(wash, positioned: .below, relativeTo: contentView)
+        NSLayoutConstraint.activate([
+            wash.topAnchor.constraint(equalTo: themeFrame.topAnchor),
+            wash.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
+            wash.trailingAnchor.constraint(equalTo: themeFrame.trailingAnchor),
+            wash.bottomAnchor.constraint(equalTo: contentView.topAnchor),
+        ])
+    }
+
     /// 标题栏操作区：三键之后放侧边栏开关（对不惯快捷键的用户可见可点）。
     /// 直接挂进标题栏视图并以缩放键锚点对齐，保证与红绿灯严格同一水平线。
+    /// ⚠️ 标题栏是私有视图，会在侧边栏插拔/全屏切换时重建并丢掉外来子视图——
+    /// 所以做成幂等的 ensure：掉了就重装（toggle 与窗口激活时都会调）。
     private func installTitlebarAccessory(on window: NSWindow) {
+        if let button = sidebarButton, button.superview != nil { return }
         guard let zoomButton = window.standardWindowButton(.zoomButton),
               let titlebar = zoomButton.superview else { return }
 
@@ -45,6 +70,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             button.widthAnchor.constraint(equalToConstant: 22),
             button.heightAnchor.constraint(equalToConstant: 20),
         ])
+        sidebarButton = button
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if let window { installTitlebarAccessory(on: window) }
     }
 
     @objc private func toggleSidebarFromTitlebar() {
@@ -319,58 +349,50 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         best?.pane.focusTerminal()
     }
 
-    // MARK: - 任务侧边栏：悬浮左侧卡片，任务管理唯一入口（cmd+K）
+    // MARK: - 任务侧边栏：一体式覆盖层（cmd+K / 标题栏按钮）
+    // 与透明化标题栏连成一片（红绿灯/按钮浮于其上始终可点），
+    // **覆盖**在终端之上——不推挤布局，terminal 不发生 resize（推挤实测有闪烁）。
+    // 常驻直到手动收起（按钮/cmd+K/Esc）。
 
     func toggleSidebar() {
+        guard let window, let contentView = window.contentView else { return }
         if let sidebar = sidebarView {
             guard !sidebar.isDirty else { NSSound.beep(); return } // 脏编辑钉住
             sidebar.removeFromSuperview()
             sidebarView = nil
-            removeSidebarClickMonitor()
             activePane?.focusTerminal()
+            installTitlebarAccessory(on: window)
             return
         }
-        guard let contentView = window?.contentView else { return }
-        let sidebar = TaskSidebar()
+        guard let themeFrame = contentView.superview else { return }
+        // 顶到窗口最上缘、垫在标题栏容器之下（三键与侧边栏按钮浮于其上可点）。
+        // 不靠私有类名匹配：从关闭按钮向上溯源到 themeFrame 的直接子视图才可靠。
+        var titlebarContainer: NSView? = window.standardWindowButton(.closeButton)
+        while let v = titlebarContainer, v.superview !== themeFrame {
+            titlebarContainer = v.superview
+        }
+        let titlebarHeight = window.frame.height - contentView.frame.height
+
+        let sidebar = TaskSidebar(topInset: max(titlebarHeight, 28))
         sidebar.onRequestClose = { [weak self] in self?.toggleSidebar() }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(sidebar) // 加在 rootContainer 之后 → 悬浮于 pane 之上
-        // 整体式抽屉：上下左顶满内容区，只在右缘悬浮于终端之上
+        if let titlebarContainer {
+            themeFrame.addSubview(sidebar, positioned: .below, relativeTo: titlebarContainer)
+        } else {
+            themeFrame.addSubview(sidebar)
+        }
         NSLayoutConstraint.activate([
-            sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
-            sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            sidebar.topAnchor.constraint(equalTo: themeFrame.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: TaskSidebar.width),
         ])
         sidebarView = sidebar
         sidebar.focusSearch()
-
-        // 点击卡片外的空白处（终端区域）自动收起；脏编辑时钉住不关
-        sidebarClickMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] event in
-            guard let self, let sidebar = self.sidebarView,
-                  event.window === self.window,
-                  let contentView = self.window?.contentView else { return event }
-            // 标题栏区域（含侧边栏按钮）不算"点击外部"——否则按钮会先关再开
-            guard event.locationInWindow.y <= contentView.frame.maxY else { return event }
-            let point = sidebar.convert(event.locationInWindow, from: nil)
-            if !sidebar.bounds.contains(point), !sidebar.isDirty {
-                self.toggleSidebar()
-            }
-            return event
-        }
-    }
-
-    private func removeSidebarClickMonitor() {
-        if let monitor = sidebarClickMonitor {
-            NSEvent.removeMonitor(monitor)
-            sidebarClickMonitor = nil
-        }
+        installTitlebarAccessory(on: window)
     }
 
     func windowWillClose(_ notification: Notification) {
-        removeSidebarClickMonitor()
         AppState.shared.windowControllers.removeAll { $0 === self }
     }
 }

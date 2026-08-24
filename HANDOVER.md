@@ -268,6 +268,12 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 - **恢复流程简化**：摘要确认后只开绑定任务的新窗口，**不再自动预填/注入任何命令**（多行命令预填在 shell 里易碎；pane header 已有「注入」按钮，用户起 agent 后自行点击，职责不重叠）。`RestoreFlow.suggestedCommand` 随之删除；sessions 字段仍保留在格式中但恢复路径不再消费。
 - 仓库已推送 GitHub：github.com/isToThyMoon/lightty（public，main）。
 
+**同日续（侧边栏形态第三轮 + 顶部间距排查定案）：**
+
+- **侧边栏定稿：一体式覆盖层**。推挤式（挤开终端）实测有 resize 闪烁，被否；改为覆在终端之上（底色 = config background，透明度下限 0.97 防透字），与透明化标题栏共用视觉平面：整条标题栏加了同公式水洗底（background × background-opacity），左栏右缘 1px 分隔线从窗口顶贯到底。红绿灯 + 侧边栏按钮浮于其上（z-order 用"从 closeButton 向上溯源到 themeFrame 直接子视图"定位标题栏容器，私有类名匹配不可靠会导致按钮被盖）。标题栏按钮做成幂等 ensure（标题栏私有视图会在插拔/全屏时重建丢子视图）。
+- **顶部间距定案（红线标尺实测）**：终端内容距视图上缘 ≈29pt = padding-y 10 + window-padding-balance 余数 + 字形内边距，与真 Ghostty 同级——非渲染 bug。此前的"巨大空隙"两个真因：① macOS 窗口状态恢复用旧框架覆盖 core 的 INITIAL_SIZE（已修：接管 INITIAL_SIZE action + isRestorable=false）；② shell 内容（Last login 滚掉后 starship 前置空行）。surface 尺寸同步补了 layout() 路径（只挂 setFrameSize 会漏 Auto Layout 终值）。
+- 调试工具沉淀：`LIGHTTY_DEBUG_LAYOUT=1` 启动 → set_size/grid/cell/INITIAL_SIZE 日志 + 终端上缘红线标尺。
+
 ---
 
 *本文件由 2026-08-21 的讨论整理生成，用作该需求后续迭代的起点。第 6、7 节为同日第二、三轮讨论的决议，冲突处以第 7 节为准；第 8 节为形态决议；第 9 节为重建与依赖锚点；第 10 节为实施进展日志。本页由 lightty 仓库 HANDOVER.md 同步，仓库为真源。*

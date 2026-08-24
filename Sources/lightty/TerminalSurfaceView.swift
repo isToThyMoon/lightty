@@ -65,10 +65,24 @@ final class TerminalSurfaceView: NSView {
         guard let surface else { return }
         let backing = convertToBacking(bounds)
         ghostty_surface_set_size(surface, UInt32(max(backing.width, 1)), UInt32(max(backing.height, 1)))
+        if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil {
+            let s = ghostty_surface_size(surface)
+            NSLog("set_size %.0fx%.0f px | grid %dx%d, grid_px %dx%d, cell %dx%d | leftover_y_px %.0f",
+                  backing.width, backing.height,
+                  s.columns, s.rows, s.width_px, s.height_px, s.cell_width_px, s.cell_height_px,
+                  backing.height - CGFloat(UInt32(s.rows) * s.cell_height_px))
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        updateSurfaceSize()
+    }
+
+    // Auto Layout 的最终尺寸经 layout() 落地，只挂 setFrameSize 会漏掉，
+    // surface 像素高一旦大于视图实际高，内容就整体下坠出一段顶部空白
+    override func layout() {
+        super.layout()
         updateSurfaceSize()
     }
 

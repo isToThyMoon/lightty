@@ -42,22 +42,19 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     var onRequestClose: (() -> Void)?
 
-    init() {
+    /// 内容避开顶部标题栏区域的高度（侧边栏本体延伸到窗口最顶端）
+    private let topInset: CGFloat
+
+    init(topInset: CGFloat) {
+        self.topInset = topInset
         super.init(frame: .zero)
 
-        // 整体式抽屉：上下顶满窗口、平边无圆角，右缘 1px 分隔线 + 阴影示层次；
-        // 颜色一律来自 ghostty config（视觉铁律）
+        // 一体式覆盖层：刷与终端一致的水洗底（background 色），透明度抬到 0.97
+        // 下限——它盖在终端内容之上，太透会看到底下的字。右缘 1px 分隔线。
         wantsLayer = true
         let cfg = GhosttyRuntime.shared.configValues
         layer?.backgroundColor = cfg.backgroundColor
-            .withAlphaComponent(max(cfg.backgroundOpacity, 0.92)).cgColor
-        shadow = NSShadow()
-        layer?.masksToBounds = false
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.3
-        layer?.shadowRadius = 10
-        layer?.shadowOffset = CGSize(width: 3, height: 0)
-
+            .withAlphaComponent(max(cfg.backgroundOpacity, 0.97)).cgColor
         let edge = NSView()
         edge.wantsLayer = true
         edge.layer?.backgroundColor = cfg.splitDividerColor.cgColor
@@ -394,7 +391,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         page.translatesAutoresizingMaskIntoConstraints = false
         addSubview(page)
         NSLayoutConstraint.activate([
-            page.topAnchor.constraint(equalTo: topAnchor),
+            page.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
             page.bottomAnchor.constraint(equalTo: bottomAnchor),
             page.leadingAnchor.constraint(equalTo: leadingAnchor),
             page.trailingAnchor.constraint(equalTo: trailingAnchor),

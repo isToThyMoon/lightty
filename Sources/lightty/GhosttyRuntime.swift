@@ -180,6 +180,24 @@ final class GhosttyRuntime {
             }
             return true
 
+        case GHOSTTY_ACTION_INITIAL_SIZE:
+            // core 按 window-width/height × cell 算好的初始尺寸（点）。
+            // 应用后格子正好占满、无余数——window-padding-balance 下顶部不再多出一截。
+            let size = action.action.initial_size
+            DispatchQueue.main.async {
+                if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil {
+                    NSLog("INITIAL_SIZE %dx%d, located=%@", size.width, size.height,
+                          locate() != nil ? "yes" : "no")
+                }
+                guard let (controller, _) = locate(), let window = controller.window,
+                      controller.panes().count == 1 else { return }
+                window.setContentSize(NSSize(
+                    width: CGFloat(size.width),
+                    height: CGFloat(size.height) + PaneHeaderView.height))
+                window.center()
+            }
+            return true
+
         case GHOSTTY_ACTION_CLOSE_TAB, GHOSTTY_ACTION_CLOSE_WINDOW:
             DispatchQueue.main.async { locate()?.0.window?.close() }
             return true

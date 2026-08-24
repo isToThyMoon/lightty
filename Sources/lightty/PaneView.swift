@@ -36,6 +36,21 @@ final class PaneView: NSView {
             terminal.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
+        // 调试：红线标出终端视图的真实上缘，量内容第一行的偏移
+        if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil {
+            let marker = NSView()
+            marker.wantsLayer = true
+            marker.layer?.backgroundColor = NSColor.systemRed.cgColor
+            marker.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(marker)
+            NSLayoutConstraint.activate([
+                marker.topAnchor.constraint(equalTo: terminal.topAnchor),
+                marker.leadingAnchor.constraint(equalTo: leadingAnchor),
+                marker.trailingAnchor.constraint(equalTo: trailingAnchor),
+                marker.heightAnchor.constraint(equalToConstant: 2),
+            ])
+        }
+
         header.onRename = { [weak self] name in self?.rename(to: name) }
         header.onEditingEnded = { [weak self] in self?.focusTerminal() }
         header.onFinish = { [weak self] in self?.finish() }

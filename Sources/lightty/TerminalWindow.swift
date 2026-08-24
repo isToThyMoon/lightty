@@ -20,6 +20,9 @@ final class TerminalWindow: NSWindow {
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isReleasedWhenClosed = false
+        // 窗口尺寸由 core 的 INITIAL_SIZE 决定（window-width/height × cell），
+        // 系统状态恢复会用上次的旧框架覆盖它，禁用
+        isRestorable = false
 
         let cfg = GhosttyRuntime.shared.configValues
         if let appearance = cfg.appearance { self.appearance = appearance }
