@@ -8,7 +8,6 @@ import LighttyCore
 final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                          NSTextViewDelegate, NSSearchFieldDelegate {
     static let width: CGFloat = 320
-    static let inset: CGFloat = 12
 
     private struct Entry {
         let fileURL: URL
@@ -46,20 +45,30 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     init() {
         super.init(frame: .zero)
 
-        // 悬浮卡片：圆角 + 边框 + 投影；颜色一律来自 ghostty config（视觉铁律）
+        // 整体式抽屉：上下顶满窗口、平边无圆角，右缘 1px 分隔线 + 阴影示层次；
+        // 颜色一律来自 ghostty config（视觉铁律）
         wantsLayer = true
         let cfg = GhosttyRuntime.shared.configValues
         layer?.backgroundColor = cfg.backgroundColor
             .withAlphaComponent(max(cfg.backgroundOpacity, 0.92)).cgColor
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 1
-        layer?.borderColor = cfg.splitDividerColor.cgColor
         shadow = NSShadow()
         layer?.masksToBounds = false
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.35
-        layer?.shadowRadius = 14
-        layer?.shadowOffset = CGSize(width: 0, height: -4)
+        layer?.shadowOpacity = 0.3
+        layer?.shadowRadius = 10
+        layer?.shadowOffset = CGSize(width: 3, height: 0)
+
+        let edge = NSView()
+        edge.wantsLayer = true
+        edge.layer?.backgroundColor = cfg.splitDividerColor.cgColor
+        edge.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(edge)
+        NSLayoutConstraint.activate([
+            edge.trailingAnchor.constraint(equalTo: trailingAnchor),
+            edge.topAnchor.constraint(equalTo: topAnchor),
+            edge.bottomAnchor.constraint(equalTo: bottomAnchor),
+            edge.widthAnchor.constraint(equalToConstant: 1),
+        ])
 
         buildListPage()
         buildDetailPage()

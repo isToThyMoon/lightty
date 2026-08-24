@@ -18,8 +18,37 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         rootContainer.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = rootContainer
+        installTitlebarAccessory(on: window)
         install(pane: initialPane)
         setRoot(initialPane)
+    }
+
+    /// 标题栏操作区：三键之后放侧边栏开关（对不惯快捷键的用户可见可点）。
+    /// 直接挂进标题栏视图并以缩放键锚点对齐，保证与红绿灯严格同一水平线。
+    private func installTitlebarAccessory(on window: NSWindow) {
+        guard let zoomButton = window.standardWindowButton(.zoomButton),
+              let titlebar = zoomButton.superview else { return }
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "任务侧边栏")!,
+            target: self,
+            action: #selector(toggleSidebarFromTitlebar))
+        button.isBordered = false
+        button.toolTip = "任务侧边栏 (⌘K)"
+        button.contentTintColor = GhosttyRuntime.shared.configValues.foregroundColor
+            .withAlphaComponent(0.75)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        titlebar.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: zoomButton.trailingAnchor, constant: 10),
+            button.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
+            button.widthAnchor.constraint(equalToConstant: 22),
+            button.heightAnchor.constraint(equalToConstant: 20),
+        ])
+    }
+
+    @objc private func toggleSidebarFromTitlebar() {
+        toggleSidebar()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -306,11 +335,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebar.onRequestClose = { [weak self] in self?.toggleSidebar() }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(sidebar) // 加在 rootContainer 之后 → 悬浮于 pane 之上
-        let inset = TaskSidebar.inset
+        // 整体式抽屉：上下左顶满内容区，只在右缘悬浮于终端之上
         NSLayoutConstraint.activate([
-            sidebar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: PaneHeaderView.height + inset),
-            sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -inset),
-            sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+            sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: TaskSidebar.width),
         ])
         sidebarView = sidebar
@@ -321,7 +350,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
             guard let self, let sidebar = self.sidebarView,
-                  event.window === self.window else { return event }
+                  event.window === self.window,
+                  let contentView = self.window?.contentView else { return event }
+            // 标题栏区域（含侧边栏按钮）不算"点击外部"——否则按钮会先关再开
+            guard event.locationInWindow.y <= contentView.frame.maxY else { return event }
             let point = sidebar.convert(event.locationInWindow, from: nil)
             if !sidebar.bounds.contains(point), !sidebar.isDirty {
                 self.toggleSidebar()
