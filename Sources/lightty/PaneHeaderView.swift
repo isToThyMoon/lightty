@@ -72,7 +72,6 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
         nameEditor.drawsBackground = false
         nameEditor.textColor = cfg.foregroundColor
         nameEditor.focusRingType = .none
-        nameEditor.placeholderString = "任务名"
         nameEditor.wantsLayer = true
         nameEditor.layer?.backgroundColor = cfg.foregroundColor.withAlphaComponent(0.12).cgColor
         nameEditor.layer?.cornerRadius = 3

@@ -88,8 +88,10 @@ final class PaneView: NSView {
                     tool: nil)
                 bind(to: created.fileURL, name: name, status: .active)
             case .bound(let url):
+                // 只改名不动状态：状态点保持文件里的原状态
                 let newURL = try AppState.shared.taskStore.rename(at: url, to: name)
-                bind(to: newURL, name: name, status: .active)
+                binding = .bound(fileURL: newURL)
+                header.title = name
             }
         } catch {
             NSSound.beep()

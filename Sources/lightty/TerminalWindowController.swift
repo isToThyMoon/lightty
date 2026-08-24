@@ -168,6 +168,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         install(pane: pane)
         if let url = active.taskFileURL {
             pane.bind(to: url, name: active.header.title, status: .active)
+            pane.header.dot = active.header.dot // 继承任务连同状态点，不重置
         }
         let vertical = direction.isVertical
 
