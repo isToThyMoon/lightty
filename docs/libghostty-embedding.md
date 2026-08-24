@@ -45,6 +45,7 @@
 ## 已知问题 / 待办
 
 - 当前 vendored 构建**带 sentry-native**（启动日志可见）。cmux 用 `-Dsentry=false` 重建，因双崩溃处理器打架致 Intel 机启动崩溃有前科。lightty 正式构建应加 `-Dsentry=false`。（已执行）
+- **必须 `-Doptimize=ReleaseFast`**：Debug 构建的 core 防御断言（`if (runtime_safety) unreachable`）会把上游容忍性 bug 升级为 SIGABRT——实测点击提示符区域即可触发 Surface.maybePromptClick 崩溃（Surface.zig:4214/4240）。官方发布形态即 Release，同路径静默返回。完整命令：`zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast`。
 - 私有 SPI：归档引用 `_CGSSetWindowBackgroundBlurRadius` 等 CGS 符号，过不了 App Store 审核（本项目无所谓，备忘）。
 - 钉版本策略：cmux 用"预构建 GhosttyKit tarball + 校验和"而非开发机现编，稳定后可仿效。
 

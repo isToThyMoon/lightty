@@ -273,6 +273,9 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 - **侧边栏定稿：一体式覆盖层**。推挤式（挤开终端）实测有 resize 闪烁，被否；改为覆在终端之上（底色 = config background，透明度下限 0.97 防透字），与透明化标题栏共用视觉平面：整条标题栏加了同公式水洗底（background × background-opacity），左栏右缘 1px 分隔线从窗口顶贯到底。红绿灯 + 侧边栏按钮浮于其上（z-order 用"从 closeButton 向上溯源到 themeFrame 直接子视图"定位标题栏容器，私有类名匹配不可靠会导致按钮被盖）。标题栏按钮做成幂等 ensure（标题栏私有视图会在插拔/全屏时重建丢子视图）。
 - **顶部间距定案（红线标尺实测）**：终端内容距视图上缘 ≈29pt = padding-y 10 + window-padding-balance 余数 + 字形内边距，与真 Ghostty 同级——非渲染 bug。此前的"巨大空隙"两个真因：① macOS 窗口状态恢复用旧框架覆盖 core 的 INITIAL_SIZE（已修：接管 INITIAL_SIZE action + isRestorable=false）；② shell 内容（Last login 滚掉后 starship 前置空行）。surface 尺寸同步补了 layout() 路径（只挂 setFrameSize 会漏 Auto Layout 终值）。
 - 调试工具沉淀：`LIGHTTY_DEBUG_LAYOUT=1` 启动 → set_size/grid/cell/INITIAL_SIZE 日志 + 终端上缘红线标尺。
+- **GhosttyKit 构建形态改 ReleaseFast**（崩溃诊断结论）：Debug 构建的 core 满是 `if (runtime_safety) unreachable` 防御断言，实测点击提示符区域触发 `Surface.maybePromptClick`（Surface.zig:4214/4240，视口坐标拿不到 pin）→ SIGABRT 全程崩溃；Release 下同路径静默 `return false` 无害，官方发布形态即 Release。正式构建命令定为：`zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast`。教训：嵌入 dev 分支 core 时，Debug 库把上游"容忍性 bug"全部升级成崩溃。
+- **环境净化**：lightty 被别的 agent/终端拉起时会继承 `CLAUDE_CODE_CHILD_SESSION` 等会话标记并传给 pane shell（pane 里 claude 被当嵌套子会话、关 transcript）。main.swift 启动时统一 unsetenv，对齐 Finder 启动的干净登录环境。
+- **配置覆盖层**：`~/.config/lightty/config`（ghostty 语法，load_default/recursive 之后、finalize 之前叠加），lightty 专属视觉差异的唯一入口，不污染 ghostty 本体配置。
 
 ---
 
