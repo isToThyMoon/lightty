@@ -58,39 +58,74 @@ final class DebugRulerView: NSView {
         // 对齐 core 公式：usable = 视图高 - 上下 padding；余数 balance 时对半摊
         let rows = CGFloat(size.rows)
         let leftover = viewH - 2 * padTop - rows * cellH
-        let topOffset = padTop + (balance ? max(leftover, 0) / 2 : 0)
+        let balanceShare = balance ? max(leftover, 0) / 2 : 0
+        let topOffset = padTop + balanceShare
 
+        let headerTop: CGFloat = 0 // pane 顶（其上是标题栏，画不进本视图）
         let terminalTop = terminal.frame.minY == 0
-            ? PaneHeaderView.height // flipped 坐标下 terminal 顶 = header 底
+            ? PaneHeaderView.height
             : bounds.height - terminal.frame.maxY
+        let row0Top = terminalTop + topOffset
 
-        func line(_ y: CGFloat, _ color: NSColor, _ label: String, dashed: Bool = false) {
-            guard y >= 0, y <= bounds.height else { return }
+        let width = bounds.width
+
+        // —— 色块区带：这一段"是什么"直接染色可见 ——
+        func band(_ from: CGFloat, _ to: CGFloat, _ color: NSColor, alpha: CGFloat) {
+            color.withAlphaComponent(alpha).setFill()
+            NSRect(x: 0, y: from, width: width, height: to - from).fill(using: .sourceOver)
+        }
+        band(headerTop, terminalTop, .systemRed, alpha: 0.14)      // header 条
+        band(terminalTop, row0Top, .systemGreen, alpha: 0.22)      // padding + balance 空白
+        band(row0Top, row0Top + cellH, .systemOrange, alpha: 0.10) // 第一行格子
+
+        // —— 左侧尺寸括号：|← 高度值 →| ——
+        func bracket(_ from: CGFloat, _ to: CGFloat, _ color: NSColor, _ label: String) {
+            let x: CGFloat = 14
             color.setStroke()
             let path = NSBezierPath()
-            path.lineWidth = 1
-            if dashed { path.setLineDash([4, 4], count: 2, phase: 0) }
-            path.move(to: NSPoint(x: 0, y: y))
-            path.line(to: NSPoint(x: bounds.width, y: y))
+            path.lineWidth = 1.5
+            path.move(to: NSPoint(x: x - 5, y: from + 0.5))
+            path.line(to: NSPoint(x: x + 5, y: from + 0.5))
+            path.move(to: NSPoint(x: x, y: from + 0.5))
+            path.line(to: NSPoint(x: x, y: to - 0.5))
+            path.move(to: NSPoint(x: x - 5, y: to - 0.5))
+            path.line(to: NSPoint(x: x + 5, y: to - 0.5))
             path.stroke()
 
+            // 标签片：深底白字，压在内容上也可读
             let text = NSAttributedString(string: label, attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
-                .foregroundColor: color,
-                .backgroundColor: NSColor.black.withAlphaComponent(0.55),
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+                .foregroundColor: NSColor.white,
             ])
-            text.draw(at: NSPoint(x: bounds.width - text.size().width - 8, y: y + 1))
+            let textSize = text.size()
+            let chip = NSRect(
+                x: x + 12,
+                y: min(max((from + to) / 2 - textSize.height / 2 - 3, 0), bounds.height - textSize.height - 6),
+                width: textSize.width + 14,
+                height: textSize.height + 6)
+            color.withAlphaComponent(0.92).setFill()
+            NSBezierPath(roundedRect: chip, xRadius: 5, yRadius: 5).fill()
+            text.draw(at: NSPoint(x: chip.minX + 7, y: chip.minY + 3))
         }
 
-        // pane 顶 = contentView 顶 = 标题栏底（标题栏 28pt 在本视图之上，画不进来）
-        line(0, .systemBlue, "标题栏底 / pane 顶（上方为标题栏 28pt）")
-        line(terminalTop, .systemRed, "header 底 = 终端视图顶（header \(Int(PaneHeaderView.height))pt）")
-        line(terminalTop + topOffset, .systemGreen,
-             String(format: "grid row0 顶（padding %.0f + balance %.1f = %.1fpt）",
-                    padTop, balance ? max(leftover, 0) / 2 : 0, topOffset))
+        bracket(headerTop, terminalTop, .systemRed,
+                String(format: "pane header  %.0fpt", terminalTop - headerTop))
+        bracket(terminalTop, row0Top, .systemGreen,
+                String(format: "空白 %.1fpt = padding %.0f + 余数 %.1f（ghostty 配置）",
+                       topOffset, padTop, balanceShare))
+        bracket(row0Top, row0Top + cellH, .systemOrange,
+                String(format: "第一行字格  %.0fpt", cellH))
+
+        // 行界虚线（第 1~3 行）辅助看 starship 空行占了哪一行
+        NSColor.systemOrange.withAlphaComponent(0.6).setStroke()
         for k in 1...3 {
-            line(terminalTop + topOffset + CGFloat(k) * cellH, .systemOrange,
-                 "row\(k) 顶（cell \(String(format: "%.0f", cellH))pt）", dashed: true)
+            let y = row0Top + CGFloat(k) * cellH
+            let dash = NSBezierPath()
+            dash.lineWidth = 1
+            dash.setLineDash([4, 4], count: 2, phase: 0)
+            dash.move(to: NSPoint(x: 0, y: y))
+            dash.line(to: NSPoint(x: width, y: y))
+            dash.stroke()
         }
     }
 }
