@@ -110,7 +110,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if let chrome = titlebarChrome, chrome.superview === titlebar { return }
         titlebarChrome?.removeFromSuperview()
 
-        let chrome = NSView()
+        // 穿透容器：chrome 铺满标题栏，但空白处点击必须落到下层的红黄绿三键
+        let chrome = ShellPassthroughView()
         // Aqua 只属于 lightty 的标题栏控件，不设置到承载 terminal surface 的窗口。
         chrome.appearance = NSAppearance(named: .aqua)
         chrome.translatesAutoresizingMaskIntoConstraints = false

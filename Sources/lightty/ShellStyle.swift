@@ -226,6 +226,15 @@ final class ShellTableRowView: NSTableRowView {
     }
 }
 
+/// 铺满某区域但只让自己的子控件接收事件的容器：空白处 hitTest 穿透，
+/// 不遮挡下层控件（标题栏 chrome 用它避免吞掉红黄绿三键的点击）。
+final class ShellPassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let view = super.hitTest(point)
+        return view === self ? nil : view
+    }
+}
+
 /// hover 临时展开侧边栏时，右侧终端区域只负责“点击收起”。点击钉住后不安装此层，
 /// 终端保持可交互，空白点击也不会关闭侧栏。
 final class SidebarDismissView: NSView {
