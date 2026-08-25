@@ -804,6 +804,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = ShellStyle.animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            // 没有 allowsImplicitAnimation，动画组里的 layout 不会产生过渡帧（瞬跳）
+            context.allowsImplicitAnimation = true
             themeFrame.layoutSubtreeIfNeeded()
         } completionHandler: { [weak self, weak sidebar] in
             guard let self else { return }
@@ -848,6 +850,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = ShellStyle.animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
             themeFrame.layoutSubtreeIfNeeded()
         } completionHandler: { [weak self] in
             sidebar.removeFromSuperview()
@@ -873,6 +876,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = ShellStyle.animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
             themeFrame.layoutSubtreeIfNeeded()
         }
     }
