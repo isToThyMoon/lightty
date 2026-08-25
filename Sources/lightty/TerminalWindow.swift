@@ -8,8 +8,8 @@ final class PaneSplitView: NSSplitView {
 }
 
 /// 终端窗口：保留一条原生标题栏作顶部操作栏（红黄绿三键 + 侧边栏按钮，
-/// 2026-08-23 用户定稿，推翻此前的整体隐藏方案）。标题栏透明化、无标题文字，
-/// 底色随 config；仍不读 macos-titlebar-style（有意分叉）。
+/// 2026-08-23 用户定稿，推翻此前的整体隐藏方案）。标题栏无系统标题文字；应用
+/// chrome 使用独立的 Codex 浅色样式，terminal surface 仍完整遵守 Ghostty config。
 final class TerminalWindow: NSWindow {
     init(contentRect: NSRect) {
         super.init(
@@ -20,12 +20,18 @@ final class TerminalWindow: NSWindow {
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isReleasedWhenClosed = false
+        // 与 Ghostty TerminalWindow 相同：new_tab 使用 macOS 原生 tab group，
+        // 而不是伪装成 split pane。
+        tabbingMode = .preferred
+        DispatchQueue.main.async { [weak self] in self?.tabbingMode = .automatic }
         // 窗口尺寸由 core 的 INITIAL_SIZE 决定（window-width/height × cell），
         // 系统状态恢复会用上次的旧框架覆盖它，禁用
         isRestorable = false
 
+        // 不在 NSWindow 层设置 appearance：窗口同时承载 libghostty surface，壳层的
+        // 浅色外观必须局限在自己的标题栏/侧边栏视图，不能扩散进 terminal host。
+
         let cfg = GhosttyRuntime.shared.configValues
-        if let appearance = cfg.appearance { self.appearance = appearance }
         if cfg.isTransparent {
             // 官方 TerminalWindow.syncAppearance 同式：非不透明 + 近全透明白底
             isOpaque = false

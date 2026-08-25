@@ -1,45 +1,143 @@
 import AppKit
+import Carbon
+import CoreText
 import GhosttyKit
 
-/// 承载一个 ghostty surface 的 NSView。
-/// 硬约束（docs/libghostty-embedding.md）：不设 wantsLayer、不建自己的 layer，
-/// surface_new 内部会把 IOSurfaceLayer 塞进来并转 layer-hosting；壳侧动 layer 会踢掉它。
+/// 由 libghostty 产生、壳层只负责保活到下一个 surface_new 的启动参数。
+/// 快捷键触发 new_window/new_tab/new_split 时，必须用
+/// `ghostty_surface_inherited_config`，不得在 lightty 里自己猜 cwd/font。
+struct TerminalSurfaceConfiguration {
+    var fontSize: Float32 = 0
+    var workingDirectory: String?
+    var context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW
+
+    init() {}
+
+    init(inheriting surface: ghostty_surface_t, context: ghostty_surface_context_e) {
+        let inherited = ghostty_surface_inherited_config(surface, context)
+        fontSize = inherited.font_size
+        if let directory = inherited.working_directory {
+            workingDirectory = String(cString: directory)
+        }
+        self.context = inherited.context
+    }
+
+    func withCValue<T>(
+        view: TerminalSurfaceView,
+        scale: CGFloat,
+        _ body: (inout ghostty_surface_config_s) -> T
+    ) -> T {
+        var config = ghostty_surface_config_new()
+        config.platform_tag = GHOSTTY_PLATFORM_MACOS
+        config.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
+            nsview: Unmanaged.passUnretained(view).toOpaque()))
+        config.userdata = Unmanaged.passUnretained(view).toOpaque()
+        config.scale_factor = scale
+        config.font_size = fontSize
+        config.context = context
+
+        guard let workingDirectory else { return body(&config) }
+        return workingDirectory.withCString { directory in
+            config.working_directory = directory
+            return body(&config)
+        }
+    }
+}
+
+/// AppKit ↔ libghostty 的单一 surface adapter。
+///
+/// 这个类只把原生事件和宿主状态翻译给 libghostty；它不定义快捷键、
+/// 不解析 terminal config，也不修改 surface 的工作目录。输入语义直接对齐：
+/// `vendor/ghostty/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`。
+///
+/// 渲染硬约束：不设 wantsLayer、不建自己的 layer。`ghostty_surface_new`
+/// 会安装 IOSurfaceLayer 并把视图变成 layer-hosting，壳层不能踢掉它。
 final class TerminalSurfaceView: NSView {
     private(set) var surface: ghostty_surface_t?
-    /// close_surface 回调（进程退出）时由 runtime 调用
+    /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
 
     private var trackingArea: NSTrackingArea?
+    private var eventMonitor: Any?
+    private var observingWindow = false
+    private var suppressNextLeftMouseUp = false
+    private var previousPressureStage = 0
+
+    // NSTextInputClient / IME state. The accumulator differentiates text committed by
+    // interpretKeyEvents during a hardware key event from external committed text.
+    private var markedText = NSMutableAttributedString()
+    private var keyTextAccumulator: [String]?
+    private var leadSurrogate: TerminalLeadSurrogate?
+    private var lastPerformKeyEvent: TimeInterval?
+
+    /// libghostty 通过 GHOSTTY_ACTION_CELL_SIZE 给宿主的 backing-pixel 尺寸。
+    /// 这里转成 point，仅供 IME candidate window 定位。
+    private(set) var cellSize: NSSize = .zero
+
+    private var terminalCursor = NSCursor.arrow
+    private let launchConfiguration: TerminalSurfaceConfiguration
 
     override var acceptsFirstResponder: Bool { true }
 
+    init(configuration: TerminalSurfaceConfiguration = .init()) {
+        launchConfiguration = configuration
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil, surface == nil else { return }
-        createSurface()
+        guard window != nil else { return }
+        installWindowBridgeIfNeeded()
+        if surface == nil { createSurface() }
+        updateDisplayAndOcclusion()
     }
 
     private func createSurface() {
         guard let window else { return }
-        // 默认值必须来自 config_new()，勿 memset 0
-        var cfg = ghostty_surface_config_new()
-        cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
-        cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
-            nsview: Unmanaged.passUnretained(self).toOpaque()))
-        cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        cfg.scale_factor = window.backingScaleFactor
 
-        // cwd 固定家目录（HANDOVER 8.2：不自动启动 agent）
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        surface = home.withCString { homePtr -> ghostty_surface_t? in
-            cfg.working_directory = homePtr
-            return ghostty_surface_new(GhosttyRuntime.shared.app, &cfg)
+        // 必须从 libghostty 的 default constructor 开始。默认 surface 不覆盖 cwd；
+        // 由 core 请求的新 surface 仅使用 core 返回的 inherited config。
+        surface = launchConfiguration.withCValue(
+            view: self,
+            scale: window.backingScaleFactor
+        ) { config in
+            ghostty_surface_new(GhosttyRuntime.shared.app, &config)
         }
+
+        updateContentScale()
         updateSurfaceSize()
+        updateDisplayAndOcclusion()
+    }
+
+    private func installWindowBridgeIfNeeded() {
+        if eventMonitor == nil {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyUp, .leftMouseDown]
+            ) { [weak self] event in
+                self?.handleLocalEvent(event) ?? event
+            }
+        }
+
+        guard !observingWindow else { return }
+        observingWindow = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeScreen(_:)),
+            name: NSWindow.didChangeScreenNotification,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeOcclusion(_:)),
+            name: NSWindow.didChangeOcclusionStateNotification,
+            object: nil)
     }
 
     deinit {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        NotificationCenter.default.removeObserver(self)
         if let surface { ghostty_surface_free(surface) }
     }
 
@@ -47,31 +145,63 @@ final class TerminalSurfaceView: NSView {
         onCloseRequest?()
     }
 
-    /// 向 PTY 注入文本（粘贴路径）。「收工」「注入」与恢复预填充都走这里。
+    /// 壳层明确请求向 PTY 注入文本的边界（「收工」/「注入」）。
+    /// 这不参与键盘事件或快捷键配置。
     func sendText(_ text: String) {
         guard let surface else { return }
         let bytes = Array(text.utf8)
-        bytes.withUnsafeBufferPointer { buf in
-            guard let base = buf.baseAddress else { return }
-            base.withMemoryRebound(to: CChar.self, capacity: buf.count) {
-                ghostty_surface_text(surface, $0, UInt(buf.count))
+        bytes.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            base.withMemoryRebound(to: CChar.self, capacity: buffer.count) {
+                ghostty_surface_text(surface, $0, UInt(buffer.count))
             }
         }
     }
 
-    // MARK: - 尺寸与缩放（backing 像素，不是 point）
+    /// 宿主 UI 把用户操作表达为 Ghostty action 的唯一入口。
+    /// action 的解析和行为仍在 core，这不是 lightty 的快捷键配置。
+    @discardableResult
+    func performBindingAction(_ action: String) -> Bool {
+        guard let surface else { return false }
+        return action.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
+        }
+    }
+
+    func setCellSize(backingWidth: UInt32, backingHeight: UInt32) {
+        cellSize = convertFromBacking(NSSize(
+            width: CGFloat(backingWidth),
+            height: CGFloat(backingHeight)))
+    }
+
+    // MARK: - 尺寸、缩放、屏幕与遮挡
 
     private func updateSurfaceSize() {
         guard let surface else { return }
         let backing = convertToBacking(bounds)
-        ghostty_surface_set_size(surface, UInt32(max(backing.width, 1)), UInt32(max(backing.height, 1)))
+        ghostty_surface_set_size(
+            surface,
+            UInt32(max(backing.width, 1)),
+            UInt32(max(backing.height, 1)))
+
         if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil {
-            let s = ghostty_surface_size(surface)
-            NSLog("set_size %.0fx%.0f px | grid %dx%d, grid_px %dx%d, cell %dx%d | leftover_y_px %.0f",
-                  backing.width, backing.height,
-                  s.columns, s.rows, s.width_px, s.height_px, s.cell_width_px, s.cell_height_px,
-                  backing.height - CGFloat(UInt32(s.rows) * s.cell_height_px))
+            let size = ghostty_surface_size(surface)
+            NSLog(
+                "set_size %.0fx%.0f px | grid %dx%d, grid_px %dx%d, cell %dx%d | leftover_y_px %.0f",
+                backing.width, backing.height,
+                size.columns, size.rows, size.width_px, size.height_px,
+                size.cell_width_px, size.cell_height_px,
+                backing.height - CGFloat(UInt32(size.rows) * size.cell_height_px))
         }
+    }
+
+    private func updateContentScale() {
+        guard let surface, frame.width > 0, frame.height > 0 else { return }
+        let backingFrame = convertToBacking(frame)
+        ghostty_surface_set_content_scale(
+            surface,
+            backingFrame.width / frame.width,
+            backingFrame.height / frame.height)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -79,8 +209,7 @@ final class TerminalSurfaceView: NSView {
         updateSurfaceSize()
     }
 
-    // Auto Layout 的最终尺寸经 layout() 落地，只挂 setFrameSize 会漏掉，
-    // surface 像素高一旦大于视图实际高，内容就整体下坠出一段顶部空白
+    // Auto Layout 的最终尺寸在 layout 落地；只监听 setFrameSize 会漏。
     override func layout() {
         super.layout()
         updateSurfaceSize()
@@ -88,108 +217,441 @@ final class TerminalSurfaceView: NSView {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        guard let surface, let window else { return }
-        let scale = window.backingScaleFactor
-        ghostty_surface_set_content_scale(surface, scale, scale)
+        updateContentScale()
         updateSurfaceSize()
     }
 
-    // MARK: - 焦点
+    @objc private func windowDidChangeScreen(_ notification: Notification) {
+        guard notification.object as AnyObject? === window else { return }
+        updateDisplayAndOcclusion()
+        // 换屏可能同时换 scale。下一轮主队列再取 AppKit 稳定后的值。
+        DispatchQueue.main.async { [weak self] in
+            self?.updateContentScale()
+            self?.updateSurfaceSize()
+        }
+    }
+
+    @objc private func windowDidChangeOcclusion(_ notification: Notification) {
+        guard notification.object as AnyObject? === window else { return }
+        updateDisplayAndOcclusion()
+    }
+
+    private func updateDisplayAndOcclusion() {
+        guard let surface, let window else { return }
+        if let number = window.screen?.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber {
+            ghostty_surface_set_display_id(surface, number.uint32Value)
+        }
+        ghostty_surface_set_occlusion(surface, window.occlusionState.contains(.visible))
+    }
+
+    // MARK: - 焦点与 AppKit 局部事件
 
     override func becomeFirstResponder() -> Bool {
-        let ok = super.becomeFirstResponder()
-        if ok, let surface {
+        let result = super.becomeFirstResponder()
+        if result, let surface {
             ghostty_surface_set_focus(surface, true)
             onFocusChange?(true)
         }
-        return ok
+        return result
     }
 
     override func resignFirstResponder() -> Bool {
-        let ok = super.resignFirstResponder()
-        if ok, let surface {
+        let result = super.resignFirstResponder()
+        if result, let surface {
+            suppressNextLeftMouseUp = false
             ghostty_surface_set_focus(surface, false)
             onFocusChange?(false)
         }
-        return ok
+        return result
     }
 
-    // MARK: - 键盘（IME/修饰键为已知欠账，见 HANDOVER 第 10 节）
+    private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
+        switch event.type {
+        case .keyUp:
+            return handleLocalKeyUp(event)
+        case .leftMouseDown:
+            return handleLocalLeftMouseDown(event)
+        default:
+            return event
+        }
+    }
+
+    /// AppKit 不会把 Command 组合的 keyUp 送入普通 responder chain。
+    private func handleLocalKeyUp(_ event: NSEvent) -> NSEvent? {
+        guard event.modifierFlags.contains(.command),
+              window?.firstResponder === self else { return event }
+        keyUp(with: event)
+        return nil
+    }
+
+    /// 已激活窗口内切换 pane 焦点时，第一下点击只负责聚焦。
+    /// 官方壳会同时吞掉配对的 mouseUp，避免 PTY 收到无 press 的 release。
+    private func handleLocalLeftMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard let window, event.window === window,
+              let contentView = window.contentView else { return event }
+        let location = contentView.convert(event.locationInWindow, from: nil)
+        guard contentView.hitTest(location) === self else { return event }
+
+        suppressNextLeftMouseUp = false
+        guard window.firstResponder !== self else { return event }
+
+        if NSApp.isActive && window.isKeyWindow {
+            window.makeFirstResponder(self)
+            suppressNextLeftMouseUp = true
+            return nil
+        }
+
+        window.makeFirstResponder(self)
+        return event
+    }
+
+    // MARK: - 键盘（直接对齐 Ghostty SurfaceView_AppKit）
 
     override func keyDown(with event: NSEvent) {
+        guard let surface else {
+            interpretKeyEvents([event])
+            return
+        }
+
+        // option-as-alt 等翻译完全由 core config 决定。
+        let translatedGhosttyMods = ghostty_surface_key_translation_mods(
+            surface,
+            Self.ghosttyMods(event.modifierFlags))
+        let translatedIndependentFlags = Self.eventModifierFlags(translatedGhosttyMods)
+
+        // 保留 NSEvent 中对 dead key / IME 有意义的隐藏 bits，只替换四个主修饰键。
+        var translationFlags = event.modifierFlags
+        for flag in [
+            NSEvent.ModifierFlags.shift,
+            .control,
+            .option,
+            .command,
+        ] {
+            if translatedIndependentFlags.contains(flag) {
+                translationFlags.insert(flag)
+            } else {
+                translationFlags.remove(flag)
+            }
+        }
+
+        // 修饰键没变时必须复用原 event；重建对象会破坏韩文 IME。
+        let translationEvent: NSEvent
+        if translationFlags == event.modifierFlags {
+            translationEvent = event
+        } else {
+            translationEvent = NSEvent.keyEvent(
+                with: event.type,
+                location: event.locationInWindow,
+                modifierFlags: translationFlags,
+                timestamp: event.timestamp,
+                windowNumber: event.windowNumber,
+                context: nil,
+                characters: event.characters(byApplyingModifiers: translationFlags) ?? "",
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+                isARepeat: event.isARepeat,
+                keyCode: event.keyCode) ?? event
+        }
+
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
-        _ = keyAction(action, event: event)
+        keyTextAccumulator = []
+        defer { keyTextAccumulator = nil }
+
+        let hadMarkedText = markedText.length > 0
+        let keyboardIDBefore = hadMarkedText ? nil : TerminalKeyboardLayout.id
+        lastPerformKeyEvent = nil
+        interpretKeyEvents([translationEvent])
+
+        // 切换输入法的那个物理键不应进入 terminal。
+        if !hadMarkedText && keyboardIDBefore != TerminalKeyboardLayout.id { return }
+
+        syncPreedit(clearIfNeeded: hadMarkedText)
+        let composing = markedText.length > 0 || hadMarkedText
+
+        // IME 可能在处理物理键时提交 preedit。先发提交文本，再仅重放
+        // 依然应该影响 terminal 的方向键。
+        if hadMarkedText, let accumulated = keyTextAccumulator, !accumulated.isEmpty {
+            for text in accumulated where !Self.shouldSuppressComposingControlInput(
+                text,
+                composing: composing) {
+                _ = committedTextAction(action, text: text)
+            }
+            if shouldReplayCommittedPreeditKey(translationEvent) {
+                _ = keyAction(
+                    action,
+                    event: event,
+                    translationEvent: translationEvent,
+                    composing: false)
+            }
+            return
+        }
+
+        if let accumulated = keyTextAccumulator, !accumulated.isEmpty {
+            for text in accumulated where !Self.shouldSuppressComposingControlInput(
+                text,
+                composing: composing) {
+                _ = keyAction(
+                    action,
+                    event: event,
+                    translationEvent: translationEvent,
+                    text: text)
+            }
+        } else {
+            guard !Self.shouldSuppressComposingControlInput(
+                event.characters,
+                composing: composing) else { return }
+            _ = keyAction(
+                action,
+                event: event,
+                translationEvent: translationEvent,
+                text: translationEvent.terminalGhosttyCharacters,
+                composing: composing)
+        }
     }
 
     override func keyUp(with event: NSEvent) {
         _ = keyAction(GHOSTTY_ACTION_RELEASE, event: event)
     }
 
-    /// cmd 组合键先于 keyDown 走这里；凡 core 认领的 keybind
-    /// （用户 config + ghostty 默认，如 cmd+D/cmd+T/cmd+[]）直接转发，
-    /// 不让 AppKit 菜单/系统吃掉。壳层菜单只保留 lightty 拓展键。
+    /// Command/control 组合会先走 AppKit key-equivalent 路径。只问 core 这是否是
+    /// binding；如果是，就交回同一条 keyDown 管线。壳层不拥有键位表。
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              window?.isKeyWindow == true,
-              window?.firstResponder === self,
-              let surface else { return false }
+        guard window?.firstResponder === self else { return false }
+        return routeKeyEquivalentFromShell(event)
+    }
 
-        var keyEvent = makeKeyEvent(GHOSTTY_ACTION_PRESS, event: event)
+    /// 供官方宿主型 overlay（如 terminal search）在自己未消费键时调用。
+    /// 它仍然只查询 core 的 binding table，不接受壳层 key map。
+    func routeKeyEquivalentFromShell(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, let surface else { return false }
+
+        var coreEvent = makeKeyEvent(GHOSTTY_ACTION_PRESS, event: event)
         var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
-        let isBinding = (event.characters ?? "").withCString { ptr -> Bool in
-            keyEvent.text = ptr
-            return ghostty_surface_key_is_binding(surface, keyEvent, &bindingFlags)
+        let isBinding = (event.characters ?? "").withCString { pointer in
+            coreEvent.text = pointer
+            return ghostty_surface_key_is_binding(surface, coreEvent, &bindingFlags)
         }
-        guard isBinding else { return false }
-        keyDown(with: event)
+        if isBinding {
+            keyDown(with: event)
+            return true
+        }
+
+        let equivalent: String
+        switch event.charactersIgnoringModifiers {
+        case "\r":
+            guard event.modifierFlags.contains(.control) else { return false }
+            equivalent = "\r"
+
+        case "/":
+            guard event.modifierFlags.contains(.control),
+                  event.modifierFlags.isDisjoint(with: [.shift, .command, .option]) else {
+                return false
+            }
+            // 对齐官方：C-/ 按 C-_ 编码，同时避免 AppKit beep。
+            equivalent = "_"
+
+        default:
+            guard event.timestamp != 0 else { return false }
+            guard event.modifierFlags.contains(.command) ||
+                    event.modifierFlags.contains(.control) else {
+                lastPerformKeyEvent = nil
+                return false
+            }
+
+            if let previous = lastPerformKeyEvent {
+                lastPerformKeyEvent = nil
+                if previous == event.timestamp {
+                    equivalent = event.characters ?? ""
+                    break
+                }
+            }
+
+            lastPerformKeyEvent = event.timestamp
+            return false
+        }
+
+        guard let redispatched = NSEvent.keyEvent(
+            with: .keyDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: equivalent,
+            charactersIgnoringModifiers: equivalent,
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode) else { return false }
+        keyDown(with: redispatched)
         return true
     }
 
-    private func makeKeyEvent(_ action: ghostty_input_action_e, event: NSEvent) -> ghostty_input_key_s {
+    override func flagsChanged(with event: NSEvent) {
+        let changedModifier: UInt32
+        switch event.keyCode {
+        case 0x39: changedModifier = GHOSTTY_MODS_CAPS.rawValue
+        case 0x38, 0x3C: changedModifier = GHOSTTY_MODS_SHIFT.rawValue
+        case 0x3B, 0x3E: changedModifier = GHOSTTY_MODS_CTRL.rawValue
+        case 0x3A, 0x3D: changedModifier = GHOSTTY_MODS_ALT.rawValue
+        case 0x37, 0x36: changedModifier = GHOSTTY_MODS_SUPER.rawValue
+        default: return
+        }
+
+        // 预编辑期的 modifier 属于 IME，不送 terminal。
+        if hasMarkedText() { return }
+
+        let modifiers = Self.ghosttyMods(event.modifierFlags)
+        var action = GHOSTTY_ACTION_RELEASE
+        if modifiers.rawValue & changedModifier != 0 {
+            let correctSideIsPressed: Bool
+            switch event.keyCode {
+            case 0x3C:
+                correctSideIsPressed = event.modifierFlags.rawValue &
+                    UInt(NX_DEVICERSHIFTKEYMASK) != 0
+            case 0x3E:
+                correctSideIsPressed = event.modifierFlags.rawValue &
+                    UInt(NX_DEVICERCTLKEYMASK) != 0
+            case 0x3D:
+                correctSideIsPressed = event.modifierFlags.rawValue &
+                    UInt(NX_DEVICERALTKEYMASK) != 0
+            case 0x36:
+                correctSideIsPressed = event.modifierFlags.rawValue &
+                    UInt(NX_DEVICERCMDKEYMASK) != 0
+            default:
+                correctSideIsPressed = true
+            }
+            if correctSideIsPressed { action = GHOSTTY_ACTION_PRESS }
+        }
+        _ = keyAction(action, event: event)
+    }
+
+    private func makeKeyEvent(
+        _ action: ghostty_input_action_e,
+        event: NSEvent,
+        translationFlags: NSEvent.ModifierFlags? = nil
+    ) -> ghostty_input_key_s {
         var keyEvent = ghostty_input_key_s()
         keyEvent.action = action
         keyEvent.keycode = UInt32(event.keyCode)
-        keyEvent.mods = Self.ghosttyMods(event.modifierFlags)
-        // 官方启发式：control/command 从不参与文本翻译
-        keyEvent.consumed_mods = Self.ghosttyMods(
-            event.modifierFlags.subtracting([.control, .command]))
+        keyEvent.text = nil
         keyEvent.composing = false
+        keyEvent.mods = Self.ghosttyMods(event.modifierFlags)
+        keyEvent.consumed_mods = Self.ghosttyMods(
+            (translationFlags ?? event.modifierFlags)
+                .subtracting([.control, .command]))
         keyEvent.unshifted_codepoint = 0
         if event.type == .keyDown || event.type == .keyUp,
-           let chars = event.characters(byApplyingModifiers: []),
-           let cp = chars.unicodeScalars.first {
-            keyEvent.unshifted_codepoint = cp.value
+           let characters = event.characters(byApplyingModifiers: []),
+           let codepoint = characters.unicodeScalars.first {
+            keyEvent.unshifted_codepoint = codepoint.value
         }
         return keyEvent
     }
 
-    private func keyAction(_ action: ghostty_input_action_e, event: NSEvent) -> Bool {
+    private func keyAction(
+        _ action: ghostty_input_action_e,
+        event: NSEvent,
+        translationEvent: NSEvent? = nil,
+        text: String? = nil,
+        composing: Bool = false
+    ) -> Bool {
         guard let surface else { return false }
-        var keyEvent = makeKeyEvent(action, event: event)
+        var keyEvent = makeKeyEvent(
+            action,
+            event: event,
+            translationFlags: translationEvent?.modifierFlags)
+        keyEvent.composing = composing
 
-        // 控制字符不进 text：物理键 + 修饰键交给 core 自己编码
-        let text = event.characters ?? ""
-        if !text.isEmpty, let first = text.unicodeScalars.first,
-           first.value >= 0x20, first.value != 0x7F {
-            return text.withCString { ptr in
-                keyEvent.text = ptr
+        // C0 control 字符由 core 编码，这样 Kitty keyboard protocol 仍能看到
+        // 物理键和 modifiers。
+        if let text, !text.isEmpty, !text.startsWithASCIIControlCharacter {
+            return text.withCString { pointer in
+                keyEvent.text = pointer
                 return ghostty_surface_key(surface, keyEvent)
             }
         }
         return ghostty_surface_key(surface, keyEvent)
     }
 
-    static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
-        var mods = GHOSTTY_MODS_NONE.rawValue
-        if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
-        if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
-        if flags.contains(.option) { mods |= GHOSTTY_MODS_ALT.rawValue }
-        if flags.contains(.command) { mods |= GHOSTTY_MODS_SUPER.rawValue }
-        if flags.contains(.capsLock) { mods |= GHOSTTY_MODS_CAPS.rawValue }
-        return ghostty_input_mods_e(rawValue: mods)
+    private func committedTextAction(
+        _ action: ghostty_input_action_e,
+        text: String
+    ) -> Bool {
+        guard let surface else { return false }
+        var keyEvent = ghostty_input_key_s()
+        keyEvent.action = action
+        keyEvent.keycode = 0
+        keyEvent.text = nil
+        keyEvent.composing = false
+        keyEvent.mods = GHOSTTY_MODS_NONE
+        keyEvent.consumed_mods = GHOSTTY_MODS_NONE
+        keyEvent.unshifted_codepoint = 0
+        return text.withCString { pointer in
+            keyEvent.text = pointer
+            return ghostty_surface_key(surface, keyEvent)
+        }
     }
 
-    // MARK: - 鼠标（坐标 Y 翻转：ghostty 用左上原点）
+    private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 0x7D, 0x7C, 0x7E: // down, right, up
+            return true
+        case 0x7B: // left
+            return !event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command])
+        default:
+            return false
+        }
+    }
+
+    private static func shouldSuppressComposingControlInput(
+        _ text: String?,
+        composing: Bool
+    ) -> Bool {
+        guard composing, let text else { return false }
+        let scalars = text.unicodeScalars
+        guard let first = scalars.first,
+              scalars.index(after: scalars.startIndex) == scalars.endIndex else {
+            return false
+        }
+        return first.value < 0x20
+    }
+
+    static func eventModifierFlags(_ mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
+        if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 { flags.insert(.control) }
+        if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 { flags.insert(.option) }
+        if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { flags.insert(.command) }
+        return flags
+    }
+
+    static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+        var modifiers = GHOSTTY_MODS_NONE.rawValue
+        if flags.contains(.shift) { modifiers |= GHOSTTY_MODS_SHIFT.rawValue }
+        if flags.contains(.control) { modifiers |= GHOSTTY_MODS_CTRL.rawValue }
+        if flags.contains(.option) { modifiers |= GHOSTTY_MODS_ALT.rawValue }
+        if flags.contains(.command) { modifiers |= GHOSTTY_MODS_SUPER.rawValue }
+        if flags.contains(.capsLock) { modifiers |= GHOSTTY_MODS_CAPS.rawValue }
+
+        // Ghostty 的 keybind 支持左右修饰键，AppKit 的公开 flags 只给聚合位，
+        // 右侧信息在 device-dependent bits 中。
+        let raw = flags.rawValue
+        if raw & UInt(NX_DEVICERSHIFTKEYMASK) != 0 {
+            modifiers |= GHOSTTY_MODS_SHIFT_RIGHT.rawValue
+        }
+        if raw & UInt(NX_DEVICERCTLKEYMASK) != 0 {
+            modifiers |= GHOSTTY_MODS_CTRL_RIGHT.rawValue
+        }
+        if raw & UInt(NX_DEVICERALTKEYMASK) != 0 {
+            modifiers |= GHOSTTY_MODS_ALT_RIGHT.rawValue
+        }
+        if raw & UInt(NX_DEVICERCMDKEYMASK) != 0 {
+            modifiers |= GHOSTTY_MODS_SUPER_RIGHT.rawValue
+        }
+        return ghostty_input_mods_e(rawValue: modifiers)
+    }
+
+    // MARK: - 鼠标（Ghostty 坐标原点在左上）
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -202,24 +664,71 @@ final class TerminalSurfaceView: NSView {
         trackingArea = area
     }
 
+    override func resetCursorRects() {
+        discardCursorRects()
+        addCursorRect(bounds, cursor: terminalCursor)
+    }
+
+    func setCursorShape(_ shape: ghostty_action_mouse_shape_e) {
+        switch shape {
+        case GHOSTTY_MOUSE_SHAPE_TEXT: terminalCursor = .iBeam
+        case GHOSTTY_MOUSE_SHAPE_POINTER: terminalCursor = .pointingHand
+        case GHOSTTY_MOUSE_SHAPE_CROSSHAIR: terminalCursor = .crosshair
+        case GHOSTTY_MOUSE_SHAPE_GRAB: terminalCursor = .openHand
+        case GHOSTTY_MOUSE_SHAPE_GRABBING: terminalCursor = .closedHand
+        case GHOSTTY_MOUSE_SHAPE_E_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_W_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_EW_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_COL_RESIZE:
+            terminalCursor = .resizeLeftRight
+        case GHOSTTY_MOUSE_SHAPE_N_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_S_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_NS_RESIZE,
+             GHOSTTY_MOUSE_SHAPE_ROW_RESIZE:
+            terminalCursor = .resizeUpDown
+        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED, GHOSTTY_MOUSE_SHAPE_NO_DROP:
+            terminalCursor = .operationNotAllowed
+        default:
+            terminalCursor = .arrow
+        }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    func setCursorVisibility(_ visible: Bool) {
+        NSCursor.setHiddenUntilMouseMoves(!visible)
+    }
+
     override func mouseDown(with event: NSEvent) {
-        // 点击即聚焦该 pane
-        window?.makeFirstResponder(self)
         guard let surface else { return }
         _ = ghostty_surface_mouse_button(
-            surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, Self.ghosttyMods(event.modifierFlags))
+            surface,
+            GHOSTTY_MOUSE_PRESS,
+            GHOSTTY_MOUSE_LEFT,
+            Self.ghosttyMods(event.modifierFlags))
     }
 
     override func mouseUp(with event: NSEvent) {
+        if suppressNextLeftMouseUp {
+            suppressNextLeftMouseUp = false
+            return
+        }
+        previousPressureStage = 0
         guard let surface else { return }
         _ = ghostty_surface_mouse_button(
-            surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, Self.ghosttyMods(event.modifierFlags))
+            surface,
+            GHOSTTY_MOUSE_RELEASE,
+            GHOSTTY_MOUSE_LEFT,
+            Self.ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pressure(surface, 0, 0)
     }
 
     override func rightMouseDown(with event: NSEvent) {
         guard let surface else { return super.rightMouseDown(with: event) }
         if !ghostty_surface_mouse_button(
-            surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, Self.ghosttyMods(event.modifierFlags)) {
+            surface,
+            GHOSTTY_MOUSE_PRESS,
+            GHOSTTY_MOUSE_RIGHT,
+            Self.ghosttyMods(event.modifierFlags)) {
             super.rightMouseDown(with: event)
         }
     }
@@ -227,43 +736,93 @@ final class TerminalSurfaceView: NSView {
     override func rightMouseUp(with event: NSEvent) {
         guard let surface else { return super.rightMouseUp(with: event) }
         if !ghostty_surface_mouse_button(
-            surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, Self.ghosttyMods(event.modifierFlags)) {
+            surface,
+            GHOSTTY_MOUSE_RELEASE,
+            GHOSTTY_MOUSE_RIGHT,
+            Self.ghosttyMods(event.modifierFlags)) {
             super.rightMouseUp(with: event)
         }
     }
 
-    private func sendMousePos(_ event: NSEvent) {
+    override func otherMouseDown(with event: NSEvent) {
         guard let surface else { return }
-        let pos = convert(event.locationInWindow, from: nil)
-        ghostty_surface_mouse_pos(
-            surface, pos.x, frame.height - pos.y, Self.ghosttyMods(event.modifierFlags))
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_PRESS,
+            Self.ghosttyMouseButton(event.buttonNumber),
+            Self.ghosttyMods(event.modifierFlags))
     }
 
-    override func mouseMoved(with event: NSEvent) { sendMousePos(event) }
-    override func mouseDragged(with event: NSEvent) { sendMousePos(event) }
-    override func mouseEntered(with event: NSEvent) { sendMousePos(event) }
+    override func otherMouseUp(with event: NSEvent) {
+        guard let surface else { return }
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_RELEASE,
+            Self.ghosttyMouseButton(event.buttonNumber),
+            Self.ghosttyMods(event.modifierFlags))
+    }
+
+    override func pressureChange(with event: NSEvent) {
+        guard let surface else { return }
+        ghostty_surface_mouse_pressure(surface, UInt32(event.stage), Double(event.pressure))
+        previousPressureStage = event.stage
+    }
+
+    private func sendMousePosition(_ event: NSEvent) {
+        guard let surface else { return }
+        let position = convert(event.locationInWindow, from: nil)
+        ghostty_surface_mouse_pos(
+            surface,
+            position.x,
+            frame.height - position.y,
+            Self.ghosttyMods(event.modifierFlags))
+    }
+
+    override func mouseMoved(with event: NSEvent) { sendMousePosition(event) }
+    override func mouseDragged(with event: NSEvent) { sendMousePosition(event) }
+    override func rightMouseDragged(with event: NSEvent) { sendMousePosition(event) }
+    override func otherMouseDragged(with event: NSEvent) { sendMousePosition(event) }
+    override func mouseEntered(with event: NSEvent) { sendMousePosition(event) }
 
     override func mouseExited(with event: NSEvent) {
-        guard let surface else { return }
-        if NSEvent.pressedMouseButtons != 0 { return }
-        // exited 发 (-1,-1)
-        ghostty_surface_mouse_pos(surface, -1, -1, Self.ghosttyMods(event.modifierFlags))
+        guard let surface, NSEvent.pressedMouseButtons == 0 else { return }
+        ghostty_surface_mouse_pos(
+            surface,
+            -1,
+            -1,
+            Self.ghosttyMods(event.modifierFlags))
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
         var x = event.scrollingDeltaX
         var y = event.scrollingDeltaY
-        let precision = event.hasPreciseScrollingDeltas
-        if precision {
-            // 官方壳同款 2x 手感系数
+        let precise = event.hasPreciseScrollingDeltas
+        if precise {
+            // 官方 AppKit 壳的手感系数。
             x *= 2
             y *= 2
         }
-        // bit0 = precision，bits1-3 = momentum（与 ghostty_input_mouse_momentum_e 对应）
-        var scrollMods: Int32 = precision ? 1 : 0
-        scrollMods |= Int32(Self.momentumValue(event.momentumPhase)) << 1
-        ghostty_surface_mouse_scroll(surface, x, y, scrollMods)
+        var scrollModifiers: Int32 = precise ? 1 : 0
+        scrollModifiers |= Int32(Self.momentumValue(event.momentumPhase)) << 1
+        ghostty_surface_mouse_scroll(surface, x, y, scrollModifiers)
+    }
+
+    private static func ghosttyMouseButton(_ number: Int) -> ghostty_input_mouse_button_e {
+        switch number {
+        case 0: return GHOSTTY_MOUSE_LEFT
+        case 1: return GHOSTTY_MOUSE_RIGHT
+        case 2: return GHOSTTY_MOUSE_MIDDLE
+        case 3: return GHOSTTY_MOUSE_EIGHT
+        case 4: return GHOSTTY_MOUSE_NINE
+        case 5: return GHOSTTY_MOUSE_SIX
+        case 6: return GHOSTTY_MOUSE_SEVEN
+        case 7: return GHOSTTY_MOUSE_FOUR
+        case 8: return GHOSTTY_MOUSE_FIVE
+        case 9: return GHOSTTY_MOUSE_TEN
+        case 10: return GHOSTTY_MOUSE_ELEVEN
+        default: return GHOSTTY_MOUSE_UNKNOWN
+        }
     }
 
     private static func momentumValue(_ phase: NSEvent.Phase) -> UInt8 {
@@ -276,5 +835,237 @@ final class TerminalSurfaceView: NSView {
         case .mayBegin: return 6
         default: return 0
         }
+    }
+}
+
+// MARK: - NSTextInputClient
+
+extension TerminalSurfaceView: NSTextInputClient {
+    func hasMarkedText() -> Bool {
+        markedText.length > 0
+    }
+
+    func markedRange() -> NSRange {
+        guard markedText.length > 0 else { return NSRange() }
+        return NSRange(0...(markedText.length - 1))
+    }
+
+    func selectedRange() -> NSRange {
+        guard let surface else { return NSRange() }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return NSRange() }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return NSRange(location: Int(text.offset_start), length: Int(text.offset_len))
+    }
+
+    func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        switch string {
+        case let value as NSAttributedString:
+            markedText = NSMutableAttributedString(attributedString: value)
+        case let value as String:
+            markedText = NSMutableAttributedString(string: value)
+        default:
+            return
+        }
+
+        // 输入法可以在 keyDown 之外更新 preedit（例如 dead key 期间切换布局）。
+        if keyTextAccumulator == nil { syncPreedit() }
+    }
+
+    func unmarkText() {
+        guard markedText.length > 0 else { return }
+        markedText.mutableString.setString("")
+        syncPreedit()
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+
+    func attributedSubstring(
+        forProposedRange range: NSRange,
+        actualRange: NSRangePointer?
+    ) -> NSAttributedString? {
+        guard range.length > 0, let surface else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        if let fontPointer = ghostty_surface_quicklook_font(surface) {
+            let font = Unmanaged<CTFont>.fromOpaque(fontPointer)
+            attributes[.font] = font.takeUnretainedValue()
+            font.release()
+        }
+        return NSAttributedString(string: String(cString: text.text), attributes: attributes)
+    }
+
+    func characterIndex(for point: NSPoint) -> Int { 0 }
+
+    func firstRect(
+        forCharacterRange range: NSRange,
+        actualRange: NSRangePointer?
+    ) -> NSRect {
+        guard let surface else {
+            return NSRect(x: frame.origin.x, y: frame.origin.y, width: 0, height: 0)
+        }
+
+        let fallbackCell = effectiveCellSize
+        var x = 0.0
+        var y = 0.0
+        var width = Double(fallbackCell.width)
+        var height = Double(fallbackCell.height)
+
+        if range.length > 0 && range != selectedRange() {
+            var text = ghostty_text_s()
+            if ghostty_surface_read_selection(surface, &text) {
+                x = text.tl_px_x - 2
+                y = text.tl_px_y + 2
+                ghostty_surface_free_text(surface, &text)
+            } else {
+                ghostty_surface_ime_point(surface, &x, &y, &width, &height)
+            }
+        } else {
+            ghostty_surface_ime_point(surface, &x, &y, &width, &height)
+        }
+
+        if range.length == 0, width > 0 {
+            width = 0
+            x += Double(fallbackCell.width) * Double(range.location + range.length)
+        }
+
+        let viewRectangle = NSRect(
+            x: x,
+            y: frame.height - y,
+            width: width,
+            height: max(height, Double(fallbackCell.height)))
+        let windowRectangle = convert(viewRectangle, to: nil)
+        return window?.convertToScreen(windowRectangle) ?? windowRectangle
+    }
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        guard NSApp.currentEvent != nil else { return }
+
+        let characters: String
+        switch string {
+        case let value as NSAttributedString:
+            characters = value.string
+        case let value as NSString:
+            if let lead = TerminalLeadSurrogate(value) {
+                leadSurrogate = lead
+                characters = ""
+            } else if let trail = TerminalTrailSurrogate(value) {
+                characters = leadSurrogate?.encode(trail: trail) ?? ""
+                leadSurrogate = nil
+            } else {
+                characters = value as String
+                leadSurrogate = nil
+            }
+        default:
+            return
+        }
+
+        unmarkText()
+        if var accumulator = keyTextAccumulator {
+            accumulator.append(characters)
+            keyTextAccumulator = accumulator
+            return
+        }
+        if !characters.isEmpty {
+            _ = committedTextAction(GHOSTTY_ACTION_PRESS, text: characters)
+        }
+    }
+
+    /// 防止 AppKit 对未实现 selector beep，并完成 Cmd-period 等指令键的
+    /// performKeyEquivalent 重分发。
+    override func doCommand(by selector: Selector) {
+        if let lastPerformKeyEvent,
+           let current = NSApp.currentEvent,
+           lastPerformKeyEvent == current.timestamp {
+            NSApp.sendEvent(current)
+        }
+    }
+
+    private func syncPreedit(clearIfNeeded: Bool = true) {
+        guard let surface else { return }
+        if markedText.length > 0 {
+            let string = markedText.string
+            let length = string.utf8CString.count
+            if length > 0 {
+                string.withCString { pointer in
+                    ghostty_surface_preedit(surface, pointer, UInt(length - 1))
+                }
+            }
+        } else if clearIfNeeded {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
+    }
+
+    private var effectiveCellSize: NSSize {
+        if cellSize.width > 0, cellSize.height > 0 { return cellSize }
+        guard let surface else { return NSSize(width: 1, height: 1) }
+        let size = ghostty_surface_size(surface)
+        return convertFromBacking(NSSize(
+            width: CGFloat(max(size.cell_width_px, 1)),
+            height: CGFloat(max(size.cell_height_px, 1))))
+    }
+}
+
+private extension NSEvent {
+    /// 官方 Ghostty 的文本提取规则：control 字符重做无 control 翻译，
+    /// AppKit function-key PUA 不作为文本送入 core。
+    var terminalGhosttyCharacters: String? {
+        guard let characters else { return nil }
+        if characters.count == 1, let scalar = characters.unicodeScalars.first {
+            if scalar.value < 0x20 {
+                return self.characters(byApplyingModifiers: modifierFlags.subtracting(.control))
+            }
+            if scalar.value >= 0xF700, scalar.value <= 0xF8FF { return nil }
+        }
+        return characters
+    }
+}
+
+private extension String {
+    var startsWithASCIIControlCharacter: Bool {
+        unicodeScalars.first.map { $0.value < 0x20 } ?? false
+    }
+}
+
+private enum TerminalKeyboardLayout {
+    static var id: String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+            return nil
+        }
+        return unsafeBitCast(pointer, to: CFString.self) as String
+    }
+}
+
+private struct TerminalLeadSurrogate {
+    let character: UTF16Char
+
+    init?(_ text: NSString) {
+        guard text.length == 1 else { return nil }
+        let character = text.character(at: 0)
+        guard UTF16.isLeadSurrogate(character) else { return nil }
+        self.character = character
+    }
+
+    func encode(trail: TerminalTrailSurrogate) -> String {
+        String(decoding: [character, trail.character], as: UTF16.self)
+    }
+}
+
+private struct TerminalTrailSurrogate {
+    let character: UTF16Char
+
+    init?(_ text: NSString) {
+        guard text.length == 1 else { return nil }
+        let character = text.character(at: 0)
+        guard UTF16.isTrailSurrogate(character) else { return nil }
+        self.character = character
     }
 }

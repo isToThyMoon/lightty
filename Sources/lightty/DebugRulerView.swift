@@ -18,13 +18,13 @@ final class DebugRulerView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// 从 ghostty 配置（含 lightty overlay）文本解析 padding-top 与 balance，
-    /// 仅调试用——正式代码不做文本解析
+    /// 从 Ghostty 全局配置文本解析 padding-top 与 balance，仅调试用——正式代码
+    /// 使用的 terminal config 始终由 libghostty 自己加载，不经过这条文本解析路径。
     private lazy var paddingConfig: (top: CGFloat, balance: Bool) = {
         var top: CGFloat = 2 // ghostty 默认
         var balance = false
         let home = FileManager.default.homeDirectoryForCurrentUser
-        for path in [".config/ghostty/config", ".config/lightty/config"] {
+        for path in [".config/ghostty/config"] {
             guard let text = try? String(contentsOf: home.appendingPathComponent(path), encoding: .utf8)
             else { continue }
             for rawLine in text.split(separator: "\n") {

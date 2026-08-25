@@ -16,6 +16,12 @@ for key in ["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
     unsetenv(key)
 }
 
+if CommandLine.arguments.contains("--print-effective-terminal-config") {
+    GhosttyRuntime.shared = GhosttyRuntime()
+    print(GhosttyRuntime.shared.terminalConfigProbe)
+    exit(EXIT_SUCCESS)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
