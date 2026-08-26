@@ -27,6 +27,39 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private var sidebarButtonHovered = false
     private var sidebarHovered = false
     private var sidebarHoverDismissWorkItem: DispatchWorkItem?
+    private var sidebarLayoutAnimationTimer: Timer?
+
+    /// 逐帧驱动约束 + 逐帧 layout：terminal surface 每帧按当前宽度真实 resize/重排
+    /// （与拖动分屏线同一路径）。隐式动画只会"滑过去后一次性重排"，观感是跳变。
+    private func animateSidebarLayout(
+        _ targets: [(NSLayoutConstraint, CGFloat)],
+        duration: TimeInterval = ShellStyle.animationDuration,
+        completion: (() -> Void)? = nil
+    ) {
+        sidebarLayoutAnimationTimer?.invalidate()
+        guard let themeFrame = window?.contentView?.superview else {
+            targets.forEach { $0.0.constant = $0.1 }
+            completion?()
+            return
+        }
+        let starts = targets.map { $0.0.constant }
+        let begin = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self, weak themeFrame] timer in
+            let progress = min(1, (CACurrentMediaTime() - begin) / duration)
+            let eased = 1 - pow(1 - progress, 3) // easeOutCubic
+            for (index, target) in targets.enumerated() {
+                target.0.constant = starts[index] + (target.1 - starts[index]) * CGFloat(eased)
+            }
+            themeFrame?.layoutSubtreeIfNeeded()
+            if progress >= 1 {
+                timer.invalidate()
+                self?.sidebarLayoutAnimationTimer = nil
+                completion?()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        sidebarLayoutAnimationTimer = timer
+    }
 
     private weak var titlebarChrome: NSView?
     private weak var newTabButton: ShellIconButton?
@@ -796,18 +829,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarLeadingConstraint = leading
         sidebarIsAnimating = true
         themeFrame.layoutSubtreeIfNeeded()
-        leading.constant = 0
-        rootLeadingConstraint?.constant = sidebarPresentation == .pinned
-            ? TaskSidebar.width : 0
         updateSidebarButtonState()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = ShellStyle.animationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            // 没有 allowsImplicitAnimation，动画组里的 layout 不会产生过渡帧（瞬跳）
-            context.allowsImplicitAnimation = true
-            themeFrame.layoutSubtreeIfNeeded()
-        } completionHandler: { [weak self, weak sidebar] in
+        var targets: [(NSLayoutConstraint, CGFloat)] = [(leading, 0)]
+        if let rootLeadingConstraint {
+            targets.append((rootLeadingConstraint,
+                            sidebarPresentation == .pinned ? TaskSidebar.width : 0))
+        }
+        animateSidebarLayout(targets) { [weak self, weak sidebar] in
             guard let self else { return }
             self.sidebarIsAnimating = false
             // hover preview 不偷走 terminal 键盘焦点；只有点击钉住才进搜索框。
@@ -843,16 +872,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarIsAnimating = true
         let dismissView = sidebarDismissView
         sidebarView = nil // 先切语义状态，标题栏 context 同步向左归位
-        sidebarLeadingConstraint?.constant = -TaskSidebar.width
-        rootLeadingConstraint?.constant = 0
         updateSidebarButtonState()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = ShellStyle.animationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            context.allowsImplicitAnimation = true
-            themeFrame.layoutSubtreeIfNeeded()
-        } completionHandler: { [weak self] in
+        var targets: [(NSLayoutConstraint, CGFloat)] = []
+        if let sidebarLeadingConstraint {
+            targets.append((sidebarLeadingConstraint, -TaskSidebar.width))
+        }
+        if let rootLeadingConstraint {
+            targets.append((rootLeadingConstraint, 0))
+        }
+        _ = themeFrame // 布局根由 animateSidebarLayout 内部获取
+        animateSidebarLayout(targets) { [weak self] in
             sidebar.removeFromSuperview()
             dismissView?.removeFromSuperview()
             self?.sidebarLeadingConstraint = nil
@@ -867,18 +897,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func setDockedTerminalInset(_ inset: CGFloat, animated: Bool) {
         guard let rootLeadingConstraint,
               rootLeadingConstraint.constant != inset else { return }
-        rootLeadingConstraint.constant = inset
-        guard animated,
-              let themeFrame = window?.contentView?.superview else {
+        guard animated else {
+            rootLeadingConstraint.constant = inset
             rootContainer.layoutSubtreeIfNeeded()
             return
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = ShellStyle.animationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            context.allowsImplicitAnimation = true
-            themeFrame.layoutSubtreeIfNeeded()
-        }
+        animateSidebarLayout([(rootLeadingConstraint, inset)])
     }
 
     func windowWillClose(_ notification: Notification) {
