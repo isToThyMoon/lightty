@@ -3,6 +3,10 @@ import Carbon
 import CoreText
 import GhosttyKit
 
+extension Notification.Name {
+    static let terminalTitleDidChange = Notification.Name("terminalTitleDidChange")
+}
+
 /// 由 libghostty 产生、壳层只负责保活到下一个 surface_new 的启动参数。
 /// 快捷键触发 new_window/new_tab/new_split 时，必须用
 /// `ghostty_surface_inherited_config`，不得在 lightty 里自己猜 cwd/font。
@@ -110,6 +114,7 @@ final class TerminalSurfaceView: NSView {
         updateContentScale()
         updateSurfaceSize()
         updateDisplayAndOcclusion()
+        registerDropTypes()
     }
 
     private func installWindowBridgeIfNeeded() {
@@ -136,6 +141,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     deinit {
+        if passwordInput { DisableSecureEventInput() }
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         NotificationCenter.default.removeObserver(self)
         if let surface { ghostty_surface_free(surface) }
@@ -835,6 +841,322 @@ final class TerminalSurfaceView: NSView {
         case .mayBegin: return 6
         default: return 0
         }
+    }
+    // MARK: - 标题与状态
+
+    private(set) var terminalTitle: String = "" {
+        didSet {
+            guard terminalTitle != oldValue else { return }
+            NotificationCenter.default.post(
+                name: .terminalTitleDidChange,
+                object: self,
+                userInfo: ["title": terminalTitle])
+        }
+    }
+
+    var readonly: Bool = false
+
+    var needsConfirmQuit: Bool {
+        guard let surface else { return false }
+        return ghostty_surface_needs_confirm_quit(surface)
+    }
+
+    var processExited: Bool {
+        guard let surface else { return true }
+        return ghostty_surface_process_exited(surface)
+    }
+
+    func setTitle(_ title: String) {
+        terminalTitle = title
+    }
+
+    // MARK: - 密码安全输入
+
+    var passwordInput: Bool = false {
+        didSet {
+            guard passwordInput != oldValue else { return }
+            if passwordInput {
+                EnableSecureEventInput()
+            } else {
+                DisableSecureEventInput()
+            }
+        }
+    }
+
+    // MARK: - 剪贴板 / 编辑菜单
+
+    @objc func copy(_ sender: Any?) {
+        performBindingAction("copy_to_clipboard")
+    }
+
+    @objc func paste(_ sender: Any?) {
+        performBindingAction("paste_from_clipboard")
+    }
+
+    @objc func pasteAsPlainText(_ sender: Any?) {
+        performBindingAction("paste_from_clipboard")
+    }
+
+    @objc func pasteSelection(_ sender: Any?) {
+        performBindingAction("paste_from_selection")
+    }
+
+    @objc override func selectAll(_ sender: Any?) {
+        performBindingAction("select_all")
+    }
+
+    // MARK: - 搜索菜单入口
+
+    @objc func find(_ sender: Any?) {
+        performBindingAction("start_search")
+    }
+
+    @objc func selectionForFind(_ sender: Any?) {
+        performBindingAction("search_selection")
+    }
+
+    @objc func scrollToSelection(_ sender: Any?) {
+        performBindingAction("scroll_to_selection")
+    }
+
+    @objc func findNext(_ sender: Any?) {
+        performBindingAction("search_next")
+    }
+
+    @objc func findPrevious(_ sender: Any?) {
+        performBindingAction("search_previous")
+    }
+
+    @objc func findHide(_ sender: Any?) {
+        performBindingAction("end_search")
+    }
+
+    // MARK: - Split 菜单入口
+
+    @objc func splitRight(_ sender: Any?) {
+        guard let surface else { return }
+        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
+    }
+
+    @objc func splitLeft(_ sender: Any?) {
+        guard let surface else { return }
+        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_LEFT)
+    }
+
+    @objc func splitDown(_ sender: Any?) {
+        guard let surface else { return }
+        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_DOWN)
+    }
+
+    @objc func splitUp(_ sender: Any?) {
+        guard let surface else { return }
+        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_UP)
+    }
+
+    // MARK: - 终端功能
+
+    @objc func resetTerminal(_ sender: Any?) {
+        performBindingAction("reset")
+    }
+
+    @objc func toggleTerminalInspector(_ sender: Any?) {
+        performBindingAction("inspector:toggle")
+    }
+
+    @objc func toggleReadonly(_ sender: Any?) {
+        performBindingAction("toggle_readonly")
+    }
+
+    // MARK: - 右键上下文菜单
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard event.type == .rightMouseDown else { return nil }
+        guard let surface else { return nil }
+
+        // 如果终端程序在捕获鼠标，不弹菜单
+        if ghostty_surface_mouse_captured(surface) { return nil }
+
+        let menu = NSMenu()
+        if let text = accessibilitySelectedText(), !text.isEmpty {
+            menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        }
+        menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Split Right", action: #selector(splitRight(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Split Left", action: #selector(splitLeft(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Split Down", action: #selector(splitDown(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Split Up", action: #selector(splitUp(_:)), keyEquivalent: "")
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Reset Terminal", action: #selector(resetTerminal(_:)), keyEquivalent: "")
+        let readonlyItem = menu.addItem(withTitle: "Terminal Read-only", action: #selector(toggleReadonly(_:)), keyEquivalent: "")
+        readonlyItem.state = readonly ? .on : .off
+
+        return menu
+    }
+
+    // MARK: - 文件拖入终端
+
+    static let dropTypes: Set<NSPasteboard.PasteboardType> = [.string, .fileURL]
+
+    func registerDropTypes() {
+        registerForDraggedTypes(Array(Self.dropTypes))
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard let types = sender.draggingPasteboard.types else { return [] }
+        if Set(types).isDisjoint(with: Self.dropTypes) { return [] }
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+        let content = GhosttyRuntime.opinionatedString(from: pb)
+        guard let content else { return false }
+        DispatchQueue.main.async {
+            self.insertText(content, replacementRange: NSRange(location: 0, length: 0))
+        }
+        return true
+    }
+}
+
+// MARK: - NSMenuItemValidation
+
+extension TerminalSurfaceView: NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(copy(_:)):
+            return accessibilitySelectedText().map { !$0.isEmpty } ?? false
+        case #selector(pasteSelection(_:)):
+            let pb = GhosttyRuntime.selectionPasteboard
+            return GhosttyRuntime.opinionatedString(from: pb).map { !$0.isEmpty } ?? false
+        case #selector(findHide(_:)):
+            return false  // TODO: check search state when tracked
+        case #selector(toggleReadonly(_:)):
+            item.state = readonly ? .on : .off
+            return true
+        default:
+            return true
+        }
+    }
+}
+
+// MARK: - NSServicesMenuRequestor
+
+extension TerminalSurfaceView: NSServicesMenuRequestor {
+    override func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?,
+        returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        let receivable: [NSPasteboard.PasteboardType] = [.string, .init("public.utf8-plain-text")]
+        let sendable = receivable
+
+        if (returnType == nil || receivable.contains(returnType!)) &&
+           (sendType == nil || sendable.contains(sendType!)) {
+            if let sendType, sendable.contains(sendType) {
+                if surface == nil || !ghostty_surface_has_selection(surface) {
+                    return super.validRequestor(forSendType: sendType, returnType: returnType)
+                }
+            }
+            return self
+        }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    func writeSelection(
+        to pboard: NSPasteboard,
+        types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        guard let surface else { return false }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return false }
+        defer { ghostty_surface_free_text(surface, &text) }
+        pboard.declareTypes([.string], owner: nil)
+        pboard.setString(String(cString: text.text), forType: .string)
+        return true
+    }
+
+    func readSelection(from pboard: NSPasteboard) -> Bool {
+        guard let str = GhosttyRuntime.opinionatedString(from: pboard) else { return false }
+        let len = str.utf8CString.count
+        if len == 0 { return true }
+        str.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(len - 1))
+        }
+        return true
+    }
+}
+
+// MARK: - Accessibility
+
+extension TerminalSurfaceView {
+    override func isAccessibilityElement() -> Bool { true }
+
+    override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+
+    override func accessibilityHelp() -> String? { "Terminal content area" }
+
+    override func accessibilityValue() -> Any? {
+        guard let surface else { return nil }
+        var text = ghostty_text_s()
+        let topLeft = ghostty_point_s(
+            tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_EXACT,
+            x: 0, y: 0)
+        let bottomRight = ghostty_point_s(
+            tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_EXACT,
+            x: UInt32.max, y: UInt32.max)
+        let sel = ghostty_selection_s(
+            top_left: topLeft, bottom_right: bottomRight, rectangle: false)
+        guard ghostty_surface_read_text(surface, sel, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return String(cString: text.text)
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        selectedRange()
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        guard let surface else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        let str = String(cString: text.text)
+        return str.isEmpty ? nil : str
+    }
+
+    override func accessibilityNumberOfCharacters() -> Int {
+        (accessibilityValue() as? String)?.count ?? 0
+    }
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        let count = accessibilityNumberOfCharacters()
+        return NSRange(location: 0, length: count)
+    }
+
+    override func accessibilityLine(for index: Int) -> Int {
+        guard let content = accessibilityValue() as? String else { return 0 }
+        let substring = String(content.prefix(index))
+        return substring.components(separatedBy: .newlines).count - 1
+    }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard let content = accessibilityValue() as? String,
+              let swiftRange = Range(range, in: content) else { return nil }
+        return String(content[swiftRange])
+    }
+
+    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        guard let surface else { return nil }
+        guard let plainString = accessibilityString(for: range) else { return nil }
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        if let fontRaw = ghostty_surface_quicklook_font(surface) {
+            let font = Unmanaged<CTFont>.fromOpaque(fontRaw)
+            attributes[.font] = font.takeUnretainedValue()
+            font.release()
+        }
+        return NSAttributedString(string: plainString, attributes: attributes)
     }
 }
 

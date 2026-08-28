@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyKit
+import UserNotifications
 
 /// 启动时从 ghostty 配置读出的 terminal host 所需值。
 /// 仅用于 surface、pane chrome、分隔线和透明窗口底座；应用标题栏/任务侧栏有独立
@@ -514,15 +515,215 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_RING_BELL:
-            DispatchQueue.main.async { NSSound.beep() }
+            DispatchQueue.main.async {
+                NSSound.beep()
+                if let view = targetView() {
+                    view.window?.dockTile.badgeLabel = "!"
+                }
+            }
             return true
 
-        // 这些是 Ghostty.app 自己的产品壳，而不是 libghostty terminal 行为。
-        // lightty 尚未承载对应 UI 时明确报告未处理；绝不能把它们偷偷重映射成
-        // lightty 自定义动作或占用原键位。
+        // MARK: - 标题
+
+        case GHOSTTY_ACTION_SET_TITLE:
+            guard let view = targetView() else { return false }
+            guard let title = copiedString(
+                action.action.set_title.title,
+                length: UInt(strlen(action.action.set_title.title))) else { return false }
+            DispatchQueue.main.async { [weak view] in view?.setTitle(title) }
+            return true
+
+        case GHOSTTY_ACTION_SET_TAB_TITLE:
+            guard let (controller, _) = locate() else { return false }
+            let title = copiedString(
+                action.action.set_tab_title.title,
+                length: UInt(strlen(action.action.set_tab_title.title)))
+            DispatchQueue.main.async {
+                controller.window?.title = title ?? "lightty"
+            }
+            return true
+
+        case GHOSTTY_ACTION_PROMPT_TITLE:
+            return false
+
+        case GHOSTTY_ACTION_PWD:
+            return true
+
+        // MARK: - 安全输入
+
+        case GHOSTTY_ACTION_SECURE_INPUT:
+            guard let view = targetView() else { return false }
+            let mode = action.action.secure_input
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                switch mode {
+                case GHOSTTY_SECURE_INPUT_ON: view.passwordInput = true
+                case GHOSTTY_SECURE_INPUT_OFF: view.passwordInput = false
+                case GHOSTTY_SECURE_INPUT_TOGGLE: view.passwordInput = !view.passwordInput
+                default: break
+                }
+            }
+            return true
+
+        // MARK: - 桌面通知
+
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            let notification = action.action.desktop_notification
+            guard let title = copiedString(notification.title, length: UInt(strlen(notification.title))) else {
+                return false
+            }
+            let body = copiedString(notification.body, length: UInt(strlen(notification.body))) ?? ""
+            DispatchQueue.main.async {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil)
+                UNUserNotificationCenter.current().add(request)
+            }
+            return true
+
+        // MARK: - 子进程退出
+
+        case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+            return true
+
+        case GHOSTTY_ACTION_COMMAND_FINISHED:
+            return true
+
+        // MARK: - 进度
+
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            return true
+
+        // MARK: - 配置变更
+
+        case GHOSTTY_ACTION_CONFIG_CHANGE:
+            let surface = targetSurface()
+            DispatchQueue.main.async {
+                if surface == nil {
+                    let runtime = GhosttyRuntime.shared!
+                    runtime.configValues = Self.readConfigValues(runtime.loadedConfig)
+                }
+            }
+            return true
+
+        case GHOSTTY_ACTION_COLOR_CHANGE:
+            return true
+
+        // MARK: - 选区 / 只读
+
+        case GHOSTTY_ACTION_SELECTION_CHANGED:
+            return true
+
+        case GHOSTTY_ACTION_READONLY:
+            guard let view = targetView() else { return false }
+            let mode = action.action.readonly
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                switch mode {
+                case GHOSTTY_READONLY_ON: view.readonly = true
+                case GHOSTTY_READONLY_OFF: view.readonly = false
+                default: break
+                }
+            }
+            return true
+
+        // MARK: - Tab 移动
+
+        case GHOSTTY_ACTION_MOVE_TAB:
+            guard let (controller, _) = locate(), let sourceWindow = controller.window else {
+                return false
+            }
+            let amount = Int(action.action.move_tab.amount)
+            DispatchQueue.main.async {
+                let windows = sourceWindow.tabGroup?.windows ?? [sourceWindow]
+                guard let current = windows.firstIndex(where: { $0 === sourceWindow }),
+                      windows.count > 1, amount != 0 else { return }
+                let destination = (current + amount + windows.count) % windows.count
+                if destination != current {
+                    sourceWindow.tabGroup?.selectedWindow = windows[destination]
+                    sourceWindow.tabGroup?.selectedWindow = sourceWindow
+                }
+            }
+            return true
+
+        // MARK: - 链接 hover
+
+        case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+            guard let view = targetView() else { return false }
+            let overLink = action.action.mouse_over_link
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                if overLink.url != nil {
+                    NSCursor.pointingHand.set()
+                } else {
+                    view.window?.invalidateCursorRects(for: view)
+                }
+            }
+            return true
+
+        // MARK: - 窗口大小重置
+
+        case GHOSTTY_ACTION_RESET_WINDOW_SIZE:
+            return true
+
+        // MARK: - 滚动条
+
+        case GHOSTTY_ACTION_SCROLLBAR:
+            return true
+
+        // MARK: - 按键序列提示
+
+        case GHOSTTY_ACTION_KEY_SEQUENCE:
+            return true
+
+        case GHOSTTY_ACTION_KEY_TABLE:
+            return true
+
+        // MARK: - 背景透明度切换
+
+        case GHOSTTY_ACTION_TOGGLE_BACKGROUND_OPACITY:
+            return true
+
+        // MARK: - 复制标题到剪贴板
+
+        case GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD:
+            guard let view = targetView() else { return false }
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(view.terminalTitle, forType: .string)
+            }
+            return true
+
+        // MARK: - 浮动窗口
+
+        case GHOSTTY_ACTION_FLOAT_WINDOW:
+            return false
+
+        // MARK: - 渲染器健康
+
+        case GHOSTTY_ACTION_RENDERER_HEALTH:
+            return true
+
+        // MARK: - 导出终端 IO
+
+        case GHOSTTY_ACTION_EXPORT_TERMINAL_IO:
+            return false
+
+        // 这些是 Ghostty.app 自己的产品壳功能。
         case GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
-             GHOSTTY_ACTION_INSPECTOR,
-             GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL:
+             GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
+             GHOSTTY_ACTION_CHECK_FOR_UPDATES:
+            return false
+
+        case GHOSTTY_ACTION_INSPECTOR,
+             GHOSTTY_ACTION_RENDER_INSPECTOR:
             return false
 
         default:
@@ -628,7 +829,7 @@ final class GhosttyRuntime {
 
     // MARK: - 剪贴板回调
 
-    private static let selectionPasteboard = NSPasteboard(
+    static let selectionPasteboard = NSPasteboard(
         name: NSPasteboard.Name("com.mitchellh.ghostty.selection"))
 
     private static func pasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
@@ -641,7 +842,7 @@ final class GhosttyRuntime {
 
     /// 对齐 Ghostty `getOpinionatedStringContents`：文件先取绝对路径并做
     /// shell-buffer escape，其他 pasteboard item 取 string，多项用空格连接。
-    private static func opinionatedString(from pasteboard: NSPasteboard) -> String? {
+    static func opinionatedString(from pasteboard: NSPasteboard) -> String? {
         let values = (pasteboard.pasteboardItems ?? []).compactMap { item -> String? in
             if let propertyList = item.propertyList(forType: .fileURL),
                let fileURL = NSURL(
