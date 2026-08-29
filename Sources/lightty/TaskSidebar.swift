@@ -55,6 +55,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let saveButton = ShellTextButton("保存", emphasis: .primary, target: nil, action: nil)
     private var detailURL: URL?
     private var detailTask: TaskFile?
+    private weak var bodyScroll: NSScrollView?
 
     private weak var currentPage: NSView?
     private var hoverTrackingArea: NSTrackingArea?
@@ -77,28 +78,53 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         clipsToBounds = false
         wantsLayer = true
-        layer?.backgroundColor = ShellStyle.sidebarBackground.cgColor
-        appearance = NSAppearance(named: .aqua)
+        // 不 pin Aqua：壳层 palette 是明暗动态色，随系统外观切换。
 
-        let edge = NSView()
-        edge.wantsLayer = true
-        edge.layer?.backgroundColor = ShellStyle.divider.cgColor
-        edge.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(edge)
-        NSLayoutConstraint.activate([
-            edge.trailingAnchor.constraint(equalTo: trailingAnchor),
-            edge.topAnchor.constraint(equalTo: topAnchor),
-            edge.bottomAnchor.constraint(equalTo: bottomAnchor),
-            edge.widthAnchor.constraint(equalToConstant: 1),
-        ])
-
+        // 不画右缘边线：侧栏与标题栏同色拼成一体 chrome，terminal 自身底色
+        // 已提供足够的视觉分界（Notion 式无边框）。
         buildListPage()
         buildDetailPage()
         showList(animated: false)
         reload()
+        applyAppearanceColors()
+
+        // pane 命名/绑定落盘后实时刷新列表（isDirty 编辑态在 reload 内部自保护）。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(tasksDidChange),
+            name: .lighttyTasksDidChange,
+            object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func tasksDidChange() {
+        reload()
+    }
+
+    /// layer.backgroundColor 是 CGColor 快照，外观切换时必须按当前明暗重解析。
+    private func applyAppearanceColors() {
+        let appearance = effectiveAppearance
+        layer?.backgroundColor =
+            ShellStyle.sidebarBackground.shellResolvedCGColor(for: appearance)
+        searchContainer.layer?.backgroundColor =
+            ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
+        searchContainer.layer?.borderColor =
+            ShellStyle.divider.shellResolvedCGColor(for: appearance)
+        bodyScroll?.layer?.backgroundColor =
+            ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
+        bodyScroll?.layer?.borderColor =
+            ShellStyle.divider.shellResolvedCGColor(for: appearance)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearanceColors()
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -225,6 +251,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         tableView.target = self
+        tableView.action = #selector(rowClicked)
         tableView.doubleAction = #selector(jumpOrRestore)
 
         let scroll = NSScrollView()
@@ -386,16 +413,30 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         openDetail()
     }
 
-    /// 双击 / Enter：运行中 → 聚焦对应 pane；休眠 → 恢复流程
+    /// 单击：运行中任务直接聚焦对应 pane（跨 tab 自动切换），侧栏保持展开。
+    /// 休眠任务只选中，恢复留给双击/Enter。
+    @objc private func rowClicked() {
+        guard tableView.clickedRow >= 0, tableView.clickedRow < filtered.count,
+              let running = filtered[tableView.clickedRow].running else { return }
+        running.controller.window?.makeKeyAndOrderFront(nil)
+        running.controller.reveal(pane: running.pane)
+    }
+
+    /// 双击 / Enter：运行中 → 聚焦对应 pane；休眠 → 任务行旁弹恢复气泡
     @objc private func jumpOrRestore() {
         guard let entry = selectedEntry else { return }
         if let running = entry.running {
             running.controller.window?.makeKeyAndOrderFront(nil)
-            running.pane.focusTerminal()
+            running.controller.reveal(pane: running.pane)
             onRequestClose?()
         } else {
-            onRequestClose?()
-            RestoreFlow.begin(fileURL: entry.fileURL, task: entry.task)
+            guard let controller = window?.windowController as? TerminalWindowController
+            else { return }
+            let anchor = tableView.rowView(
+                atRow: tableView.selectedRow, makeIfNecessary: false) ?? self
+            RestoreFlow.begin(
+                fileURL: entry.fileURL, task: entry.task,
+                from: anchor, in: controller)
         }
     }
 
@@ -466,11 +507,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         bodyScroll.drawsBackground = false
         bodyScroll.scrollerStyle = .overlay
         bodyScroll.wantsLayer = true
-        bodyScroll.layer?.backgroundColor = ShellStyle.controlFill.cgColor
+        // 背景/边框色由 applyAppearanceColors 统一按明暗解析
         bodyScroll.layer?.cornerRadius = 10
-        bodyScroll.layer?.borderColor = ShellStyle.divider.cgColor
         bodyScroll.layer?.borderWidth = 0.5
         bodyScroll.clipsToBounds = true
+        self.bodyScroll = bodyScroll
 
         saveButton.target = self
         saveButton.action = #selector(save)
