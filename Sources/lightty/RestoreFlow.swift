@@ -62,7 +62,7 @@ private final class RestorePopoverController: NSViewController {
     override func loadView() {
         let root = NSView()
 
-        let title = NSTextField(labelWithString: "恢复任务：\(task.name)")
+        let title = NSTextField(labelWithString: "任务：\(task.name)")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = ShellStyle.primaryText
 
@@ -77,21 +77,43 @@ private final class RestorePopoverController: NSViewController {
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = ShellStyle.tertiaryText
 
+        var rows: [NSView] = [title, summary, hint]
+        var buttonRows: [NSButton] = []
+
+        // 已打开：每个绑定该任务的运行中 pane 一行，点击直接跳转。
+        let bound = AppState.shared.runningPanes().filter {
+            $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
+        }
+        if !bound.isEmpty {
+            rows.append(Self.sectionLabel("已打开"))
+            for (index, entry) in bound.enumerated() {
+                // 层级序：工作区（容器）› pane（叶子）
+                let workspace = entry.controller.workspaceName(of: entry.pane)
+                let label = workspace.map { "\($0) › \(entry.pane.header.title)" }
+                    ?? entry.pane.header.title
+                let row = RestoreRowButton(
+                    "跳转 · \(label)", target: self, action: #selector(jumpToPane(_:)))
+                row.tag = index
+                jumpTargets = bound
+                rows.append(row)
+                buttonRows.append(row)
+            }
+        }
+
+        rows.append(Self.sectionLabel(bound.isEmpty ? "打开到" : "再开一个"))
         let paneButton = RestoreRowButton(
             "当前 Tab 分屏", target: self, action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
             "新 Tab", target: self, action: #selector(restoreInTab))
         let windowButton = RestoreRowButton(
             "新窗口", target: self, action: #selector(restoreInWindow))
-        // 纵向三条等宽行、无主次之分：hover 提亮，点击即触发。
-        let buttons = NSStackView(views: [paneButton, tabButton, windowButton])
-        buttons.orientation = .vertical
-        buttons.spacing = 4
+        rows.append(contentsOf: [paneButton, tabButton, windowButton])
+        buttonRows.append(contentsOf: [paneButton, tabButton, windowButton])
 
-        let stack = NSStackView(views: [title, summary, hint, buttons])
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         var constraints = [
@@ -100,14 +122,30 @@ private final class RestorePopoverController: NSViewController {
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
             root.widthAnchor.constraint(equalToConstant: 320),
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ]
-        for button in [paneButton, tabButton, windowButton] {
+        for button in buttonRows {
             constraints.append(button.heightAnchor.constraint(equalToConstant: 30))
-            constraints.append(button.widthAnchor.constraint(equalTo: buttons.widthAnchor))
+            constraints.append(button.widthAnchor.constraint(equalTo: stack.widthAnchor))
         }
         NSLayoutConstraint.activate(constraints)
         view = root
+    }
+
+    private var jumpTargets: [(controller: TerminalWindowController, pane: PaneView)] = []
+
+    private static func sectionLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 10, weight: .medium)
+        label.textColor = ShellStyle.tertiaryText
+        return label
+    }
+
+    @objc private func jumpToPane(_ sender: NSButton) {
+        guard jumpTargets.indices.contains(sender.tag) else { return }
+        let target = jumpTargets[sender.tag]
+        target.controller.window?.makeKeyAndOrderFront(nil)
+        target.controller.reveal(pane: target.pane)
+        onDone?()
     }
 
     private func makeBoundPane() -> PaneView {
