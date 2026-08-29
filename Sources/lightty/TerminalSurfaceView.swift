@@ -114,13 +114,29 @@ final class TerminalSurfaceView: NSView {
         updateContentScale()
         updateSurfaceSize()
         updateDisplayAndOcclusion()
+        updateColorScheme()
         registerDropTypes()
+    }
+
+    /// 官方 BaseTerminalController.updateColorSchemeForSurfaceTree 的单 surface 版：
+    /// 系统明暗切换时上报给 core，`theme = light:X,dark:Y` 才会跟随。
+    private func updateColorScheme() {
+        guard let surface else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        ghostty_surface_set_color_scheme(
+            surface,
+            dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColorScheme()
     }
 
     private func installWindowBridgeIfNeeded() {
         if eventMonitor == nil {
             eventMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.keyUp, .leftMouseDown]
+                matching: [.keyUp, .leftMouseDown, .leftMouseUp]
             ) { [weak self] event in
                 self?.handleLocalEvent(event) ?? event
             }
@@ -242,6 +258,11 @@ final class TerminalSurfaceView: NSView {
         updateDisplayAndOcclusion()
     }
 
+    func setPromptClearOnResize(_ clear: Bool) {
+        guard let surface else { return }
+        ghostty_surface_set_prompt_clear_on_resize(surface, clear)
+    }
+
     private func updateDisplayAndOcclusion() {
         guard let surface, let window else { return }
         if let number = window.screen?.deviceDescription[
@@ -249,7 +270,21 @@ final class TerminalSurfaceView: NSView {
         ] as? NSNumber {
             ghostty_surface_set_display_id(surface, number.uint32Value)
         }
-        ghostty_surface_set_occlusion(surface, window.occlusionState.contains(.visible))
+        // 后台 tab（隐藏容器里的 pane）视为被遮挡：渲染线程降级不画帧。
+        ghostty_surface_set_occlusion(
+            surface,
+            window.occlusionState.contains(.visible) && !isHiddenOrHasHiddenAncestor)
+    }
+
+    // tab 切换用 isHidden 翻转容器；AppKit 会向下广播 hide/unhide。
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateDisplayAndOcclusion()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateDisplayAndOcclusion()
     }
 
     // MARK: - 焦点与 AppKit 局部事件
@@ -279,6 +314,10 @@ final class TerminalSurfaceView: NSView {
             return handleLocalKeyUp(event)
         case .leftMouseDown:
             return handleLocalLeftMouseDown(event)
+        case .leftMouseUp:
+            guard suppressNextLeftMouseUp else { return event }
+            suppressNextLeftMouseUp = false
+            return nil
         default:
             return event
         }
