@@ -20,10 +20,9 @@ final class TerminalWindow: NSWindow {
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isReleasedWhenClosed = false
-        // 与 Ghostty TerminalWindow 相同：new_tab 使用 macOS 原生 tab group，
-        // 而不是伪装成 split pane。
-        tabbingMode = .preferred
-        DispatchQueue.main.async { [weak self] in self?.tabbingMode = .automatic }
+        // lightty 的 tab 是窗口内自绘概念（一窗一侧栏 + N 个 pane 树容器）。
+        // 原生 tab group 是多 NSWindow 结组、tab bar 横跨全窗宽，与侧栏语义冲突，禁用。
+        tabbingMode = .disallowed
         // 窗口尺寸由 core 的 INITIAL_SIZE 决定（window-width/height × cell），
         // 系统状态恢复会用上次的旧框架覆盖它，禁用
         isRestorable = false

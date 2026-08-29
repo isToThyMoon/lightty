@@ -1,14 +1,26 @@
 import AppKit
 import LighttyCore
 
-/// 一个原生 tab 对应一个 controller，内部是嵌套 NSSplitView 的 pane 树。
-/// 层级（HANDOVER 8.2）：window（aerospace 管）→ native tab → 分屏布局 → pane。
-/// core new_tab 由 AppState 加进 macOS tab group；new_split 才改这里的 pane tree，
+/// 窗口内的一个 tab：固定容器 + pane 树。tab 是 lightty 概念（切换只换主区域
+/// 内容），不是 macOS 原生 tab（那是多 NSWindow 结组，已弃用）。
+final class TerminalTab {
+    /// 固定 wrapper：挂在 contentHost 里，isHidden 控制显隐；
+    /// split 重组只替换其内部的树，wrapper 本身与约束不动。
+    let container = NSView()
+    /// pane 树根（container 的唯一 subview）：单 pane 或嵌套 NSSplitView。
+    fileprivate(set) var rootView: NSView?
+    /// tab 标签标题（取该 tab 内最近活跃 pane 的任务名）。
+    var title = "未命名"
+
+    init() {
+        container.translatesAutoresizingMaskIntoConstraints = false
+    }
+}
+
+/// 层级：window（1 侧边栏 + 1 tab 条）→ tab（pane 树容器）→ split 布局 → pane。
+/// core new_tab 在当前窗口追加 tab；new_split 改当前 tab 的 pane tree，
 /// 并继承当前任务；方向一致插相邻位、方向不同原位包反向 split。
 final class TerminalWindowController: NSWindowController, NSWindowDelegate {
-    /// core `new_tab` 创建的 controller 不应用 INITIAL_SIZE；tab group 沿用父窗口 frame。
-    let isNativeTab: Bool
-
     private enum SidebarPresentation {
         case hidden
         case preview
@@ -16,7 +28,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private let rootContainer = NSView()
-    /// pinned 侧栏是 docked layout：root pane 从侧栏右缘开始；preview 保持 overlay。
+    /// 主体区（tab 条 + tab 内容），随侧栏钉住向右推移。
+    private let mainArea = NSView()
+    private let tabStrip = TabStripView()
+    private let contentHost = NSView()
+    private var tabStripHeightConstraint: NSLayoutConstraint?
+    private var tabs: [TerminalTab] = []
+    private var activeTabIndex = 0
+    private var activeTab: TerminalTab? {
+        tabs.indices.contains(activeTabIndex) ? tabs[activeTabIndex] : nil
+    }
+    var tabCount: Int { tabs.count }
+    /// pinned 侧栏是 docked layout：主体区从侧栏右缘开始；preview 保持 overlay。
     private var rootLeadingConstraint: NSLayoutConstraint?
     private var sidebarView: TaskSidebar?
     private weak var sidebarButton: ShellIconButton?
@@ -31,6 +54,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// 逐帧驱动约束 + 逐帧 layout：terminal surface 每帧按当前宽度真实 resize/重排
     /// （与拖动分屏线同一路径）。隐式动画只会"滑过去后一次性重排"，观感是跳变。
+    /// ghostty 每次 resize 会 clearPromptForRedraw（清空活跃行等 shell SIGWINCH
+    /// 重绘），通过 ghostty_surface_set_prompt_clear_on_resize 在动画期间关闭
+    /// prompt 清空，prompt 随宽度自然 reflow 不再闪烁。
     private func animateSidebarLayout(
         _ targets: [(NSLayoutConstraint, CGFloat)],
         duration: TimeInterval = ShellStyle.animationDuration,
@@ -42,6 +68,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             completion?()
             return
         }
+        let terminals = panes().map(\.terminal)
+        terminals.forEach { $0.setPromptClearOnResize(false) }
         let starts = targets.map { $0.0.constant }
         let begin = CACurrentMediaTime()
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self, weak themeFrame] timer in
@@ -54,6 +82,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             if progress >= 1 {
                 timer.invalidate()
                 self?.sidebarLayoutAnimationTimer = nil
+                terminals.forEach { $0.setPromptClearOnResize(true) }
                 completion?()
             }
         }
@@ -67,8 +96,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private weak var lastFocusedPane: PaneView?
     private weak var zoomedPane: PaneView?
 
-    init(initialPane: PaneView = PaneView(), isNativeTab: Bool = false) {
-        self.isNativeTab = isNativeTab
+    init(initialPane: PaneView = PaneView()) {
         let window = TerminalWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640))
         super.init(window: window)
         window.delegate = self
@@ -76,10 +104,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         rootContainer.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = rootContainer
+        installMainArea()
         installTitlebarBackdrop(on: window)
         install(pane: initialPane)
         lastFocusedPane = initialPane
-        setRoot(initialPane)
+        addTab(initialPane: initialPane, select: true, installPane: false)
         installTitlebarAccessory(on: window)
         updateWindowTitle(for: initialPane)
         // AppKit 会在 makeKeyAndOrderFront 前后替换一次私有标题栏树；下一轮布局后
@@ -96,9 +125,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func installTitlebarBackdrop(on window: NSWindow) {
         guard let contentView = window.contentView,
               let themeFrame = contentView.superview else { return }
-        let wash = NSView()
-        wash.wantsLayer = true
-        wash.layer?.backgroundColor = ShellStyle.titlebarBackground.cgColor
+        let wash = ShellBackdropView(fill: ShellStyle.titlebarBackground)
         wash.translatesAutoresizingMaskIntoConstraints = false
         // 原生 tab bar 会在首次 new_tab 时动态插入 titlebar container。wash 必须
         // 永远位于整个 container 下方；若只相对 contentView 排序，新 tab 首帧会被
@@ -113,20 +140,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             themeFrame.addSubview(wash, positioned: .below, relativeTo: contentView)
         }
 
-        let divider = NSView()
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = ShellStyle.divider.cgColor
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        wash.addSubview(divider)
+        // 不画底部分隔线：与侧栏边线同理，标题栏与内容区靠底色自然分界。
         NSLayoutConstraint.activate([
             wash.topAnchor.constraint(equalTo: themeFrame.topAnchor),
             wash.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
             wash.trailingAnchor.constraint(equalTo: themeFrame.trailingAnchor),
             wash.bottomAnchor.constraint(equalTo: contentView.topAnchor),
-            divider.leadingAnchor.constraint(equalTo: wash.leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: wash.trailingAnchor),
-            divider.bottomAnchor.constraint(equalTo: wash.bottomAnchor),
-            divider.heightAnchor.constraint(equalToConstant: 1),
         ])
     }
 
@@ -145,8 +164,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         // 穿透容器：chrome 铺满标题栏，但空白处点击必须落到下层的红黄绿三键
         let chrome = ShellPassthroughView()
-        // Aqua 只属于 lightty 的标题栏控件，不设置到承载 terminal surface 的窗口。
-        chrome.appearance = NSAppearance(named: .aqua)
+        // 不 pin 外观：壳层 palette 已是明暗动态色，随系统切换。
         chrome.translatesAutoresizingMaskIntoConstraints = false
         titlebar.addSubview(chrome)
 
@@ -201,29 +219,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateWindowTitle(for pane: PaneView?) {
         guard let pane, let window else { return }
-        let title = pane.header.title
-        window.tab.title = title
-        if (window.tabGroup?.windows.count ?? 1) > 1 {
-            // 标准 tab bar 需要 visible title mode 才能在每个选中 window 上稳定绘制；
-            // 实际系统标题留空，任务名只进入 tab label 与 pane header，不在顶栏重复。
-            window.titleVisibility = .visible
-            window.title = ""
-        } else {
-            window.titleVisibility = .hidden
-            window.title = title
-        }
+        if let hostTab = tab(hosting: pane) { hostTab.title = pane.header.title }
+        refreshTabStrip()
+        // 系统标题不显示（任务名在 pane header / tab 条）；window.title 只喂给
+        // cmd-tab、Mission Control 等系统 UI。
+        window.titleVisibility = .hidden
+        window.title = activeTab?.title ?? pane.header.title
     }
 
     private func updateSidebarButtonState() {
         sidebarButton?.isActive = sidebarPresentation == .pinned
     }
 
-    /// 两个以上原生 tab 时，系统 tab bar 已自带「+」；收起自绘入口避免重复。
-    /// 回到单 tab、系统 tab bar 自动隐藏后，再恢复标题栏入口。
+    /// tab 条自带「+」（多 tab 时显示）；标题栏「+」保留为单 tab 时的入口。
     private func updateNewTabButtonVisibility() {
-        let nativeTabBarOwnsNewTab = window?.tabGroup?.isTabBarVisible ?? false
-        newTabButton?.isHidden = nativeTabBarOwnsNewTab
-        newTabButtonWidthConstraint?.constant = nativeTabBarOwnsNewTab ? 0 : 28
+        let stripOwnsNewTab = tabs.count > 1
+        newTabButton?.isHidden = stripOwnsNewTab
+        newTabButtonWidthConstraint?.constant = stripOwnsNewTab ? 0 : 28
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -260,31 +272,211 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         activePane?.terminal.performBindingAction("new_split:right")
     }
 
-    /// 原生 tab bar 的「+」也必须先回到 libghostty；不能绕过 core 直接造窗口。
-    override func newWindowForTab(_ sender: Any?) {
-        activePane?.terminal.performBindingAction("new_tab")
+    required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: - 主体区（tab 条 + tab 内容）
+
+    /// rootContainer → mainArea（leading 随侧栏钉住推移）→ [tabStrip, contentHost]。
+    /// tab 切换只翻转各 tab container 的 isHidden，视图不出层级、surface 不重建。
+    private func installMainArea() {
+        mainArea.translatesAutoresizingMaskIntoConstraints = false
+        tabStrip.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.translatesAutoresizingMaskIntoConstraints = false
+        rootContainer.addSubview(mainArea)
+        mainArea.addSubview(tabStrip)
+        mainArea.addSubview(contentHost)
+
+        let leading = mainArea.leadingAnchor.constraint(
+            equalTo: rootContainer.leadingAnchor)
+        rootLeadingConstraint = leading
+        let stripHeight = tabStrip.heightAnchor.constraint(equalToConstant: 0)
+        tabStripHeightConstraint = stripHeight
+        NSLayoutConstraint.activate([
+            leading,
+            mainArea.topAnchor.constraint(equalTo: rootContainer.topAnchor),
+            mainArea.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
+            mainArea.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
+
+            tabStrip.topAnchor.constraint(equalTo: mainArea.topAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor),
+            stripHeight,
+
+            contentHost.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
+            contentHost.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor),
+            contentHost.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor),
+            contentHost.bottomAnchor.constraint(equalTo: mainArea.bottomAnchor),
+        ])
+
+        tabStrip.onSelect = { [weak self] index in self?.selectTab(at: index) }
+        tabStrip.onClose = { [weak self] index in self?.closeTab(at: index) }
+        tabStrip.onNewTab = { [weak self] in
+            self?.activePane?.terminal.performBindingAction("new_tab")
+        }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // MARK: - tab 管理
+
+    /// core `new_tab`：当前窗口追加一个 tab（新的 pane 树容器）。
+    func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
+        if installPane { install(pane: initialPane) }
+        let tab = TerminalTab()
+        tab.title = initialPane.header.title
+        contentHost.addSubview(tab.container)
+        NSLayoutConstraint.activate([
+            tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            tab.container.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+            tab.container.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            tab.container.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+        ])
+        tabs.append(tab)
+        setRoot(initialPane, in: tab)
+        if select {
+            selectTab(at: tabs.count - 1)
+        } else {
+            tab.container.isHidden = tabs.count > 1
+            refreshTabStrip()
+        }
+    }
+
+    func selectTab(at index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        activeTabIndex = index
+        for (i, tab) in tabs.enumerated() {
+            tab.container.isHidden = i != index
+        }
+        refreshTabStrip()
+        let pane = activePane
+        if let pane {
+            lastFocusedPane = pane
+            pane.focusTerminal()
+            updateWindowTitle(for: pane)
+        }
+    }
+
+    /// 关一个 tab：释放其全部 pane（surface 随引用释放）。最后一个 tab 关窗口。
+    func closeTab(at index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        guard tabs.count > 1 else {
+            window?.close()
+            return
+        }
+        let tab = tabs.remove(at: index)
+        tab.container.removeFromSuperview()
+        if activeTabIndex >= tabs.count {
+            activeTabIndex = tabs.count - 1
+        } else if index < activeTabIndex {
+            activeTabIndex -= 1
+        }
+        selectTab(at: activeTabIndex)
+    }
+
+    enum CloseTabMode { case this, other, right }
+
+    /// core close_tab：this/other/right 三种范围。
+    func closeTabs(mode: CloseTabMode) {
+        switch mode {
+        case .this:
+            closeTab(at: activeTabIndex)
+        case .other:
+            for i in tabs.indices.reversed() where i != activeTabIndex {
+                closeTab(at: i)
+            }
+        case .right:
+            for i in tabs.indices.reversed() where i > activeTabIndex {
+                closeTab(at: i)
+            }
+        }
+    }
+
+    /// core goto_tab：previous/next/last/1-based 序号。
+    enum GotoTab { case previous, next, last, index(Int) }
+
+    func gotoTab(_ target: GotoTab) {
+        guard tabs.count > 1 else { return }
+        let destination: Int
+        switch target {
+        case .previous:
+            destination = activeTabIndex == 0 ? tabs.count - 1 : activeTabIndex - 1
+        case .next:
+            destination = activeTabIndex == tabs.count - 1 ? 0 : activeTabIndex + 1
+        case .last:
+            destination = tabs.count - 1
+        case .index(let number): // 1-based；超界落到最后一个
+            destination = min(max(0, number - 1), tabs.count - 1)
+        }
+        selectTab(at: destination)
+    }
+
+    /// core move_tab：活跃 tab 在条内移位（环绕）。
+    func moveActiveTab(by amount: Int) {
+        guard tabs.count > 1, amount != 0 else { return }
+        let destination = (activeTabIndex + amount % tabs.count + tabs.count) % tabs.count
+        let tab = tabs.remove(at: activeTabIndex)
+        tabs.insert(tab, at: destination)
+        activeTabIndex = destination
+        refreshTabStrip()
+    }
+
+    /// core set_tab_title（OSC 等）：覆盖活跃 tab 标题。
+    func setActiveTabTitle(_ title: String) {
+        activeTab?.title = title
+        refreshTabStrip()
+        window?.title = title
+    }
+
+    private func refreshTabStrip() {
+        let visible = tabs.count > 1
+        tabStripHeightConstraint?.constant = visible ? TabStripView.height : 0
+        tabStrip.isHidden = !visible
+        if visible {
+            tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
+        }
+        updateNewTabButtonVisibility()
+    }
+
+    /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
+    /// 再交还终端焦点。侧边栏任务行点击跳转用。
+    func reveal(pane: PaneView) {
+        if let hostTab = tab(hosting: pane),
+           let index = tabs.firstIndex(where: { $0 === hostTab }),
+           index != activeTabIndex {
+            selectTab(at: index)
+        }
+        pane.focusTerminal()
+    }
+
+    /// 拖拽移走 pane 后清理空 tab；tab 清空即关（最后一个 tab 关窗口）。
+    func pruneEmptyTabs() {
+        for (i, tab) in tabs.enumerated().reversed() where panes(in: tab).isEmpty {
+            closeTab(at: i)
+        }
+    }
 
     // MARK: - pane 树
 
-    private var rootView: NSView? { rootContainer.subviews.first }
+    private var rootView: NSView? { activeTab?.rootView }
 
-    private func setRoot(_ view: NSView) {
-        rootContainer.subviews.forEach { $0.removeFromSuperview() }
+    private func tab(hosting view: NSView) -> TerminalTab? {
+        var v: NSView? = view
+        while let cur = v {
+            if let tab = tabs.first(where: { $0.container === cur }) { return tab }
+            v = cur.superview
+        }
+        return nil
+    }
+
+    private func setRoot(_ view: NSView, in tab: TerminalTab) {
+        tab.container.subviews.forEach { $0.removeFromSuperview() }
         view.translatesAutoresizingMaskIntoConstraints = false
-        rootContainer.addSubview(view)
-        let leading = view.leadingAnchor.constraint(
-            equalTo: rootContainer.leadingAnchor,
-            constant: sidebarPresentation == .pinned ? TaskSidebar.width : 0)
-        rootLeadingConstraint = leading
+        tab.container.addSubview(view)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: rootContainer.topAnchor),
-            view.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
-            leading,
-            view.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
+            view.topAnchor.constraint(equalTo: tab.container.topAnchor),
+            view.bottomAnchor.constraint(equalTo: tab.container.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: tab.container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: tab.container.trailingAnchor),
         ])
+        tab.rootView = view
     }
 
     private func install(pane: PaneView) {
@@ -309,21 +501,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func walkPanes(_ view: NSView, into result: inout [PaneView]) {
+        if let pane = view as? PaneView {
+            result.append(pane)
+        } else if let split = view as? NSSplitView {
+            split.arrangedSubviews.forEach { walkPanes($0, into: &result) }
+        }
+    }
+
+    /// 窗口内全部 pane（跨所有 tab）：任务管理、跨窗口拖拽等全局操作用。
     func panes() -> [PaneView] {
         var result: [PaneView] = []
-        func walk(_ view: NSView) {
-            if let pane = view as? PaneView {
-                result.append(pane)
-            } else if let split = view as? NSSplitView {
-                split.arrangedSubviews.forEach(walk)
-            }
+        for tab in tabs {
+            if let root = tab.rootView { walkPanes(root, into: &result) }
         }
-        if let rootView { walk(rootView) }
         return result
     }
 
+    /// 单个 tab 内的 pane：分屏导航/关闭等 tab 局部操作用。
+    private func panes(in tab: TerminalTab) -> [PaneView] {
+        var result: [PaneView] = []
+        if let root = tab.rootView { walkPanes(root, into: &result) }
+        return result
+    }
+
+    private var activeTabPanes: [PaneView] {
+        activeTab.map { panes(in: $0) } ?? []
+    }
+
     var activePane: PaneView? {
-        // 从 firstResponder 向上找 PaneView；找不到取第一个
+        // 从 firstResponder 向上找 PaneView；找不到取活跃 tab 的第一个
         var responder: NSResponder? = window?.firstResponder
         while let r = responder {
             if let view = r as? NSView {
@@ -336,10 +543,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             }
             responder = r.nextResponder
         }
-        if let lastFocusedPane, panes().contains(where: { $0 === lastFocusedPane }) {
+        let inActiveTab = activeTabPanes
+        if let lastFocusedPane, inActiveTab.contains(where: { $0 === lastFocusedPane }) {
             return lastFocusedPane
         }
-        return panes().first
+        return inActiveTab.first
     }
 
     /// new_split 动作方向（对应 ghostty_action_split_direction_e）
@@ -351,7 +559,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         var insertsAfter: Bool { self == .right || self == .down }
     }
 
-    /// new_split：分屏，新 pane 继承目标 pane 的任务（辅助 shell）。
+    /// new_split：分屏。新 pane 一律未命名（不继承目标 pane 的任务——任务与
+    /// pane 一一对应，命名那一刻才落盘）。cwd/font 仍走 core 的 inherited config。
     /// Ghostty 行为：新 pane 与目标 pane 对半分，其余 pane 尺寸不动。
     func split(
         _ active: PaneView,
@@ -361,12 +570,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         restoreSplitZoomIfNeeded()
         let pane = PaneView(surfaceConfiguration: surfaceConfiguration)
         install(pane: pane)
-        if let url = active.taskFileURL {
-            pane.bind(to: url, name: active.header.title, status: .active)
-            pane.header.dot = active.header.dot // 继承任务连同状态点，不重置
-        }
         insert(pane, nextTo: active, direction: direction)
         pane.focusTerminal()
+    }
+
+    /// 恢复流程「当前 tab 新 pane」：把外部构造好的 pane（已绑定任务）
+    /// 插到活跃 pane 右侧；空 tab 时直接作树根。
+    func addPaneToActiveTab(_ pane: PaneView) {
+        restoreSplitZoomIfNeeded()
+        install(pane: pane)
+        if let active = activePane {
+            insert(pane, nextTo: active, direction: .right)
+        } else if let tab = activeTab {
+            setRoot(pane, in: tab)
+        }
+        lastFocusedPane = pane
+        pane.focusTerminal()
+        updateWindowTitle(for: pane)
     }
 
     /// 对齐 Ghostty `splitDidDrop`：先从原树移除 source，再按目标四边插入；
@@ -402,12 +622,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         source.focusTerminal()
         updateWindowTitle(for: source)
 
+        pruneEmptyTabs()
         if sourceController !== self {
+            sourceController.pruneEmptyTabs()
             sourceController.lastFocusedPane = sourceController.panes().first
             if let remaining = sourceController.activePane {
                 sourceController.updateWindowTitle(for: remaining)
-            } else {
-                sourceController.window?.close()
             }
         }
         return true
@@ -416,6 +636,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 把一个已存在的 pane 插到目标旁边。new_split 与 drag/drop 共用同一棵
     /// NSSplitView tree 变换，避免出现两套布局语义。
     private func insert(_ pane: PaneView, nextTo active: PaneView, direction: SplitDirection) {
+        guard let hostTab = tab(hosting: active) else { return }
         pane.translatesAutoresizingMaskIntoConstraints = false
         let vertical = direction.isVertical
         rootContainer.layoutSubtreeIfNeeded()
@@ -444,38 +665,39 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             } else {
                 active.removeFromSuperview()
                 pair.forEach { split.addArrangedSubview($0) }
-                setRoot(split)
+                setRoot(split, in: hostTab)
             }
             equalize(split)
         }
     }
 
     /// 从 split tree 摘下 pane 并递归压平单子节点；不会关闭 surface。
+    /// 摘空的 tab 交由调用方 pruneEmptyTabs 收尾。
     @discardableResult
     private func detach(pane: PaneView) -> Bool {
-        guard panes().contains(where: { $0 === pane }) else { return false }
-        if rootView === pane {
+        guard let hostTab = tab(hosting: pane) else { return false }
+        if hostTab.rootView === pane {
             pane.removeFromSuperview()
-            rootLeadingConstraint = nil
+            hostTab.rootView = nil
             return true
         }
         guard let parent = pane.superview as? NSSplitView else { return false }
         parent.removeArrangedSubview(pane)
         pane.removeFromSuperview()
-        collapseAfterRemoval(parent)
+        collapseAfterRemoval(parent, in: hostTab)
         return true
     }
 
-    private func collapseAfterRemoval(_ split: NSSplitView) {
+    private func collapseAfterRemoval(_ split: NSSplitView, in hostTab: TerminalTab) {
         switch split.arrangedSubviews.count {
         case 0:
             if let grand = split.superview as? NSSplitView {
                 grand.removeArrangedSubview(split)
                 split.removeFromSuperview()
-                collapseAfterRemoval(grand)
+                collapseAfterRemoval(grand, in: hostTab)
             } else {
                 split.removeFromSuperview()
-                rootLeadingConstraint = nil
+                if hostTab.rootView === split { hostTab.rootView = nil }
             }
         case 1:
             let remaining = split.arrangedSubviews[0]
@@ -491,7 +713,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 grand.insertArrangedSubview(remaining, at: index)
                 setSizes(outerSizes, in: grand)
             } else {
-                setRoot(remaining)
+                setRoot(remaining, in: hostTab)
             }
         default:
             break
@@ -512,7 +734,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 不移动 TerminalSurfaceView，因此 IOSurface layer 和 PTY 生命周期不变。
     @discardableResult
     func toggleSplitZoom(_ pane: PaneView) -> Bool {
-        guard panes().count > 1, let rootView else { return false }
+        guard activeTabPanes.count > 1, let rootView else { return false }
         if zoomedPane != nil {
             restoreSplitZoomIfNeeded()
             pane.focusTerminal()
@@ -631,12 +853,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         return split
     }
 
-    /// core close_surface / shell 退出
+    /// core close_surface / shell 退出：tab 内最后一个 pane 关 tab（最后一个 tab
+    /// 关窗口）；否则从 split tree 摘除并解包。
     func close(pane: PaneView) {
+        guard let hostTab = tab(hosting: pane) else { return }
         restoreSplitZoomIfNeeded()
-        let all = panes()
-        guard all.count > 1 else {
-            window?.close()
+        guard panes(in: hostTab).count > 1 else {
+            if let index = tabs.firstIndex(where: { $0 === hostTab }) {
+                closeTab(at: index)
+            }
             return
         }
         guard let parent = pane.superview as? NSSplitView else { return }
@@ -651,27 +876,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 grand.insertArrangedSubview(remaining, at: index)
             } else {
                 remaining.removeFromSuperview()
-                setRoot(remaining)
+                setRoot(remaining, in: hostTab)
             }
         }
-        panes().first?.focusTerminal()
+        panes(in: hostTab).first?.focusTerminal()
     }
 
     // MARK: - pane 导航
 
-    /// core goto_split previous/next：树序前后切换
+    /// core goto_split previous/next：活跃 tab 内树序前后切换
     func focusPane(offset: Int) {
-        let all = panes()
+        let all = activeTabPanes
         guard all.count > 1, let active = activePane,
               let index = all.firstIndex(of: active) else { return }
         let next = all[(index + offset + all.count) % all.count]
         next.focusTerminal()
     }
 
-    /// core goto_split direction：几何最近邻
+    /// core goto_split direction：活跃 tab 内几何最近邻
     func focusPane(direction: NSDirectionalRectEdge) {
         guard let active = activePane, let rootView else { return }
-        let all = panes().filter { $0 !== active }
+        let all = activeTabPanes.filter { $0 !== active }
         guard !all.isEmpty else { return }
         let from = active.convert(active.bounds.center, to: rootView)
 
@@ -714,9 +939,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             cancelSidebarHoverDismiss()
             sidebarDismissView?.removeFromSuperview()
             sidebarDismissView = nil
+            sidebarIsAnimating = false
             updateSidebarButtonState()
-            setDockedTerminalInset(TaskSidebar.width, animated: true)
-            if !sidebarIsAnimating { sidebarView?.focusSearch() }
+            // hover 的滑入动画可能仍在途中；这里的新动画会顶掉它的 timer，
+            // 所以 sidebar leading 必须一并作为目标推到 0，否则冻结在中途值（缝隙）。
+            var targets: [(NSLayoutConstraint, CGFloat)] = []
+            if let sidebarLeadingConstraint, sidebarLeadingConstraint.constant != 0 {
+                targets.append((sidebarLeadingConstraint, 0))
+            }
+            if let rootLeadingConstraint, rootLeadingConstraint.constant != TaskSidebar.width {
+                targets.append((rootLeadingConstraint, TaskSidebar.width))
+            }
+            if !targets.isEmpty { animateSidebarLayout(targets) }
+            sidebarView?.focusSearch()
         case .pinned:
             requestSidebarClose()
         }
@@ -769,7 +1004,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private func showSidebar(in window: NSWindow, withOutsideDismiss: Bool) {
         guard !sidebarIsAnimating, sidebarView == nil,
-              let contentView = window.contentView else { return }
+              let contentView = window.contentView else {
+            // 被拒绝（如关闭动画进行中）时回滚语义状态，避免 presentation
+            // 与实际视图失同步导致下一次点击被吞。
+            if sidebarView == nil { sidebarPresentation = .hidden }
+            updateSidebarButtonState()
+            return
+        }
         guard let themeFrame = contentView.superview else { return }
         // 顶到窗口最上缘、垫在标题栏容器之下（三键与侧边栏按钮浮于其上可点）。
         // 不靠私有类名匹配：从关闭按钮向上溯源到 themeFrame 的直接子视图才可靠。
@@ -881,7 +1122,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if let rootLeadingConstraint {
             targets.append((rootLeadingConstraint, 0))
         }
-        _ = themeFrame // 布局根由 animateSidebarLayout 内部获取
+        _ = themeFrame
         animateSidebarLayout(targets) { [weak self] in
             sidebar.removeFromSuperview()
             dismissView?.removeFromSuperview()

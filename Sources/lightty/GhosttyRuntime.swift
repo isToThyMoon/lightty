@@ -27,6 +27,7 @@ final class GhosttyRuntime {
     /// libghostty 会在 app/surface update 时 clone，但 runtime 仍需要拥有自己这份。
     private var loadedConfig: ghostty_config_t
     private var notificationObservers: [NSObjectProtocol] = []
+    private var appearanceObservation: NSKeyValueObservation?
 
     init() {
         // GhosttyKit 静态库不携带 themes/terminfo 等资源。必须在 ghostty_init 读取并
@@ -114,6 +115,19 @@ final class GhosttyRuntime {
                 ghostty_app_set_focus(self.app, false)
             },
         ]
+
+        // 系统明暗外观桥（对齐官方 AppDelegate.appearanceObserver）：libghostty
+        // 不自行感知系统外观，必须由壳层上报，config 的
+        // `theme = light:X,dark:Y` 才会随系统切换。Config probe 模式 NSApp 为 nil。
+        appearanceObservation = NSApp?.observe(
+            \.effectiveAppearance, options: [.new, .initial]
+        ) { [weak self] _, change in
+            guard let self, let appearance = change.newValue else { return }
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ghostty_app_set_color_scheme(
+                self.app,
+                dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
+        }
     }
 
     deinit {
@@ -248,34 +262,17 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_GOTO_TAB:
-            guard let (controller, _) = locate(), let sourceWindow = controller.window else {
-                return false
-            }
+            guard let (controller, _) = locate() else { return false }
             let requested = action.action.goto_tab
             DispatchQueue.main.async {
-                let windows = sourceWindow.tabGroup?.windows ?? [sourceWindow]
-                guard windows.count > 1 else { return }
-                let selected = sourceWindow.tabGroup?.selectedWindow ?? sourceWindow
-                guard let current = windows.firstIndex(where: { $0 === selected }) else { return }
-
-                let destination: Int
+                let target: TerminalWindowController.GotoTab
                 switch requested {
-                case GHOSTTY_GOTO_TAB_PREVIOUS:
-                    destination = current == 0 ? windows.count - 1 : current - 1
-                case GHOSTTY_GOTO_TAB_NEXT:
-                    destination = current == windows.count - 1 ? 0 : current + 1
-                case GHOSTTY_GOTO_TAB_LAST:
-                    destination = windows.count - 1
-                default:
-                    // Ghostty 数字 tab 为 1-based；超出范围时落到最后一个。
-                    destination = min(max(0, Int(requested.rawValue) - 1), windows.count - 1)
+                case GHOSTTY_GOTO_TAB_PREVIOUS: target = .previous
+                case GHOSTTY_GOTO_TAB_NEXT: target = .next
+                case GHOSTTY_GOTO_TAB_LAST: target = .last
+                default: target = .index(Int(requested.rawValue)) // 1-based
                 }
-                let targetWindow = windows[destination]
-                sourceWindow.tabGroup?.selectedWindow = targetWindow
-                (sourceWindow.tabGroup?.windows.first ?? sourceWindow)
-                    .makeKeyAndOrderFront(nil)
-                (targetWindow.windowController as? TerminalWindowController)?
-                    .activePane?.focusTerminal()
+                controller.gotoTab(target)
             }
             return true
 
@@ -360,9 +357,8 @@ final class GhosttyRuntime {
                           locate() != nil ? "yes" : "no")
                 }
                 guard let (controller, _) = locate(), let window = controller.window,
-                      !controller.isNativeTab,
                       controller.panes().count == 1,
-                      (window.tabGroup?.windows.count ?? 1) == 1 else { return }
+                      controller.tabCount == 1 else { return }
                 window.setContentSize(NSSize(
                     width: CGFloat(size.width),
                     height: CGFloat(size.height) + PaneHeaderView.height))
@@ -483,25 +479,19 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_CLOSE_TAB:
-            guard let (controller, _) = locate(), let sourceWindow = controller.window else {
-                return false
-            }
+            guard let (controller, _) = locate() else { return false }
             let mode = action.action.close_tab_mode
             DispatchQueue.main.async {
-                let windows = sourceWindow.tabGroup?.windows ?? [sourceWindow]
-                guard let index = windows.firstIndex(where: { $0 === sourceWindow }) else { return }
-                let targets: [NSWindow]
                 switch mode {
                 case GHOSTTY_ACTION_CLOSE_TAB_MODE_THIS:
-                    targets = [sourceWindow]
+                    controller.closeTabs(mode: .this)
                 case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
-                    targets = windows.filter { $0 !== sourceWindow }.reversed()
+                    controller.closeTabs(mode: .other)
                 case GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
-                    targets = Array(windows.suffix(from: index + 1).reversed())
+                    controller.closeTabs(mode: .right)
                 default:
-                    return
+                    break
                 }
-                targets.forEach { $0.close() }
             }
             return true
 
@@ -539,7 +529,7 @@ final class GhosttyRuntime {
                 action.action.set_tab_title.title,
                 length: UInt(strlen(action.action.set_tab_title.title)))
             DispatchQueue.main.async {
-                controller.window?.title = title ?? "lightty"
+                controller.setActiveTabTitle(title ?? "lightty")
             }
             return true
 
@@ -602,16 +592,45 @@ final class GhosttyRuntime {
         // MARK: - 配置变更
 
         case GHOSTTY_ACTION_CONFIG_CHANGE:
-            let surface = targetSurface()
-            DispatchQueue.main.async {
-                if surface == nil {
-                    let runtime = GhosttyRuntime.shared!
-                    runtime.configValues = Self.readConfigValues(runtime.loadedConfig)
+            // core 在条件主题（系统明暗）解析后发来新 config：app 级替换全局缓存，
+            // surface 级驱动 pane header 重新着色。config 指针只在回调内有效，
+            // 必须同步读值，不能带进 async。
+            let values = Self.readConfigValues(action.action.config_change.config)
+            if let (_, pane) = locate() {
+                DispatchQueue.main.async { [weak pane] in
+                    guard let pane else { return }
+                    pane.header.applyTerminalTheme(
+                        background: values.backgroundColor,
+                        foreground: values.foregroundColor)
+                    if let window = pane.window, window.isOpaque {
+                        window.backgroundColor = values.backgroundColor
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    GhosttyRuntime.shared?.configValues = values
                 }
             }
             return true
 
         case GHOSTTY_ACTION_COLOR_CHANGE:
+            // 主题明暗切换 / OSC 改色都会触发；转发给 pane header 让紧贴
+            // terminal 的 chrome 跟随重新着色，非透明窗口底色也一并同步。
+            guard let (_, pane) = locate() else { return true }
+            let change = action.action.color_change
+            let color = NSColor(
+                srgbRed: CGFloat(change.r) / 255,
+                green: CGFloat(change.g) / 255,
+                blue: CGFloat(change.b) / 255,
+                alpha: 1)
+            DispatchQueue.main.async { [weak pane] in
+                guard let pane else { return }
+                pane.header.noteTerminalColorChange(kind: change.kind, color: color)
+                if change.kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND,
+                   let window = pane.window, window.isOpaque {
+                    window.backgroundColor = color
+                }
+            }
             return true
 
         // MARK: - 选区 / 只读
@@ -635,19 +654,10 @@ final class GhosttyRuntime {
         // MARK: - Tab 移动
 
         case GHOSTTY_ACTION_MOVE_TAB:
-            guard let (controller, _) = locate(), let sourceWindow = controller.window else {
-                return false
-            }
+            guard let (controller, _) = locate() else { return false }
             let amount = Int(action.action.move_tab.amount)
             DispatchQueue.main.async {
-                let windows = sourceWindow.tabGroup?.windows ?? [sourceWindow]
-                guard let current = windows.firstIndex(where: { $0 === sourceWindow }),
-                      windows.count > 1, amount != 0 else { return }
-                let destination = (current + amount + windows.count) % windows.count
-                if destination != current {
-                    sourceWindow.tabGroup?.selectedWindow = windows[destination]
-                    sourceWindow.tabGroup?.selectedWindow = sourceWindow
-                }
+                controller.moveActiveTab(by: amount)
             }
             return true
 
