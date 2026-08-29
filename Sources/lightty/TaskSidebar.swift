@@ -45,25 +45,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
-    // MARK: - 详情页
-
-    private let detailPage = NSView()
-    private let detailTitle = NSTextField(labelWithString: "")
-    private let statusPopup = NSPopUpButton()
-    private let pathLabel = NSTextField(labelWithString: "")
-    private let bodyView = NSTextView()
-    private let saveButton = ShellTextButton("保存", emphasis: .primary, target: nil, action: nil)
-    private var detailURL: URL?
-    private var detailTask: TaskFile?
-    private weak var bodyScroll: NSScrollView?
-
-    private weak var currentPage: NSView?
     private var hoverTrackingArea: NSTrackingArea?
 
-    /// 脏编辑钉住：外部据此拒绝收起
-    private(set) var isDirty = false {
-        didSet { saveButton.isEnabled = isDirty }
-    }
+    /// 详情页已移除（handoff 编辑交给系统编辑器），侧栏不再有需要钉住的编辑态。
+    var isDirty: Bool { false }
 
     var onRequestClose: (() -> Void)?
     var onRequestNewTask: (() -> Void)?
@@ -83,12 +68,18 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         // 不画右缘边线：侧栏与标题栏同色拼成一体 chrome，terminal 自身底色
         // 已提供足够的视觉分界（Notion 式无边框）。
         buildListPage()
-        buildDetailPage()
-        showList(animated: false)
+        listPage.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(listPage)
+        NSLayoutConstraint.activate([
+            listPage.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
+            listPage.bottomAnchor.constraint(equalTo: bottomAnchor),
+            listPage.leadingAnchor.constraint(equalTo: leadingAnchor),
+            listPage.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
         reload()
         applyAppearanceColors()
 
-        // pane 命名/绑定落盘后实时刷新列表（isDirty 编辑态在 reload 内部自保护）。
+        // pane 命名/绑定落盘后实时刷新列表。
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(tasksDidChange),
@@ -115,10 +106,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
         searchContainer.layer?.borderColor =
             ShellStyle.divider.shellResolvedCGColor(for: appearance)
-        bodyScroll?.layer?.backgroundColor =
-            ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
-        bodyScroll?.layer?.borderColor =
-            ShellStyle.divider.shellResolvedCGColor(for: appearance)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -140,9 +127,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
-    /// 呼出时把焦点交给搜索框；若停留在详情页则保留编辑上下文。
+    /// 呼出时把焦点交给搜索框。
     func focusSearch() {
-        guard currentPage === listPage else { return }
         window?.makeFirstResponder(searchField)
     }
 
@@ -153,7 +139,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 数据
 
     func reload() {
-        guard !isDirty else { return } // 脏编辑钉住
         let running = AppState.shared.runningPanes()
         allEntries = AppState.shared.taskStore.list().tasks
             .map { entry in
@@ -345,9 +330,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         subtitle.textColor = ShellStyle.tertiaryText
         subtitle.lineBreakMode = .byTruncatingTail
 
+        // 更多操作（⋯）：与行本体的"跳转/打开"语义分开——管理动作都在这个菜单里。
         let detailButton = ShellIconButton(
-            symbol: "chevron.right", accessibilityLabel: "任务详情", target: self,
-            action: #selector(openDetailFromRow(_:)))
+            symbol: "ellipsis", accessibilityLabel: "更多操作", target: self,
+            action: #selector(showRowMenu(_:)))
         detailButton.tag = row
 
         let cell = NSView()
@@ -407,37 +393,156 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
 
-    @objc private func openDetailFromRow(_ sender: NSButton) {
+    // MARK: - 行「⋯」菜单：任务管理动作（详情页已移除，编辑交给系统编辑器）
+
+    @objc private func showRowMenu(_ sender: NSButton) {
         guard sender.tag >= 0, sender.tag < filtered.count else { return }
-        tableView.selectRowIndexes([sender.tag], byExtendingSelection: false)
-        openDetail()
+        let entry = filtered[sender.tag]
+        let menu = NSMenu()
+
+        let rename = NSMenuItem(
+            title: "重命名任务…", action: #selector(renameFromMenu(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = RowMenuContext(entry: entry, anchor: sender)
+        menu.addItem(rename)
+
+        let statusItem = NSMenuItem(title: "状态", action: nil, keyEquivalent: "")
+        let statusMenu = NSMenu()
+        for status in TaskStatus.allCases {
+            let item = NSMenuItem(
+                title: statusTitle(status), action: #selector(setStatusFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = RowMenuContext(entry: entry, anchor: sender, status: status)
+            item.state = entry.task.status == status ? .on : .off
+            statusMenu.addItem(item)
+        }
+        statusItem.submenu = statusMenu
+        menu.addItem(statusItem)
+
+        menu.addItem(.separator())
+
+        let open = NSMenuItem(
+            title: "打开 handoff 文档", action: #selector(openDocFromMenu(_:)), keyEquivalent: "")
+        open.target = self
+        open.representedObject = RowMenuContext(entry: entry, anchor: sender)
+        menu.addItem(open)
+
+        let reveal = NSMenuItem(
+            title: "在 Finder 中显示", action: #selector(revealFromMenu(_:)), keyEquivalent: "")
+        reveal.target = self
+        reveal.representedObject = RowMenuContext(entry: entry, anchor: sender)
+        menu.addItem(reveal)
+
+        menu.addItem(.separator())
+
+        let delete = NSMenuItem(
+            title: "删除任务（移到废纸篓）", action: #selector(deleteFromMenu(_:)),
+            keyEquivalent: "")
+        delete.target = self
+        delete.representedObject = RowMenuContext(entry: entry, anchor: sender)
+        menu.addItem(delete)
+
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: sender.bounds.maxY + 4),
+            in: sender)
     }
 
-    /// 单击：运行中任务直接聚焦对应 pane（跨 tab 自动切换），侧栏保持展开。
-    /// 休眠任务只选中，恢复留给双击/Enter。
+    private final class RowMenuContext: NSObject {
+        let entry: Entry
+        let anchor: NSView
+        let status: TaskStatus?
+
+        init(entry: Entry, anchor: NSView, status: TaskStatus? = nil) {
+            self.entry = entry
+            self.anchor = anchor
+            self.status = status
+        }
+    }
+
+    @objc private func renameFromMenu(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? RowMenuContext else { return }
+        NameEditorPopover.present(
+            from: context.anchor, title: "重命名任务",
+            initial: context.entry.task.name, confirmLabel: "重命名"
+        ) { name in
+            do {
+                try AppState.shared.renameTask(at: context.entry.fileURL, to: name)
+            } catch {
+                NSSound.beep()
+                NSLog("task rename failed: \(error)")
+            }
+        }
+    }
+
+    @objc private func setStatusFromMenu(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? RowMenuContext,
+              let status = context.status else { return }
+        var task = context.entry.task
+        task.status = status
+        do {
+            try AppState.shared.taskStore.update(at: context.entry.fileURL, task: task)
+            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        } catch {
+            NSSound.beep()
+            NSLog("task status update failed: \(error)")
+        }
+    }
+
+    @objc private func openDocFromMenu(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? RowMenuContext else { return }
+        NSWorkspace.shared.open(context.entry.fileURL)
+    }
+
+    @objc private func revealFromMenu(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? RowMenuContext else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([context.entry.fileURL])
+    }
+
+    @objc private func deleteFromMenu(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? RowMenuContext else { return }
+        do {
+            // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
+            try FileManager.default.trashItem(
+                at: context.entry.fileURL, resultingItemURL: nil)
+            for (_, pane) in AppState.shared.runningPanes()
+            where pane.taskFileURL?.standardizedFileURL
+                == context.entry.fileURL.standardizedFileURL {
+                pane.unbind()
+            }
+            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        } catch {
+            NSSound.beep()
+            NSLog("task delete failed: \(error)")
+        }
+    }
+
+    /// 单击：统一弹任务气泡（已打开的列跳转行 + 打开到三目的地），侧栏保持展开。
     @objc private func rowClicked() {
-        guard tableView.clickedRow >= 0, tableView.clickedRow < filtered.count,
-              let running = filtered[tableView.clickedRow].running else { return }
-        running.controller.window?.makeKeyAndOrderFront(nil)
-        running.controller.reveal(pane: running.pane)
+        let row = tableView.clickedRow
+        guard row >= 0, row < filtered.count else { return }
+        presentTaskPopover(for: filtered[row], at: row)
     }
 
-    /// 双击 / Enter：运行中 → 聚焦对应 pane；休眠 → 任务行旁弹恢复气泡
+    /// 双击 / Enter 快捷路径：运行中直接跳最近绑定 pane；休眠同单击弹气泡。
     @objc private func jumpOrRestore() {
         guard let entry = selectedEntry else { return }
         if let running = entry.running {
             running.controller.window?.makeKeyAndOrderFront(nil)
             running.controller.reveal(pane: running.pane)
-            onRequestClose?()
         } else {
-            guard let controller = window?.windowController as? TerminalWindowController
-            else { return }
-            let anchor = tableView.rowView(
-                atRow: tableView.selectedRow, makeIfNecessary: false) ?? self
-            RestoreFlow.begin(
-                fileURL: entry.fileURL, task: entry.task,
-                from: anchor, in: controller)
+            presentTaskPopover(for: entry, at: tableView.selectedRow)
         }
+    }
+
+    private func presentTaskPopover(for entry: Entry, at row: Int) {
+        guard let controller = window?.windowController as? TerminalWindowController
+        else { return }
+        let anchor = tableView.rowView(atRow: row, makeIfNecessary: false) ?? self
+        RestoreFlow.begin(
+            fileURL: entry.fileURL, task: entry.task,
+            from: anchor, in: controller)
     }
 
     // 搜索框：回车 = 跳转/恢复，上下键移动选择，Esc 收起抽屉
@@ -464,164 +569,4 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         }
     }
 
-    // MARK: - 详情页
-
-    private func buildDetailPage() {
-        let backButton = ShellIconButton(
-            symbol: "chevron.left", accessibilityLabel: "返回任务列表", target: self,
-            action: #selector(backToList))
-
-        detailTitle.font = .systemFont(ofSize: 14, weight: .semibold)
-        detailTitle.textColor = ShellStyle.primaryText
-        detailTitle.lineBreakMode = .byTruncatingTail
-
-        statusPopup.addItems(withTitles: TaskStatus.allCases.map(statusTitle))
-        statusPopup.controlSize = .small
-        statusPopup.bezelStyle = .inline
-        statusPopup.font = .systemFont(ofSize: 10.5, weight: .medium)
-        statusPopup.contentTintColor = ShellStyle.secondaryText
-        statusPopup.target = self
-        statusPopup.action = #selector(markDirty)
-
-        let pathIcon = NSImageView(image: NSImage(
-            systemSymbolName: "folder", accessibilityDescription: "任务目录") ?? NSImage())
-        pathIcon.contentTintColor = ShellStyle.tertiaryText
-        pathIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
-
-        pathLabel.font = .systemFont(ofSize: 10.5)
-        pathLabel.textColor = ShellStyle.tertiaryText
-        pathLabel.lineBreakMode = .byTruncatingMiddle
-
-        bodyView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        bodyView.isRichText = false
-        bodyView.drawsBackground = false
-        bodyView.textColor = ShellStyle.primaryText
-        bodyView.insertionPointColor = ShellStyle.primaryText
-        bodyView.textContainerInset = NSSize(width: 9, height: 9)
-        bodyView.delegate = self
-
-        let bodyScroll = NSScrollView()
-        bodyScroll.documentView = bodyView
-        bodyScroll.hasVerticalScroller = true
-        bodyScroll.autohidesScrollers = true
-        bodyScroll.drawsBackground = false
-        bodyScroll.scrollerStyle = .overlay
-        bodyScroll.wantsLayer = true
-        // 背景/边框色由 applyAppearanceColors 统一按明暗解析
-        bodyScroll.layer?.cornerRadius = 10
-        bodyScroll.layer?.borderWidth = 0.5
-        bodyScroll.clipsToBounds = true
-        self.bodyScroll = bodyScroll
-
-        saveButton.target = self
-        saveButton.action = #selector(save)
-        saveButton.isEnabled = false
-
-        let pathRow = NSStackView(views: [pathIcon, pathLabel])
-        pathRow.orientation = .horizontal
-        pathRow.spacing = 6
-        pathRow.alignment = .centerY
-
-        for v in [backButton, detailTitle, statusPopup, pathRow, bodyScroll, saveButton] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            detailPage.addSubview(v)
-        }
-        NSLayoutConstraint.activate([
-            backButton.topAnchor.constraint(equalTo: detailPage.topAnchor, constant: 14),
-            backButton.leadingAnchor.constraint(equalTo: detailPage.leadingAnchor, constant: 10),
-            backButton.widthAnchor.constraint(equalToConstant: 28),
-            backButton.heightAnchor.constraint(equalToConstant: 28),
-
-            detailTitle.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
-            detailTitle.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 6),
-            detailTitle.trailingAnchor.constraint(lessThanOrEqualTo: statusPopup.leadingAnchor, constant: -8),
-
-            statusPopup.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
-            statusPopup.trailingAnchor.constraint(equalTo: detailPage.trailingAnchor, constant: -12),
-
-            pathRow.topAnchor.constraint(equalTo: backButton.bottomAnchor, constant: 13),
-            pathRow.leadingAnchor.constraint(equalTo: detailPage.leadingAnchor, constant: 16),
-            pathRow.trailingAnchor.constraint(equalTo: detailPage.trailingAnchor, constant: -16),
-
-            bodyScroll.topAnchor.constraint(equalTo: pathRow.bottomAnchor, constant: 12),
-            bodyScroll.leadingAnchor.constraint(equalTo: detailPage.leadingAnchor, constant: 12),
-            bodyScroll.trailingAnchor.constraint(equalTo: detailPage.trailingAnchor, constant: -12),
-            bodyScroll.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -12),
-
-            saveButton.trailingAnchor.constraint(equalTo: detailPage.trailingAnchor, constant: -12),
-            saveButton.bottomAnchor.constraint(equalTo: detailPage.bottomAnchor, constant: -12),
-            saveButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
-            saveButton.heightAnchor.constraint(equalToConstant: 28),
-        ])
-    }
-
-    @objc private func openDetail() {
-        guard let entry = selectedEntry else { return }
-        detailURL = entry.fileURL
-        detailTask = entry.task
-        detailTitle.stringValue = entry.task.name
-        statusPopup.selectItem(at: TaskStatus.allCases.firstIndex(of: entry.task.status) ?? 0)
-        pathLabel.stringValue = entry.task.cwd
-        bodyView.string = entry.task.body
-        isDirty = false
-        showDetail()
-    }
-
-    @objc private func backToList() {
-        guard !isDirty else { NSSound.beep(); return } // 脏编辑钉住
-        showList()
-        reload()
-    }
-
-    @objc private func markDirty() { isDirty = true }
-    func textDidChange(_ notification: Notification) { isDirty = true }
-
-    @objc private func save() {
-        guard let url = detailURL, var task = detailTask else { return }
-        let index = max(statusPopup.indexOfSelectedItem, 0)
-        if index < TaskStatus.allCases.count { task.status = TaskStatus.allCases[index] }
-        task.body = bodyView.string
-        do {
-            try AppState.shared.taskStore.update(at: url, task: task)
-            detailTask = task
-            isDirty = false
-        } catch {
-            NSSound.beep()
-            NSLog("task save failed: \(error)")
-        }
-    }
-
-    // MARK: - 翻页
-
-    private func showList(animated: Bool = true) { setPage(listPage, animated: animated) }
-    private func showDetail() { setPage(detailPage, animated: true) }
-
-    private func setPage(_ page: NSView, animated: Bool) {
-        guard currentPage !== page else { return }
-        let old = currentPage
-        page.translatesAutoresizingMaskIntoConstraints = false
-        page.alphaValue = animated ? 0 : 1
-        addSubview(page)
-        NSLayoutConstraint.activate([
-            page.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
-            page.bottomAnchor.constraint(equalTo: bottomAnchor),
-            page.leadingAnchor.constraint(equalTo: leadingAnchor),
-            page.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        layoutSubtreeIfNeeded()
-        currentPage = page
-
-        guard animated, let old else {
-            old?.removeFromSuperview()
-            return
-        }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            old.animator().alphaValue = 0
-            page.animator().alphaValue = 1
-        } completionHandler: {
-            old.removeFromSuperview()
-        }
-    }
 }
