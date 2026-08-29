@@ -9,6 +9,8 @@ final class TabStripView: NSView {
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onNewTab: (() -> Void)?
+    /// 双击标签重命名工作区（index, 新名字）。
+    var onRename: ((Int, String) -> Void)?
 
     private let stack = NSStackView()
     private let newTabButton: ShellIconButton
@@ -65,6 +67,14 @@ final class TabStripView: NSView {
             let item = TabItemView(title: title, isActive: index == activeIndex)
             item.onSelect = { [weak self] in self?.onSelect?(index) }
             item.onClose = { [weak self] in self?.onClose?(index) }
+            item.onRenameRequest = { [weak self, weak item] in
+                guard let self, let item else { return }
+                NameEditorPopover.present(
+                    from: item, title: "重命名工作区", initial: title, confirmLabel: "重命名"
+                ) { [weak self] name in
+                    self?.onRename?(index, name)
+                }
+            }
             item.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
             stack.addArrangedSubview(item)
         }
@@ -87,6 +97,7 @@ final class TabStripView: NSView {
 private final class TabItemView: NSView {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    var onRenameRequest: (() -> Void)?
 
     private let label = NSTextField(labelWithString: "")
     private let closeButton: ShellIconButton
@@ -146,7 +157,14 @@ private final class TabItemView: NSView {
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) { onSelect?() }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onRenameRequest?()
+        } else {
+            onSelect?()
+        }
+    }
 
     @objc private func closeTapped() { onClose?() }
 
