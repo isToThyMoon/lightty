@@ -17,10 +17,9 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
     init(needle: String?) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = ShellStyle.titlebarBackground.cgColor
         layer?.cornerRadius = 9
         layer?.borderWidth = 1
-        layer?.borderColor = ShellStyle.divider.cgColor
+        applyAppearanceColors()
         shadow = NSShadow()
         shadow?.shadowBlurRadius = 8
         shadow?.shadowOffset = NSSize(width: 0, height: -2)
@@ -75,6 +74,18 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private func applyAppearanceColors() {
+        layer?.backgroundColor =
+            ShellStyle.titlebarBackground.shellResolvedCGColor(for: effectiveAppearance)
+        layer?.borderColor =
+            ShellStyle.divider.shellResolvedCGColor(for: effectiveAppearance)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearanceColors()
+    }
 
     deinit { debounceWorkItem?.cancel() }
 
