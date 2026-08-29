@@ -15,32 +15,49 @@ enum ShellStyle {
     static let controlCornerRadius: CGFloat = 8
     static let animationDuration: TimeInterval = 0.22
 
-    // MARK: Codex reference palette
+    // MARK: Palette（明暗动态色：浅色为 Codex 参考，深色为配套暖灰紫）
 
-    /// 参考图主标题栏近似 #FFFEFF；保持完全不透明，不继承 terminal opacity。
-    static let titlebarBackground = NSColor.shellRGB(0xFFFEFF)
-    /// 参考图侧栏的暖灰白综合色；抽屉覆盖 terminal，必须完全不透明。
-    static let sidebarBackground = NSColor.shellRGB(0xF6F3F2)
-    static let controlFill = NSColor.shellRGB(0xEFEBE9)
-    static let hoverFill = NSColor.shellRGB(0xF0ECEA)
-    static let selectionFill = NSColor.shellRGB(0xE9E5E3)
-    static let pressedFill = NSColor.shellRGB(0xE2DDDA)
-    static let divider = NSColor.shellRGB(0xE5E1DF)
-    static let primaryText = NSColor.shellRGB(0x302E2D)
-    static let secondaryText = NSColor.shellRGB(0x6F6B68)
-    static let tertiaryText = NSColor.shellRGB(0x9A9693)
-    static let actionFill = NSColor.shellRGB(0x353331)
-    static let actionHoverFill = NSColor.shellRGB(0x242321)
-    static let actionText = NSColor.white
+    /// 与侧栏同色，拼成一体的应用 chrome；保持完全不透明，不继承 terminal opacity。
+    static let titlebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
+    /// 侧栏底色；抽屉覆盖 terminal，必须完全不透明。
+    static let sidebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
+    static let controlFill = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x323037)
+    static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
+    static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
+    static let pressedFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x44414A)
+    static let divider = NSColor.shellDynamic(light: 0xE5E1DF, dark: 0x3B3841)
+    static let primaryText = NSColor.shellDynamic(light: 0x302E2D, dark: 0xE9E7EC)
+    static let secondaryText = NSColor.shellDynamic(light: 0x6F6B68, dark: 0xA39FAA)
+    static let tertiaryText = NSColor.shellDynamic(light: 0x9A9693, dark: 0x757079)
+    /// 主按钮在两种外观下都取反色强调。
+    static let actionFill = NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
+    static let actionHoverFill = NSColor.shellDynamic(light: 0x242321, dark: 0xF8F6FA)
+    static let actionText = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
 }
 
-private extension NSColor {
+extension NSColor {
     static func shellRGB(_ value: UInt32) -> NSColor {
         NSColor(
             srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
             green: CGFloat((value >> 8) & 0xFF) / 255,
             blue: CGFloat(value & 0xFF) / 255,
             alpha: 1)
+    }
+
+    /// 明暗自适应色。文本/draw 路径自动解析；layer.cgColor 是快照，
+    /// 持有方必须在 viewDidChangeEffectiveAppearance 里重设（见 shellResolvedCGColor）。
+    static func shellDynamic(light: UInt32, dark: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return .shellRGB(isDark ? dark : light)
+        }
+    }
+
+    /// 按给定外观解析出 CGColor 快照（供 layer 背景/边框用）。
+    func shellResolvedCGColor(for appearance: NSAppearance) -> CGColor {
+        var resolved = cgColor
+        appearance.performAsCurrentDrawingAppearance { resolved = self.cgColor }
+        return resolved
     }
 }
 
@@ -94,8 +111,13 @@ final class ShellIconButton: NSButton {
     }
 
     override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = ShellStyle.pressedFill.cgColor
+        layer?.backgroundColor = ShellStyle.pressedFill.shellResolvedCGColor(for: effectiveAppearance)
         super.mouseDown(with: event)
+        updateAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         updateAppearance()
     }
 
@@ -103,7 +125,7 @@ final class ShellIconButton: NSButton {
         let fill: NSColor = isHovered
             ? ShellStyle.pressedFill
             : (isActive ? ShellStyle.selectionFill : .clear)
-        layer?.backgroundColor = fill.cgColor
+        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
         contentTintColor = (isHovered || isActive) ? ShellStyle.primaryText : ShellStyle.secondaryText
     }
 }
@@ -118,6 +140,10 @@ final class ShellTextButton: NSButton {
     private let label: String
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { updateAppearance() } }
+
+    /// terminal palette 的前景色来源；core 报告 COLOR_CHANGE（主题切换/OSC）后
+    /// 由 pane header 注入当前值，未设置时回退启动期全局 config。
+    var terminalForeground: NSColor? { didSet { updateAppearance() } }
 
     override var isEnabled: Bool { didSet { updateAppearance() } }
 
@@ -159,6 +185,11 @@ final class ShellTextButton: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
     private func updateAppearance() {
         let fill: NSColor
         let enabledText: NSColor
@@ -174,12 +205,13 @@ final class ShellTextButton: NSButton {
             }
             disabledText = ShellStyle.tertiaryText
         case .terminal:
-            let foreground = GhosttyRuntime.shared.configValues.foregroundColor
+            let foreground = terminalForeground
+                ?? GhosttyRuntime.shared.configValues.foregroundColor
             fill = isHovered ? foreground.withAlphaComponent(0.12) : .clear
             enabledText = foreground.withAlphaComponent(0.72)
             disabledText = foreground.withAlphaComponent(0.32)
         }
-        layer?.backgroundColor = fill.cgColor
+        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
         alphaValue = isEnabled ? 1 : 0.62
         let color = isEnabled ? enabledText : disabledText
         attributedTitle = NSAttributedString(
@@ -207,6 +239,11 @@ final class ShellTableRowView: NSTableRowView {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         guard isHovered, !isSelected else { return }
         ShellStyle.hoverFill.setFill()
@@ -223,6 +260,30 @@ final class ShellTableRowView: NSTableRowView {
             roundedRect: bounds.insetBy(dx: 2, dy: 2),
             xRadius: ShellStyle.rowCornerRadius,
             yRadius: ShellStyle.rowCornerRadius).fill()
+    }
+}
+
+/// 纯色背景块：外观切换时自动按当前明暗重解析 layer 颜色。
+/// layer.backgroundColor 是 CGColor 快照，普通 NSView 不会自己更新。
+final class ShellBackdropView: NSView {
+    var fill: NSColor = .clear { didSet { applyFill() } }
+
+    init(fill: NSColor) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        self.fill = fill
+        applyFill()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyFill()
+    }
+
+    private func applyFill() {
+        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
 }
 
