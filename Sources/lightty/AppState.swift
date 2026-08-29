@@ -25,50 +25,18 @@ final class AppState {
         return controller
     }
 
-    /// Ghostty `new_tab` 的宿主实现：新 controller/新 surface 进入来源窗口的原生
-    /// macOS tab group。split tree 留在各 tab 内，二者不再复用同一种布局。
-    @discardableResult
+    /// Ghostty `new_tab` 的宿主实现：在来源窗口内追加一个 lightty tab
+    /// （窗口内 pane 树容器；不是 macOS 原生 tab group）。
     func newTab(
         from parentController: TerminalWindowController,
         initialPane: PaneView
-    ) -> TerminalWindowController {
-        guard let parentWindow = parentController.window else {
-            return newWindow(initialPane: initialPane)
+    ) {
+        guard parentController.window != nil else {
+            newWindow(initialPane: initialPane)
+            return
         }
-
-        let controller = TerminalWindowController(initialPane: initialPane, isNativeTab: true)
-        windowControllers.append(controller)
-        guard let childWindow = controller.window else { return controller }
-
-        if parentWindow.isMiniaturized { parentWindow.deminiaturize(nil) }
-        childWindow.setFrame(parentWindow.frame, display: false)
-        if let tabGroup = parentWindow.tabGroup,
-           tabGroup.windows.contains(where: { $0 === childWindow }) {
-            tabGroup.removeWindow(childWindow)
-        }
-        if childWindow.tabbingMode != .disallowed {
-            parentWindow.addTabbedWindow(childWindow, ordered: .above)
-        }
-        for (window, pane) in [
-            (parentWindow, parentController.activePane),
-            (childWindow, Optional(initialPane)),
-        ] {
-            window.titleVisibility = .visible
-            window.tab.title = pane?.header.title ?? "未命名"
-            window.title = ""
-        }
-        // 与 Ghostty 一样把 presentation 推到下一轮：此时 AppKit 的 tabGroup 已稳定，
-        // 新 tab 不会先以独立窗口 frame 出现，tab bar 也能在首次选中时完整绘制。
-        DispatchQueue.main.async { [weak parentWindow, weak childWindow] in
-            guard let parentWindow, let childWindow else { return }
-            if let group = parentWindow.tabGroup, group.windows.count > 1 {
-                group.selectedWindow = childWindow
-                if !group.isTabBarVisible { parentWindow.toggleTabBar(nil) }
-            }
-            parentWindow.makeKeyAndOrderFront(nil)
-            initialPane.focusTerminal()
-        }
-        return controller
+        parentController.addTab(initialPane: initialPane)
+        initialPane.focusTerminal()
     }
 
     var keyWindowController: TerminalWindowController? {
