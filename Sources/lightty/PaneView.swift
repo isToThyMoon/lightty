@@ -1,6 +1,11 @@
 import AppKit
 import LighttyCore
 
+extension Notification.Name {
+    /// 任务文件集合变化（创建/改名/绑定），已打开的侧边栏收到后 reload。
+    static let lighttyTasksDidChange = Notification.Name("lighttyTasksDidChange")
+}
+
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
@@ -68,6 +73,9 @@ final class PaneView: NSView {
         header.onEditingEnded = { [weak self] in self?.focusTerminal() }
         header.onFinish = { [weak self] in self?.finish() }
         header.onInject = { [weak self] in self?.inject() }
+        header.onTaskPickerRequested = { [weak self] anchor in
+            self?.showTaskPicker(from: anchor)
+        }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
             self.onClose?(self)
@@ -76,18 +84,66 @@ final class PaneView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// 已绑定任务的 pane（恢复流程 / 分屏继承）
+    /// 已绑定任务的 pane（恢复流程）
     func bind(to fileURL: URL, name: String, status: TaskStatus) {
         binding = .bound(fileURL: fileURL)
         header.title = name
         header.dot = status == .stuck ? .stuck : .active
         header.injectEnabled = true
+        header.confirmBeforeRename = true
         onMetadataChange?(self)
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
     var taskFileURL: URL? {
         if case .bound(let url) = binding { return url }
         return nil
+    }
+
+    // MARK: - 任务选择菜单（header 小箭头）
+
+    /// 弹出已有 handoff 任务列表；选中即把当前 pane 绑定到该任务
+    /// （不动文件，只改 pane 指向——收工/注入随之指向新任务）。
+    private func showTaskPicker(from anchor: NSView) {
+        let menu = NSMenu()
+        let running = AppState.shared.runningPanes()
+        let entries = AppState.shared.taskStore.list().tasks
+            .sorted { $0.task.updated > $1.task.updated }
+
+        if entries.isEmpty {
+            let empty = NSMenuItem(title: "没有任务", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        for entry in entries {
+            let isCurrent = taskFileURL?.standardizedFileURL
+                == entry.fileURL.standardizedFileURL
+            let boundElsewhere = running.contains {
+                $0.pane !== self && $0.pane.taskFileURL?.standardizedFileURL
+                    == entry.fileURL.standardizedFileURL
+            }
+            let item = NSMenuItem(
+                title: entry.task.name + (boundElsewhere ? " · 运行中" : ""),
+                action: #selector(bindTaskFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = entry.fileURL
+            item.state = isCurrent ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
+            in: anchor)
+    }
+
+    @objc private func bindTaskFromMenu(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL,
+              let entry = AppState.shared.taskStore.list().tasks.first(where: {
+                  $0.fileURL.standardizedFileURL == url.standardizedFileURL
+              }) else { return }
+        bind(to: entry.fileURL, name: entry.task.name, status: entry.task.status)
+        focusTerminal()
     }
 
     // MARK: - 命名即落盘
@@ -108,6 +164,7 @@ final class PaneView: NSView {
                 header.title = name
             }
             onMetadataChange?(self)
+            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
         } catch {
             NSSound.beep()
             NSLog("task rename/create failed: \(error)")
