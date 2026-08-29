@@ -47,4 +47,17 @@ final class AppState {
     func runningPanes() -> [(controller: TerminalWindowController, pane: PaneView)] {
         windowControllers.flatMap { c in c.panes().map { (c, $0) } }
     }
+
+    /// 任务重命名的唯一入口：移动文件 + 同步所有绑定该任务的 pane + 广播刷新。
+    /// pane 端 pill 菜单与侧栏详情页都走这里，避免两处各自为政漏同步。
+    @discardableResult
+    func renameTask(at url: URL, to name: String) throws -> URL {
+        let newURL = try taskStore.rename(at: url, to: name)
+        for (_, pane) in runningPanes()
+        where pane.taskFileURL?.standardizedFileURL == url.standardizedFileURL {
+            pane.noteTaskRenamed(to: newURL, name: name)
+        }
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        return newURL
+    }
 }

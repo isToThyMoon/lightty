@@ -30,10 +30,14 @@ final class PaneView: NSView {
     /// pane header 拖到目标四边时，由目标窗口控制器原位重组 split tree。
     var onMoveRequest: ((UUID, PaneView, PaneDropZone) -> Bool)?
 
+    /// pane 名默认值的会话内计数器（pane 名不落盘，编号比一排「未命名」可辨认）。
+    private static var paneCounter = 0
+
     init(surfaceConfiguration: TerminalSurfaceConfiguration = .init()) {
         terminal = TerminalSurfaceView(configuration: surfaceConfiguration)
+        Self.paneCounter += 1
         super.init(frame: .zero)
-        header.title = "未命名"
+        header.title = "终端 \(Self.paneCounter)"
         header.dot = .unnamed
         header.injectEnabled = false
         header.dragIdentifier = dragIdentifier
@@ -84,15 +88,32 @@ final class PaneView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// 已绑定任务的 pane（恢复流程）
+    /// 绑定任务：只改 pane 指向与 pill 显示，不动 pane 名（pane 名是独立会话态标签）。
     func bind(to fileURL: URL, name: String, status: TaskStatus) {
         binding = .bound(fileURL: fileURL)
-        header.title = name
+        header.setTaskName(name)
         header.dot = status == .stuck ? .stuck : .active
         header.injectEnabled = true
-        header.confirmBeforeRename = true
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+    }
+
+    /// 解除绑定：pane 回到无任务状态，pane 名保持不变。
+    func unbind() {
+        binding = .unnamed
+        header.setTaskName(nil)
+        header.dot = .unnamed
+        header.injectEnabled = false
+        onMetadataChange?(self)
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+    }
+
+    /// 任务被（本 pane 或他处）重命名后的同步：更新指向与 pill，不发通知
+    /// （由发起方统一广播）。
+    func noteTaskRenamed(to newURL: URL, name: String) {
+        guard case .bound = binding else { return }
+        binding = .bound(fileURL: newURL)
+        header.setTaskName(name)
     }
 
     var taskFileURL: URL? {
@@ -100,21 +121,15 @@ final class PaneView: NSView {
         return nil
     }
 
-    // MARK: - 任务选择菜单（header 小箭头）
+    // MARK: - 任务 pill 菜单
 
-    /// 弹出已有 handoff 任务列表；选中即把当前 pane 绑定到该任务
-    /// （不动文件，只改 pane 指向——收工/注入随之指向新任务）。
+    /// 任务列表（选中即绑定）+ 新建任务… + 已绑定时的重命名/解绑。
     private func showTaskPicker(from anchor: NSView) {
         let menu = NSMenu()
         let running = AppState.shared.runningPanes()
         let entries = AppState.shared.taskStore.list().tasks
             .sorted { $0.task.updated > $1.task.updated }
 
-        if entries.isEmpty {
-            let empty = NSMenuItem(title: "没有任务", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        }
         for entry in entries {
             let isCurrent = taskFileURL?.standardizedFileURL
                 == entry.fileURL.standardizedFileURL
@@ -131,6 +146,24 @@ final class PaneView: NSView {
             item.state = isCurrent ? .on : .off
             menu.addItem(item)
         }
+        if !entries.isEmpty { menu.addItem(.separator()) }
+
+        let create = NSMenuItem(
+            title: "新建任务…", action: #selector(createTaskFromMenu), keyEquivalent: "")
+        create.target = self
+        menu.addItem(create)
+
+        if case .bound = binding {
+            let rename = NSMenuItem(
+                title: "重命名任务…", action: #selector(renameTaskFromMenu), keyEquivalent: "")
+            rename.target = self
+            menu.addItem(rename)
+            let unbindItem = NSMenuItem(
+                title: "解除绑定", action: #selector(unbindFromMenu), keyEquivalent: "")
+            unbindItem.target = self
+            menu.addItem(unbindItem)
+        }
+
         menu.popUp(
             positioning: nil,
             at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
@@ -146,29 +179,54 @@ final class PaneView: NSView {
         focusTerminal()
     }
 
-    // MARK: - 命名即落盘
+    @objc private func createTaskFromMenu() {
+        presentCreateTaskEditor()
+    }
 
-    private func rename(to name: String) {
-        do {
-            switch binding {
-            case .unnamed:
+    @objc private func renameTaskFromMenu() {
+        guard case .bound(let url) = binding else { return }
+        let current = header.titleOfBoundTask ?? ""
+        NameEditorPopover.present(
+            from: header, title: "重命名任务", initial: current, confirmLabel: "重命名"
+        ) { name in
+            do {
+                _ = try AppState.shared.renameTask(at: url, to: name)
+            } catch {
+                NSSound.beep()
+                NSLog("task rename failed: \(error)")
+            }
+        }
+    }
+
+    @objc private func unbindFromMenu() {
+        unbind()
+    }
+
+    /// 新建任务并绑定（收工的未绑定路径也走这里）。
+    private func presentCreateTaskEditor() {
+        NameEditorPopover.present(
+            from: header, title: "新建任务", confirmLabel: "创建"
+        ) { [weak self] name in
+            guard let self else { return }
+            do {
                 let created = try AppState.shared.taskStore.create(
                     name: name,
                     cwd: FileManager.default.homeDirectoryForCurrentUser.path,
                     tool: nil)
-                bind(to: created.fileURL, name: name, status: .active)
-            case .bound(let url):
-                // 只改名不动状态：状态点保持文件里的原状态
-                let newURL = try AppState.shared.taskStore.rename(at: url, to: name)
-                binding = .bound(fileURL: newURL)
-                header.title = name
+                self.bind(to: created.fileURL, name: name, status: .active)
+                self.focusTerminal()
+            } catch {
+                NSSound.beep()
+                NSLog("task create failed: \(error)")
             }
-            onMetadataChange?(self)
-            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-        } catch {
-            NSSound.beep()
-            NSLog("task rename/create failed: \(error)")
         }
+    }
+
+    // MARK: - pane 名（会话态标签，不落盘）
+
+    private func rename(to name: String) {
+        header.title = name
+        onMetadataChange?(self)
     }
 
     // MARK: - 收工 / 注入（指令在点击时实时嵌入当前任务文件路径）
@@ -176,8 +234,8 @@ final class PaneView: NSView {
     private func finish() {
         switch binding {
         case .unnamed:
-            // 未命名时先触发命名编辑
-            header.beginRename()
+            // 未绑定任务：先建任务（收工产物需要落点）
+            presentCreateTaskEditor()
         case .bound(let url):
             terminal.sendText(HandoffPrompt.finish(taskFilePath: url.path) + "\r")
         }
