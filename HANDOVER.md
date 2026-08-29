@@ -167,11 +167,11 @@ lightty 的差异化不是"更好的终端"，而是**给终端补任务语义�
 
 - **任务绑定粒度 = pane（第二次修正，用户澄清后定稿）**：一个 window 内部可并排住着**不同任务**的终端（用户的真实用法：同 window 左边 Claude Code 跑任务 A、右边 shell 跑任务 B）。层级：**window/frame（aerospace 管，最小 WM 粒度）→ tab（可选分组）→ 分屏布局（纯布局，不承载任务语义）→ pane（任务绑定点）**。此前"任务 = NSWindow"、"分屏限制在任务内"两条作废——分屏是布局，任务是每个 pane 的属性。
 - **每 pane 一条细 header 显示「任务名 + 状态标记」**（●运行 / ⏳等待输入）：原生 window/tab 标题无法逐 pane 显示，header 由壳自绘（tmux pane border / iTerm2 per-pane title 思路），同任务多 pane 用同色点标识。常显、滚动无关、对 claude/codex 一视同仁——当初 statusline 方案的两个结构性缺陷（滚动即失、Codex 无通道）在此均不存在。window/tab 标题退化为衍生信息（激活 pane 的任务名）。
-- **默认行为（2026-08-24 按 vendored Ghostty 再次校正）**：Ghostty 的 `new_tab` 创建当前窗口的 macOS 原生 tab，`new_window` 创建独立窗口，`new_split` 才在当前 tab 的 split tree 中创建 pane；新 surface 一律继承 core 返回的 cwd/font config。嵌套 NSSplitView 只负责 tab 内 pane 布局（方向一致插相邻位、方向不同原位包反向 split）。`cmd+T/N/D` 只是当前用户 Ghostty config 的默认触发例，不是 lightty 固定键位。
+- **默认行为（2026-08-24 按 vendored Ghostty 再次校正）**：~~Ghostty 的 `new_tab` 创建当前窗口的 macOS 原生 tab~~ **已被 2026-08-29 自绘 tab 架构推翻**（原生 tab = 多 NSWindow 结组，tab bar 为系统 chrome 全宽不可缩进，与一窗一侧栏冲突；`new_tab` 现为当前窗口内追加自绘 tab/工作区，见第 10 节 2026-08-28/29）。`new_window` 创建独立窗口，`new_split` 在当前 tab 的 split tree 中创建 pane；新 surface 一律继承 core 返回的 cwd/font config。嵌套 NSSplitView 只负责 tab 内 pane 布局（方向一致插相邻位、方向不同原位包反向 split）。`cmd+T/N/D` 只是当前用户 Ghostty config 的默认触发例，不是 lightty 固定键位。
 - ~~早期形态：cmd+K 呼出独立任务面板。~~ **已废弃**：`cmd+K` 保留给 Ghostty 默认 `clear_screen`；任务侧栏仅由标题栏按钮 hover/click 进入。
 - **环境信号**（全选，用户选定）：标题状态标记 + menu bar 图标（等待中任务数，点开迷你任务列表）+ 系统通知（agent 等待输入/任务结束）。
-- **任务生命周期（用户定稿：命名即落盘）**：新开 pane **不创建文件**——未命名只是内存中的 header title（灰点"未命名"）；**双击命名那一刻才创建 `<任务名>.md`**。`LIGHTTY_TASK` 已整体移除；「收工」/「注入」只在点击时向 PTY 注入明确指令。不自动启动 agent。默认 surface 的 cwd 由 Ghostty 全局 config 决定；core 请求的新窗口/tab/split 使用 `ghostty_surface_inherited_config`，lightty 不再固定 Home。
-- **恢复流程**：面板选休眠任务 → 新窗口显示 handoff 摘要（进展/卡点/下一步）→ 确认 → 开 shell + 预填充建议命令（30 天内同工具 `claude --resume <id>`，否则注入 handoff 的新会话命令），回车即走。
+- **任务生命周期**：新开 pane **不创建文件**（不变）。~~双击命名那一刻才创建 `<任务名>.md`~~ **已被 2026-08-29 命名所有权模型修订**：pane 名与任务名分离——双击只改会话态 pane 名（不落盘）；落盘动作 = header 任务 pill 的「新建任务…/绑定」（见第 10 节 2026-08-28/29）。`LIGHTTY_TASK` 已整体移除；「收工」/「注入」只在点击时向 PTY 注入明确指令。不自动启动 agent。默认 surface 的 cwd 由 Ghostty 全局 config 决定；core 请求的新窗口/tab/split 使用 `ghostty_surface_inherited_config`，lightty 不再固定 Home。
+- ~~**恢复流程**：面板选休眠任务 → 新窗口显示 handoff 摘要 → 确认 → 开 shell + 预填充建议命令。~~ **已两次修订**：2026-08-24 去预填；2026-08-29 定稿为任务行锚定气泡 + 三目的地（当前 Tab 分屏 / 新 Tab / 新窗口），运行中任务另有「已打开」跳转节（见第 10 节 2026-08-28/29）。
 - **明确不做**：常驻侧栏（退路：若"一键可见"实测不够，再考虑 40px 可收合状态 rail）、内置浏览器、SSH 管理。
 - **已知风险**：呼出面板要求养成热键习惯，环境信号是其兑底；pane header 的高度/密度要实测（太高吃行数、太低看不清）。
 
@@ -224,6 +224,7 @@ AppKit ↔ libghostty 的实现源是 vendored `SurfaceView_AppKit.swift` / `NSE
 - **最小重建集**：本文件 + `docs/`（libghostty-embedding.md、task-format.md）+ `scripts/` + `Package.swift`。只有 HANDOVER 单文件可做"设计级重建"（功能等价），但会重付 docs 里记录的全部实测坑成本（链接符号清单、SwiftPM 空链接、ContentLayer 裁剪等）。代码与 git 历史不可由文档再生，属预期。
 - **vendor 钉点**（shallow clone 无历史，凭此 SHA 重取）：
 	- ghostty：`5851d98615187d85052e41042bcf66e0ccec11d4`（main，1.3.2-dev，2026-08-22 取）
+	- ⚠️ **2026-08-29 起 vendor 带本地补丁分支 `lightty-patches`**（基于上述 SHA，commit `8df6a31`，仅一个 commit）：新增 C API `ghostty_surface_set_prompt_clear_on_resize(surface, bool)`——false 时 resize 跳过 `clearPromptForRedraw`（清空活跃 prompt 等 shell SIGWINCH 重绘），供侧栏动画逐帧 reflow 防闪烁。改动 4 文件：`include/ghostty.h`、`src/apprt/embedded.zig`、`src/Surface.zig`、`src/termio/Termio.zig`（原子标志挂 Termio，主线程写/IO 线程读）。**升级 vendor = 新基线上 rebase 这一个 commit**；重建机器需在浅克隆后手工重放该补丁（分支只在本地）。
 	- ⚠️ **改钉 v1.3.1 stable 已尝试并放弃**（2026-08-25）：v1.3.1 `requireZig` 钉死 Zig 0.15.2，而 0.15.2 链不动 macOS 26.5 SDK（TBD 格式过新，`zig cc` hello world 即失败，0.15.x 无修复版）→ 本机不可构建。当前 main 快照含 1.3.1 全部内容 + 后续修复，即本机可构建的最新 libghostty。下次升级直接在 main 线上前移快照。过程中另录得两个坑备将来用：v1.3.1 有 `git+https` 传递依赖（vaxis→uucode）不在 build.zig.zon.txt 清单、换 zig 版本后依赖缓存需用对应版本 `zig fetch` 重灌 + 清 `.zig-cache`。
 	- cmux：`e77660de978ed76b108ebf5c15fc3295f2b7ff62`（仅参考用）
 	- 重取命令：`git fetch --depth 1 origin <sha>`（GitHub 支持按任意 SHA 取，见进展日志 libvaxis 条目同法）
@@ -286,7 +287,7 @@ AppKit ↔ libghostty 的实现源是 vendored `SurfaceView_AppKit.swift` / `NSE
 - **环境净化**：lightty 被别的 agent/终端拉起时会继承 `CLAUDE_CODE_CHILD_SESSION` 等会话标记并传给 pane shell（pane 里 claude 被当嵌套子会话、关 transcript）。main.swift 启动时统一 unsetenv，对齐 Finder 启动的干净登录环境。
 - **配置边界纠正**：不得存在 lightty terminal 覆盖层。libghostty 只加载 Ghostty 全局 default/recursive config，finalize 后原样用于 app/surface；lightty 的视觉差异只能画在 terminal 之外的壳层。
 
-### 2026-08-24 当前状态快照（接手从这里开始）
+### 2026-08-24 当前状态快照（历史快照；接手请以 2026-08-28/29 节为准）
 
 **仓库**：github.com/isToThyMoon/lightty（public，main，真源）；本机 `~/project/one-thousand-plan/lightty`。构建：`vendor/ghostty` 按第 9 节 SHA 取 → `zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast` → `scripts/sync-ghosttykit.sh` → `swift build`；`swift test` 48 全绿。
 
@@ -324,6 +325,36 @@ AppKit ↔ libghostty 的实现源是 vendored `SurfaceView_AppKit.swift` / `NSE
 - **terminal adapter 与交互回归完成**：按 vendored Ghostty macOS 壳补齐键盘/IME/鼠标/focus/scale/display/occlusion 桥，core 新建 surface 走 inherited config，菜单与标题栏终端按钮只发 core binding action。实窗验证 Cmd+K 清屏后只剩一个新 prompt；`new_tab` 创建/切换 macOS 原生 tab，`goto_tab` 在原生 tab group 中导航，`new_split` 才创建 pane；新 split 继承 `/tmp` cwd；Cmd+F 搜索可开关；split zoom 可放大/还原；标题栏不再重复系统标题。`scripts/check-terminal-adapter-parity.sh` 固化该边界。
 - **任务搜索聚焦态与对齐修复**：borderless `NSSearchFieldCell` 的原生 search button/text rect 会重叠，导致放大镜压住「搜索任务」。改为独立 SF Symbol 图标 + 移除 cell 内建 search button，文字区从图标右侧 6pt 起；图标点击穿透到容器并继续聚焦输入框。由于 13pt `magnifyingglass` 的可见笔画在 image frame 内约下沉 2pt，再给图标增加 `-2pt` optical offset。真实窗口已复验空态 placeholder、输入文字和图标点击：主灰度阈值下空态中心差约 `0.4–0.8px`、输入态约 `0.2–0.4px`。
 - **原生 tab / docked 侧栏 / pane 拖拽定稿**：标题栏「+」只发 core `new_tab`，进入 macOS 原生 tab group 后隐藏自绘「+」并使用系统 tab-bar「+」；分屏按钮只发 `new_split:right`，两者不再同效。hover 侧栏仍覆盖预览，click 钉住后给 terminal 增加 300pt leading inset。pane header 以 UUID pasteboard 发起 move drag，目标 pane 按最近边缘显示上/下/左/右落点；drop 时从原 split tree detach 后插入同一个 `PaneView`，保留 PTY、scrollback 与任务绑定，也支持跨窗口重组。
+
+### 2026-08-28/29 大版本演进：闪烁根治（内核补丁）、明暗主题、自绘 tab、命名模型定稿（接手从这里开始）
+
+**A. 侧栏动画闪烁根治（首次改 ghostty 内核）**
+- 现象：侧栏推移动画中**活跃 prompt 行**每帧闪烁，历史输出不闪（官方 Ghostty.app 拖窗宽同现象，用户实测确认）。根因在 core：`Terminal.resize` 每次调 `clearPromptForRedraw`（`shell_redraws_prompt` 默认 true，OSC 133 语义）——清空活跃 prompt 整块等 shell 收 SIGWINCH 重绘；120Hz 逐帧 resize = 每秒 ~40 次"清空→重绘"。壳层侧方案全部试过并否决：节流（仍闪数次）、动画期抑制 resize + 结束一次性（结束仍闪一下且内容被裁切）、occlusion 遮挡 hack（引发选中渲染异常）。
+- 定案：内核加开关（见第 9 节 `lightty-patches` 钉点）。壳层 `TerminalSurfaceView.setPromptClearOnResize` 桥接，`animateSidebarLayout` 动画期间置 false——逐帧真实 reflow、prompt 从始至终不闪。**内核补丁后构建链**：`zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast` → `scripts/sync-ghosttykit.sh` → `swift build`（Frameworks 被 gitignore，换机必须重出）。
+- 连带修复三个交互 bug：① preview→pinned 点击接管动画会顶掉 hover 滑入 timer，sidebar leading 冻在中途值成缝隙——新动画把 leading 一并推到 0；② 关闭动画中点按钮 `showSidebar` 被 guard 拒但 presentation 已改，状态失同步吞下一次点击——被拒时回滚；③ **必现拖选 bug**：焦点切换时 event monitor 吞 mouseDown 后，配对 mouseUp 经 responder chain 送不达，`suppressNextLeftMouseUp` 永不复位 → core 认为鼠标一直按住 → 点击即拖选。monitor 补监听 `.leftMouseUp` 在监听层吞孤立 up 并复位。
+
+**B. 明暗主题全链路**
+- 壳层：`ShellStyle` 全部色值改 `NSColor(name:dynamicProvider:)` 动态色（浅=Codex 参考不变，深=配套暖灰紫 `#26242B` 系）。**关键机制**：`layer.backgroundColor` 是 CGColor 快照不随外观自动更新，所有持有点必须在 `viewDidChangeEffectiveAppearance` 用 `shellResolvedCGColor(for:)` 重解析（`ShellBackdropView` 为封装好的自动重解析背景块）。移除全部 `NSAppearance(named:.aqua)` pin；标题栏与侧栏同色一体 chrome，底线/右缘线删除。
+- terminal 桥（此前完全缺失，故终端不随系统切换）：KVO `NSApplication.effectiveAppearance`（含 `.initial`）→ `ghostty_app_set_color_scheme`；surface 级 `viewDidChangeEffectiveAppearance` → `ghostty_surface_set_color_scheme`。config 需写 `theme = light:X,dark:Y` 才会跟随。
+- pane chrome 跟随：主题切换时 core 发 **per-surface CONFIG_CHANGE**（携带条件主题解析后的新 config；指针仅回调内有效，必须同步读值再 async）——驱动 pane header 重着色 + 非透明窗口底色同步；app 级 CONFIG_CHANGE 替换全局 configValues（启动即先于 surface 到达，暗色启动 header 首帧即暗）。COLOR_CHANGE 只承担 OSC 逐色修改。
+
+**C. feat!: 弃用原生 tab group，窗口内自绘 tab（概念模型定稿）**
+- 层级定稿：**window**（NSWindow：1 侧栏 + 1 tab 条 + N tab）→ **tab = 工作区**（`TerminalTab`，窗口内 pane 树容器，**不是 NSWindow**）→ **pane**（split 叶子，任务绑定点）。弃用理由：原生 tab 本质是多 NSWindow 结组（每 tab 完整窗口 + 各自标题栏/侧栏状态），tab bar 为系统 chrome 横跨全窗宽不可缩进——与一窗一侧栏结构冲突（曾表现为 tab 栏盖侧栏、切 tab"飞走"回不来）。`tabbingMode = .disallowed`。
+- 结构：`rootContainer → mainArea（随侧栏钉住整体推移，tab 条宽度天然 = 主体区）→ [TabStripView, contentHost → N 个 tab 容器]`。切 tab 只翻 `isHidden`（surface/PTY/scrollback 保留）；后台 tab 经 `viewDidHide` + `isHiddenOrHasHiddenAncestor` 报遮挡，渲染线程停画。`TabStripView.update` 必须 diff（`windowDidUpdate` 每轮事件循环触发，全量重建曾致 tab 条闪烁 + 关闭键失灵）。
+- 动作重写：`new_tab` 同窗追加；`goto/move/close_tab(this|other|right)` 窗内数组操作；tab 内最后 pane 关→关 tab，最后 tab→关窗；拖空 tab `pruneEmptyTabs`；INITIAL_SIZE 门槛改 `tabCount == 1`。`reveal(pane:)` 跨 tab 聚焦（先切所在 tab——隐藏视图无法成为 first responder）。
+- 失去的系统能力（自绘可补，暂缓）：tab 撕出成窗/合并手势、系统 tab 总览。
+
+**D. feat!: 命名所有权模型定稿（四层各自持名）**
+- **Task**（handoff md 文件名）= 唯一持久层；重命名唯一入口 `AppState.renameTask`（移文件 + 同步所有绑定 pane 的指向与 pill + 广播）。**Pane 名** = 会话态标签（默认「终端 N」编号，双击直改，不落盘不确认）。**工作区名** = 会话态（默认「工作区 N」，双击 tab 标签改；OSC `set_tab_title` 忽略——名字归用户）。**window.title** = 活跃工作区名派生（只喂 cmd-tab/Mission Control）。
+- header 双段式：`[状态点] pane名 [任务pill]`——pill 为 `doc.text` 图标 + 任务名的描边 tag（未绑定显示「绑定任务」入口，前景色淡化）。pill 菜单：任务列表（勾选当前/标注运行中，**允许多 pane 绑同一任务**）、新建任务…、重命名任务…、解除绑定。cmd+D 新 pane 不继承任务（旧"分屏继承目标任务"作废）；「收工」未绑定时弹新建任务。状态点：灰=未绑定、绿=已绑定、橙=stuck。
+- `NameEditorPopover`：命名场景统一锚定气泡（标题+输入框+确认，回车提交），全线无 NSAlert。
+
+**E. 侧栏交互矩阵定稿：单击调度、双击快跳、⋯ 管理**
+- **单击任务行** → 锚定气泡：任务名 + handoff 摘要 + 「已打开」节（每绑定 pane 一行「跳转 · 工作区 › pane名」，点击跨窗/跨 tab reveal）+ 「打开到/再开一个」节（当前 Tab 分屏 / 新 Tab / 新窗口，纵向等宽行、无主次态、hover 提亮）。**双击/Enter** = 运行中快捷跳最近 pane。**行尾 ⋯**（原 chevron.right，语义与跳转分开）= 管理菜单：重命名任务…、状态三态勾选、打开 handoff 文档（系统默认编辑器）、在 Finder 中显示、删除任务（移废纸篓 + 绑定 pane 自动解绑）。
+- **详情页整体移除**（约 250 行）：300pt 侧栏内嵌 md 编辑器越位——handoff 是 agent 读写的文档，人工精修交给系统编辑器；脏编辑钉住逻辑随之消失（`isDirty` 恒 false 保留兼容）。
+- 实时刷新：`lighttyTasksDidChange` 通知（创建/改名/绑定/解绑/状态/删除后广播，侧栏订阅 reload），TaskFolderWatcher 未接的 UI 内场景由此覆盖；**外部改文件仍不刷新**（欠账不变）。
+
+**本轮欠账增减**：+ tab 撕出/合并手势（如需）；+ vendor 升级需 rebase `lightty-patches`；- 恢复流程 30 天 resume 快捷方式的交互空缺（气泡三目的地已覆盖主路径）；其余同 2026-08-24 欠账清单（TaskFolderWatcher 外部变更、reload_config 热刷新、menu bar/通知、打包分发）。
 
 ---
 
