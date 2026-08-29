@@ -63,8 +63,15 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         set { injectButton.isEnabled = newValue }
     }
 
-    /// 任务已落盘（有名字）时置 true：双击改名先弹确认，防误触改动任务文件名。
-    var confirmBeforeRename = false
+    /// 任务 pill 显示的绑定任务名；nil = 未绑定（显示「绑定任务」入口）。
+    /// pane 名与任务名分离：左段 pane 名随手改不落盘，此 pill 才代表持久任务。
+    func setTaskName(_ name: String?) {
+        boundTaskName = name
+        updatePillTitle()
+    }
+
+    private var boundTaskName: String?
+    var titleOfBoundTask: String? { boundTaskName }
 
     /// core 通过 GHOSTTY_ACTION_COLOR_CHANGE 报告的当前 terminal 颜色
     /// （主题明暗切换 / OSC 修改都会触发）；启动值来自全局 config。
@@ -103,17 +110,20 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         injectButton.target = self
         injectButton.action = #selector(injectTapped)
 
-        // 任务名右侧的小箭头：弹出已有任务列表，选中即绑定当前 pane。
+        // 任务 pill：显示绑定任务名（未绑定显示入口文案），点击弹任务菜单。
         bindButton.image = NSImage(
-            systemSymbolName: "chevron.down", accessibilityDescription: "绑定任务")
+            systemSymbolName: "chevron.down", accessibilityDescription: "任务")
         bindButton.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 8.5, weight: .semibold)
+            pointSize: 7.5, weight: .semibold)
         bindButton.isBordered = false
-        bindButton.imagePosition = .imageOnly
+        bindButton.imagePosition = .imageTrailing
         bindButton.focusRingType = .none
         bindButton.setButtonType(.momentaryChange)
         bindButton.target = self
         bindButton.action = #selector(taskPickerTapped)
+        bindButton.wantsLayer = true
+        bindButton.layer?.cornerRadius = 5
+        updatePillTitle()
 
         for v in [dotView, nameLabel, nameEditor, bindButton, injectButton, finishButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -132,10 +142,9 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -28),
 
-            bindButton.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 2),
+            bindButton.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 12),
             bindButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            bindButton.widthAnchor.constraint(equalToConstant: 16),
-            bindButton.heightAnchor.constraint(equalToConstant: 16),
+            bindButton.heightAnchor.constraint(equalToConstant: 17),
 
             // 与 label 同字体同 cell 内边距，基线对齐 → 进出编辑态文字零位移
             nameEditor.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
@@ -161,6 +170,12 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         nameLabel.textColor = terminalForeground
         nameEditor.textColor = terminalForeground
         bindButton.contentTintColor = terminalForeground.withAlphaComponent(0.55)
+        bindButton.layer?.backgroundColor =
+            terminalForeground.withAlphaComponent(0.07).cgColor
+        bindButton.layer?.borderColor =
+            terminalForeground.withAlphaComponent(0.18).cgColor
+        bindButton.layer?.borderWidth = 0.5
+        updatePillTitle()
         nameEditor.layer?.backgroundColor =
             terminalForeground.withAlphaComponent(0.12).cgColor
         finishButton.terminalForeground = terminalForeground
@@ -198,8 +213,9 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // pane 名是随手改的会话态标签（不落盘），双击直接编辑，无需确认。
         if event.clickCount == 2 {
-            requestRename()
+            beginRename()
             return
         }
 
@@ -292,22 +308,31 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         return image
     }
 
-    /// 双击入口：已落盘任务先确认再进入编辑；未命名直接编辑。
-    /// （finish 的"未命名先取名"路径仍直接调 beginRename，不受确认约束。）
-    private func requestRename() {
-        guard confirmBeforeRename, let window else {
-            beginRename()
-            return
+    /// pill 文案：文档图标 + 绑定任务名（或「绑定任务」入口）。
+    /// 图标让 pill 一眼读出"挂载的 handoff 文档"，与左侧 pane 名区隔。
+    /// 内边距用空格实现：段落缩进会挤压 NSButton 的 intrinsic 宽度导致截断。
+    private func updatePillTitle() {
+        let bound = boundTaskName != nil
+        let color = terminalForeground.withAlphaComponent(bound ? 0.7 : 0.45)
+        let result = NSMutableAttributedString()
+
+        if let icon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)?
+            .withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 8, weight: .medium)
+                    .applying(.init(paletteColors: [color]))) {
+            let attachment = NSTextAttachment()
+            attachment.image = icon
+            attachment.bounds = NSRect(x: 0, y: -1, width: icon.size.width, height: icon.size.height)
+            result.append(NSAttributedString(string: " "))
+            result.append(NSAttributedString(attachment: attachment))
         }
-        let alert = NSAlert()
-        alert.messageText = "重命名任务「\(title)」？"
-        alert.informativeText = "任务已落盘，重命名会同步修改任务文件名。"
-        alert.addButton(withTitle: "重命名")
-        alert.addButton(withTitle: "取消")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.beginRename()
-        }
+        result.append(NSAttributedString(
+            string: " \(boundTaskName ?? "绑定任务") ",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+                .foregroundColor: color,
+            ]))
+        bindButton.attributedTitle = result
     }
 
     func beginRename() {
