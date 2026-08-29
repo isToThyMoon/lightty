@@ -524,13 +524,7 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_SET_TAB_TITLE:
-            guard let (controller, _) = locate() else { return false }
-            let title = copiedString(
-                action.action.set_tab_title.title,
-                length: UInt(strlen(action.action.set_tab_title.title)))
-            DispatchQueue.main.async {
-                controller.setActiveTabTitle(title ?? "lightty")
-            }
+            // tab = 工作区，名字归用户所有（双击标签改）；OSC 不允许覆盖。
             return true
 
         case GHOSTTY_ACTION_PROMPT_TITLE:

@@ -9,8 +9,8 @@ final class TerminalTab {
     let container = NSView()
     /// pane 树根（container 的唯一 subview）：单 pane 或嵌套 NSSplitView。
     fileprivate(set) var rootView: NSView?
-    /// tab 标签标题（取该 tab 内最近活跃 pane 的任务名）。
-    var title = "未命名"
+    /// 工作区名：会话态，双击 tab 标签改，不从 pane/任务派生、不落盘。
+    var title = "工作区"
 
     init() {
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -218,13 +218,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateWindowTitle(for pane: PaneView?) {
-        guard let pane, let window else { return }
-        if let hostTab = tab(hosting: pane) { hostTab.title = pane.header.title }
-        refreshTabStrip()
-        // 系统标题不显示（任务名在 pane header / tab 条）；window.title 只喂给
-        // cmd-tab、Mission Control 等系统 UI。
+        guard let window else { return }
+        // tab 名 = 工作区名（用户所有），不再从 pane/任务派生。
+        // 系统标题不显示；window.title 只喂 cmd-tab、Mission Control 等系统 UI。
+        _ = pane
         window.titleVisibility = .hidden
-        window.title = activeTab?.title ?? pane.header.title
+        window.title = activeTab?.title ?? "lightty"
     }
 
     private func updateSidebarButtonState() {
@@ -310,6 +309,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         tabStrip.onSelect = { [weak self] index in self?.selectTab(at: index) }
         tabStrip.onClose = { [weak self] index in self?.closeTab(at: index) }
+        tabStrip.onRename = { [weak self] index, name in
+            self?.renameTab(at: index, to: name)
+        }
         tabStrip.onNewTab = { [weak self] in
             self?.activePane?.terminal.performBindingAction("new_tab")
         }
@@ -317,11 +319,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - tab 管理
 
-    /// core `new_tab`：当前窗口追加一个 tab（新的 pane 树容器）。
+    /// 工作区默认名计数器（窗口内自增，不落盘）。
+    private var workspaceCounter = 0
+
+    /// core `new_tab`：当前窗口追加一个 tab（工作区 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
         if installPane { install(pane: initialPane) }
         let tab = TerminalTab()
-        tab.title = initialPane.header.title
+        workspaceCounter += 1
+        tab.title = "工作区 \(workspaceCounter)"
         contentHost.addSubview(tab.container)
         NSLayoutConstraint.activate([
             tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -418,11 +424,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         refreshTabStrip()
     }
 
-    /// core set_tab_title（OSC 等）：覆盖活跃 tab 标题。
-    func setActiveTabTitle(_ title: String) {
-        activeTab?.title = title
+    /// 用户重命名工作区（tab 标签双击）。OSC set_tab_title 已忽略：工作区名归用户。
+    func renameTab(at index: Int, to title: String) {
+        guard tabs.indices.contains(index) else { return }
+        tabs[index].title = title
         refreshTabStrip()
-        window?.title = title
+        if index == activeTabIndex { window?.title = title }
+    }
+
+    /// 工作区名查询（侧栏气泡"跳转"行显示 pane 位置用）。
+    func workspaceName(of pane: PaneView) -> String? {
+        tab(hosting: pane)?.title
     }
 
     private func refreshTabStrip() {
