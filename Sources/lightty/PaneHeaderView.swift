@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyKit
 
 /// 每 pane 一条 24pt 细 header：状态点 + 任务名 + 收工/注入按钮，双击改名。
 /// 它紧贴 terminal surface，底色/文字仍取 Ghostty config 的
@@ -36,9 +37,13 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     private var isDraggingPane = false
 
+    /// 点击弹任务选择菜单（anchor 为按钮本身）；绑定动作由 PaneView 执行。
+    var onTaskPickerRequested: ((NSView) -> Void)?
+
     private let dotView = NSView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let nameEditor = NSTextField()
+    private let bindButton = NSButton()
     private let finishButton = ShellTextButton(
         "收工", palette: .terminal, target: nil, action: nil)
     private let injectButton = ShellTextButton(
@@ -58,21 +63,27 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         set { injectButton.isEnabled = newValue }
     }
 
+    /// 任务已落盘（有名字）时置 true：双击改名先弹确认，防误触改动任务文件名。
+    var confirmBeforeRename = false
+
+    /// core 通过 GHOSTTY_ACTION_COLOR_CHANGE 报告的当前 terminal 颜色
+    /// （主题明暗切换 / OSC 修改都会触发）；启动值来自全局 config。
+    private var terminalBackground: NSColor
+    private var terminalForeground: NSColor
+
     init() {
+        let cfg = GhosttyRuntime.shared.configValues
+        terminalBackground = cfg.backgroundColor
+        terminalForeground = cfg.foregroundColor
         super.init(frame: .zero)
         clipsToBounds = true
         wantsLayer = true
-
-        let cfg = GhosttyRuntime.shared.configValues
-        layer?.backgroundColor = cfg.backgroundColor
-            .withAlphaComponent(cfg.backgroundOpacity).cgColor
 
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3.5
         dotView.layer?.backgroundColor = dot.color.cgColor
 
         nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        nameLabel.textColor = cfg.foregroundColor
         nameLabel.lineBreakMode = .byTruncatingTail
 
         // 编辑器贴 header 样式：无边框、无焦点环，前景色随配置，底色用前景色淡化
@@ -80,20 +91,31 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         nameEditor.isHidden = true
         nameEditor.isBordered = false
         nameEditor.drawsBackground = false
-        nameEditor.textColor = cfg.foregroundColor
         nameEditor.focusRingType = .none
         nameEditor.wantsLayer = true
-        nameEditor.layer?.backgroundColor = cfg.foregroundColor.withAlphaComponent(0.12).cgColor
         nameEditor.layer?.cornerRadius = 3
         nameEditor.delegate = self
         (nameEditor.cell as? NSTextFieldCell)?.usesSingleLineMode = true
+        applyTerminalColors()
 
         finishButton.target = self
         finishButton.action = #selector(finishTapped)
         injectButton.target = self
         injectButton.action = #selector(injectTapped)
 
-        for v in [dotView, nameLabel, nameEditor, injectButton, finishButton] {
+        // 任务名右侧的小箭头：弹出已有任务列表，选中即绑定当前 pane。
+        bindButton.image = NSImage(
+            systemSymbolName: "chevron.down", accessibilityDescription: "绑定任务")
+        bindButton.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 8.5, weight: .semibold)
+        bindButton.isBordered = false
+        bindButton.imagePosition = .imageOnly
+        bindButton.focusRingType = .none
+        bindButton.setButtonType(.momentaryChange)
+        bindButton.target = self
+        bindButton.action = #selector(taskPickerTapped)
+
+        for v in [dotView, nameLabel, nameEditor, bindButton, injectButton, finishButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -108,7 +130,12 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -28),
+
+            bindButton.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 2),
+            bindButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            bindButton.widthAnchor.constraint(equalToConstant: 16),
+            bindButton.heightAnchor.constraint(equalToConstant: 16),
 
             // 与 label 同字体同 cell 内边距，基线对齐 → 进出编辑态文字零位移
             nameEditor.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
@@ -127,12 +154,44 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private func applyTerminalColors() {
+        let opacity = GhosttyRuntime.shared.configValues.backgroundOpacity
+        layer?.backgroundColor = terminalBackground
+            .withAlphaComponent(opacity).cgColor
+        nameLabel.textColor = terminalForeground
+        nameEditor.textColor = terminalForeground
+        bindButton.contentTintColor = terminalForeground.withAlphaComponent(0.55)
+        nameEditor.layer?.backgroundColor =
+            terminalForeground.withAlphaComponent(0.12).cgColor
+        finishButton.terminalForeground = terminalForeground
+        injectButton.terminalForeground = terminalForeground
+    }
+
+    /// per-surface CONFIG_CHANGE（条件主题解析结果）：一次拿到整套前景/背景。
+    func applyTerminalTheme(background: NSColor, foreground: NSColor) {
+        terminalBackground = background
+        terminalForeground = foreground
+        applyTerminalColors()
+    }
+
+    /// core 报告 per-surface 颜色变化（GHOSTTY_ACTION_COLOR_CHANGE）后由
+    /// runtime 转发；header 随 terminal 主题重新着色。
+    func noteTerminalColorChange(kind: ghostty_action_color_kind_e, color: NSColor) {
+        switch kind {
+        case GHOSTTY_ACTION_COLOR_KIND_BACKGROUND: terminalBackground = color
+        case GHOSTTY_ACTION_COLOR_KIND_FOREGROUND: terminalForeground = color
+        default: return
+        }
+        applyTerminalColors()
+    }
+
     /// label/dot/空白都属于可拖 header；编辑器与动作按钮保留自己的点击语义。
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
         if hit === nameEditor || hit.isDescendant(of: nameEditor)
             || hit === finishButton || hit.isDescendant(of: finishButton)
-            || hit === injectButton || hit.isDescendant(of: injectButton) {
+            || hit === injectButton || hit.isDescendant(of: injectButton)
+            || hit === bindButton || hit.isDescendant(of: bindButton) {
             return hit
         }
         return self
@@ -140,7 +199,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            beginRename()
+            requestRename()
             return
         }
 
@@ -233,14 +292,31 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         return image
     }
 
+    /// 双击入口：已落盘任务先确认再进入编辑；未命名直接编辑。
+    /// （finish 的"未命名先取名"路径仍直接调 beginRename，不受确认约束。）
+    private func requestRename() {
+        guard confirmBeforeRename, let window else {
+            beginRename()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "重命名任务「\(title)」？"
+        alert.informativeText = "任务已落盘，重命名会同步修改任务文件名。"
+        alert.addButton(withTitle: "重命名")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.beginRename()
+        }
+    }
+
     func beginRename() {
         // 占位符延续原 title（半透明前景色）：切入编辑态时文字内容与位置都不跳
-        let cfg = GhosttyRuntime.shared.configValues
         nameEditor.placeholderAttributedString = NSAttributedString(
             string: title,
             attributes: [
                 .font: nameLabel.font!,
-                .foregroundColor: cfg.foregroundColor.withAlphaComponent(0.4),
+                .foregroundColor: terminalForeground.withAlphaComponent(0.4),
             ])
         nameEditor.stringValue = title == "未命名" ? "" : title
         nameEditor.isHidden = false
@@ -274,4 +350,5 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     @objc private func finishTapped() { onFinish?() }
     @objc private func injectTapped() { onInject?() }
+    @objc private func taskPickerTapped() { onTaskPickerRequested?(bindButton) }
 }
