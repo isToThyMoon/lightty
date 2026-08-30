@@ -1,7 +1,7 @@
 import AppKit
 
-/// 自绘菜单气泡：替代原生 NSMenu（样式与壳层不符）。与恢复气泡同一视觉
-/// 语言：圆角卡片、整行 hover 提亮、ShellStyle 明暗动态色。
+/// 自绘菜单气泡：替代原生 NSMenu（样式与壳层不符）。用于管理菜单：
+/// 圆角卡片、整行 hover 提亮、ShellStyle 明暗动态色。
 /// 支持：勾选态、尾注（如「运行中」）、分组标题、分隔线、危险项。
 enum ShellMenuPopover {
     struct Item {
@@ -134,6 +134,7 @@ private final class MenuRowButton: NSView {
     init(item: ShellMenuPopover.Item) {
         self.item = item
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.controlCornerRadius
 

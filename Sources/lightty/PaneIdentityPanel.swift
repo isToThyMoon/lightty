@@ -2,7 +2,7 @@ import AppKit
 import LighttyCore
 
 /// 身份胶囊的展开态（灵动岛式）。由 PaneView 驱动岛体背景层（island）形变；
-/// 面板本体与内容全程静止。结构：
+/// 面板本体与第一行身份内容保持静止，背景从其周围形变。结构：
 ///   [●] pane 名（无框编辑，回车提交）
 ///   ─────────────────────────
 ///   [📄] 任务行（点击 → 岛体再向下生长出内联任务选择器）
@@ -33,8 +33,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 任务数据源（每次打开列表时拉取）。
     var taskProvider: (() -> [TaskChoice])?
 
-    /// 岛体背景层：唯一参与形变动画的视图（frame 由 PaneView 驱动）。
-    /// 面板本体与内容全程静止——动画与布局彻底解耦，内容物理上不可能动。
+    /// 岛体背景层：frame 由 PaneView 驱动；第一行身份内容与背景 frame 解耦，
+    /// 展开时状态点和标题保持原位。
     let island = NSView()
     /// 扩展区（分隔线 + 任务行）：初次形变期间渐显/渐隐；第一行不参与。
     let extras = NSView()
@@ -51,6 +51,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let listContainer = NSView()
     private let searchField = NSTextField()
     private let listSeparator = NSView()
+    private let taskScrollView = NSScrollView()
+    private let taskRowsView = FlippedRowsView()
     private var rowViews: [TaskRowView] = []
     private var choices: [TaskChoice] = []
     private var filtered: [TaskChoice] = []
@@ -60,7 +62,11 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private var foreground = NSColor.white
     private var background = NSColor.black
     private var boundTaskName: String?
-    private var dotColor = NSColor.systemGray
+    private var dotColor = ShellStyle.dormantAccent
+    /// agent 活动状态色。一旦设了就压过 `dotColor`——后者由 PaneView 在
+    /// bind/unbind/rename 时传进来，那条路径不知道状态，会把状态色刷掉。
+    private var statusDotColor: NSColor?
+    private var fixedContentLeadingConstraint: NSLayoutConstraint!
 
     var currentIslandHeight: CGFloat {
         listOpen ? Self.baseHeight + listHeight : Self.baseHeight
@@ -83,21 +89,34 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         island.layer?.shadowRadius = 14
         island.layer?.shadowOffset = NSSize(width: 0, height: -4)
         island.layer?.masksToBounds = false
+        // 下层 terminal 声明了整片 I-beam，岛体夺回箭头；可点行/按钮各自装手型
+        HoverCursor.installArrow(on: island)
         addSubview(island)
 
-        fixedContent.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(fixedContent)
+        for v in [fixedContent, extras] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
 
         // —— 第一行：与胶囊逐像素同构（dot 领距 6、间距 6、11pt medium、centerY=10）
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3.5
+
+        // 三个输入框都是单行编辑器：usesSingleLineMode 只管显示截断，编辑态
+        // 还要 wraps=false + isScrollable=true——否则长文本（尤其 CJK）在 20pt
+        // 行高里折成两行，每行都被竖向裁一半，两行都看不清。
+        for field in [nameField, taskEditor, searchField] {
+            guard let cell = field.cell as? NSTextFieldCell else { continue }
+            cell.usesSingleLineMode = true
+            cell.wraps = false
+            cell.isScrollable = true
+        }
 
         nameField.font = .systemFont(ofSize: 11, weight: .medium)
         nameField.isBordered = false
         nameField.drawsBackground = false
         nameField.focusRingType = .none
         nameField.delegate = self
-        (nameField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         // —— 扩展区
         separator.wantsLayer = true
@@ -117,11 +136,12 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskRenameButton.focusRingType = .none
         taskRenameButton.setButtonType(.momentaryChange)
         taskRenameButton.image = NSImage(
-            systemSymbolName: "pencil", accessibilityDescription: "重命名任务")
+            systemSymbolName: "pencil", accessibilityDescription: L("Rename task"))
         taskRenameButton.symbolConfiguration = NSImage.SymbolConfiguration(
             pointSize: 10, weight: .medium)
         taskRenameButton.target = self
         taskRenameButton.action = #selector(beginTaskRename)
+        HoverCursor.installPointingHand(on: taskRenameButton)
 
         taskEditor.font = .systemFont(ofSize: 11)
         taskEditor.isBordered = false
@@ -129,19 +149,29 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskEditor.focusRingType = .none
         taskEditor.isHidden = true
         taskEditor.delegate = self
-        (taskEditor.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         // —— 内联任务选择器（默认隐藏；打开时岛体向下生长露出）
         listContainer.isHidden = true
+        listContainer.wantsLayer = true
+        listContainer.layer?.masksToBounds = true
         listSeparator.wantsLayer = true
         searchField.font = .systemFont(ofSize: 11)
         searchField.isBordered = false
         searchField.drawsBackground = false
         searchField.focusRingType = .none
         searchField.delegate = self
-        (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
-        for v in [dotView, nameField, extras] {
+        taskScrollView.drawsBackground = false
+        taskScrollView.borderType = .noBorder
+        taskScrollView.hasHorizontalScroller = false
+        taskScrollView.hasVerticalScroller = true
+        taskScrollView.autohidesScrollers = true
+        taskScrollView.scrollerStyle = .overlay
+        taskScrollView.contentView.drawsBackground = false
+        taskRowsView.translatesAutoresizingMaskIntoConstraints = false
+        taskScrollView.documentView = taskRowsView
+
+        for v in [dotView, nameField] {
             v.translatesAutoresizingMaskIntoConstraints = false
             fixedContent.addSubview(v)
         }
@@ -151,15 +181,24 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
         listContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listContainer)
-        for v in [listSeparator, searchField] {
+        for v in [listSeparator, searchField, taskScrollView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listContainer.addSubview(v)
         }
 
+        let listHeightConstraint = listContainer.heightAnchor.constraint(
+            equalToConstant: listHeight)
+        self.listHeightConstraint = listHeightConstraint
+        let rowsHeightConstraint = taskRowsView.heightAnchor.constraint(equalToConstant: 0)
+        self.rowsHeightConstraint = rowsHeightConstraint
+
+        let fixedContentLeadingConstraint = fixedContent.leadingAnchor.constraint(
+            equalTo: leadingAnchor)
+        self.fixedContentLeadingConstraint = fixedContentLeadingConstraint
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: topAnchor),
-            fixedContent.leadingAnchor.constraint(equalTo: leadingAnchor),
-            fixedContent.widthAnchor.constraint(equalToConstant: Self.panelWidth),
+            fixedContentLeadingConstraint,
+            fixedContent.trailingAnchor.constraint(equalTo: trailingAnchor),
             fixedContent.heightAnchor.constraint(equalToConstant: Self.baseHeight),
 
             dotView.leadingAnchor.constraint(equalTo: fixedContent.leadingAnchor, constant: 6),
@@ -173,8 +212,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 equalTo: fixedContent.trailingAnchor, constant: -10),
 
             extras.topAnchor.constraint(equalTo: fixedContent.topAnchor, constant: 24),
-            extras.leadingAnchor.constraint(equalTo: fixedContent.leadingAnchor),
-            extras.trailingAnchor.constraint(equalTo: fixedContent.trailingAnchor),
+            extras.leadingAnchor.constraint(equalTo: leadingAnchor),
+            extras.trailingAnchor.constraint(equalTo: trailingAnchor),
             extras.bottomAnchor.constraint(equalTo: fixedContent.bottomAnchor),
 
             separator.topAnchor.constraint(equalTo: extras.topAnchor),
@@ -203,6 +242,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             listContainer.topAnchor.constraint(equalTo: fixedContent.bottomAnchor),
             listContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             listContainer.widthAnchor.constraint(equalToConstant: Self.panelWidth),
+            listHeightConstraint,
 
             listSeparator.topAnchor.constraint(equalTo: listContainer.topAnchor),
             listSeparator.leadingAnchor.constraint(
@@ -217,10 +257,33 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             searchField.trailingAnchor.constraint(
                 equalTo: listContainer.trailingAnchor, constant: -12),
             searchField.heightAnchor.constraint(equalToConstant: 20),
+
+            taskScrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 7),
+            taskScrollView.leadingAnchor.constraint(
+                equalTo: listContainer.leadingAnchor, constant: 6),
+            taskScrollView.trailingAnchor.constraint(
+                equalTo: listContainer.trailingAnchor, constant: -6),
+            taskScrollView.bottomAnchor.constraint(
+                equalTo: listContainer.bottomAnchor, constant: -6),
+
+            taskRowsView.topAnchor.constraint(
+                equalTo: taskScrollView.contentView.topAnchor),
+            taskRowsView.leadingAnchor.constraint(
+                equalTo: taskScrollView.contentView.leadingAnchor),
+            taskRowsView.widthAnchor.constraint(
+                equalTo: taskScrollView.contentView.widthAnchor),
+            rowsHeightConstraint,
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 第一行始终锚在 header 胶囊原位；只有目标胶囊在面板打开期间移动时（例如
+    /// 侧栏开合），收起阶段才更新这个锚点以完成无缝交接。
+    func setIdentityAnchorOffset(_ offset: CGFloat) {
+        fixedContentLeadingConstraint.constant = offset
+        needsLayout = true
+    }
 
     // MARK: - 数据与主题
 
@@ -232,21 +295,37 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         applyColors()
     }
 
+    /// 由 `PaneHeaderView` 在状态变化时直接推入（面板挂在窗口 contentView 上，
+    /// 不在 pane 子树里，header 用「胶囊隐身」这个标记定位到展开中的面板）。
+    /// `nil` = 回到绑定态静态配色。
+    func applyStatusDot(_ color: NSColor?) {
+        guard statusDotColor != color else { return }
+        statusDotColor = color
+        applyColors()
+    }
+
     func applyTerminalTheme(background: NSColor, foreground: NSColor) {
         self.background = background
         self.foreground = foreground
         applyColors()
     }
 
+    /// 状态色是 shellDynamic，layer 上的 CGColor 只是快照，明暗切换必须重解析。
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
     private func applyColors() {
         island.layer?.backgroundColor = background.cgColor
         island.layer?.borderColor = foreground.withAlphaComponent(0.14).cgColor
-        dotView.layer?.backgroundColor = dotColor.cgColor
+        dotView.layer?.backgroundColor = (statusDotColor ?? dotColor)
+            .shellResolvedCGColor(for: effectiveAppearance)
         separator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         listSeparator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         nameField.textColor = foreground
         nameField.placeholderAttributedString = NSAttributedString(
-            string: "命名这个终端",
+            string: L("Name this terminal"),
             attributes: [
                 .font: nameField.font ?? NSFont.systemFont(ofSize: 11),
                 .foregroundColor: foreground.withAlphaComponent(0.3),
@@ -254,7 +333,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskEditor.textColor = foreground
         searchField.textColor = foreground
         searchField.placeholderAttributedString = NSAttributedString(
-            string: "搜索，或输入新任务名后回车",
+            string: L("Search, or type a new task name and press Return"),
             attributes: [
                 .font: searchField.font ?? NSFont.systemFont(ofSize: 11),
                 .foregroundColor: foreground.withAlphaComponent(0.3),
@@ -297,7 +376,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             title.append(doc)
         }
         title.append(NSAttributedString(
-            string: "  \(boundTaskName ?? "绑定任务")", attributes: attributes))
+            string: "  \(boundTaskName ?? L("Bind task"))", attributes: attributes))
         taskButton.attributedTitle = title
     }
 
@@ -345,11 +424,11 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         rowViews.forEach { $0.removeFromSuperview() }
         rowViews = []
 
-        var previous: NSView = searchField
+        var previous: NSView?
         for (index, choice) in filtered.enumerated() {
             let row = TaskRowView(
                 title: choice.name,
-                detail: choice.running ? "活跃" : nil,
+                detail: choice.running ? L("Active") : nil,
                 checked: choice.current,
                 destructive: false,
                 foreground: foreground)
@@ -363,8 +442,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
         if filtered.isEmpty, !query.isEmpty {
             let row = TaskRowView(
-                title: "新建任务「\(query)」",
-                detail: "回车", checked: false, destructive: false,
+                title: L("New task “%@”", query),
+                detail: L("Return"), checked: false, destructive: false,
                 foreground: foreground)
             row.onTap = { [weak self] in self?.createFromQuery() }
             let rowIndex = rowViews.count
@@ -376,7 +455,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         // 已绑定：底部解绑行
         if boundTaskName != nil {
             let row = TaskRowView(
-                title: "解除绑定", detail: nil, checked: false, destructive: true,
+                title: L("Unbind"), detail: nil, checked: false, destructive: true,
                 foreground: foreground)
             row.onTap = { [weak self] in
                 self?.onUnbindTask?()
@@ -387,40 +466,41 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             attach(row: row, below: previous)
             rowViews.append(row)
         }
-        // ⚠️ 容器必须有确定高度：底边钉到最后一行（无行时钉搜索框）。
-        // 否则高度解析为 0，行视图溢出可见（NSView 不裁剪）但 hitTest 不
-        // 进入 bounds 外的子树——看得见点不着。存储约束避免跨次重建累积。
-        listBottomConstraint?.isActive = false
-        let bottomAnchorView: NSView = rowViews.last ?? searchField
-        let bottom = bottomAnchorView.bottomAnchor.constraint(
-            equalTo: listContainer.bottomAnchor, constant: -6)
-        bottom.isActive = true
-        listBottomConstraint = bottom
+        // 岛体最多展示七行；更多任务留在原生滚动视口内，不能继续撑高透明面板。
+        rowsHeightConstraint?.constant = max(CGFloat(rowViews.count) * 26 - 2, 0)
+        listHeightConstraint?.constant = listHeight
 
         setHighlight(0)
         if listOpen { onIslandHeightChange?(currentIslandHeight) }
         window?.invalidateCursorRects(for: self)
     }
 
-    private var listBottomConstraint: NSLayoutConstraint?
+    private var listHeightConstraint: NSLayoutConstraint?
+    private var rowsHeightConstraint: NSLayoutConstraint?
 
-    private func attach(row: TaskRowView, below previous: NSView) {
+    private func attach(row: TaskRowView, below previous: NSView?) {
         row.translatesAutoresizingMaskIntoConstraints = false
-        listContainer.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.topAnchor.constraint(
-                equalTo: previous.bottomAnchor,
-                constant: previous === searchField ? 7 : 2),
-            row.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor, constant: 6),
-            row.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor, constant: -6),
+        taskRowsView.addSubview(row)
+        var constraints = [
+            row.leadingAnchor.constraint(equalTo: taskRowsView.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: taskRowsView.trailingAnchor),
             row.heightAnchor.constraint(equalToConstant: 24),
-        ])
+        ]
+        if let previous {
+            constraints.append(row.topAnchor.constraint(equalTo: previous.bottomAnchor, constant: 2))
+        } else {
+            constraints.append(row.topAnchor.constraint(equalTo: taskRowsView.topAnchor))
+        }
+        NSLayoutConstraint.activate(constraints)
     }
 
     private func setHighlight(_ index: Int) {
         highlighted = index
         for (i, row) in rowViews.enumerated() {
             row.highlighted = i == index
+        }
+        if rowViews.indices.contains(index) {
+            rowViews[index].scrollToVisible(rowViews[index].bounds)
         }
     }
 
@@ -463,6 +543,17 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     func focusNameField() {
         window?.makeFirstResponder(nameField)
         nameField.currentEditor()?.selectAll(nil)
+    }
+
+    /// PaneView 的展开/收起动画只通过这个入口控制可消失内容。
+    func setExpandedContentAlpha(_ alpha: CGFloat, animated: Bool) {
+        if animated {
+            extras.animator().alphaValue = alpha
+            listContainer.animator().alphaValue = alpha
+        } else {
+            extras.alphaValue = alpha
+            listContainer.alphaValue = alpha
+        }
     }
 
     @objc private func beginTaskRename() {
@@ -537,19 +628,11 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
     }
 
-    // MARK: - 光标
+}
 
-    /// 下层 terminal 用 cursor rect 声明了整片 I-beam；岛体必须登记自己的
-    /// 光标矩形覆盖它：整体箭头，可点区域手型（输入框由 NSTextField 自带 I-beam）。
-    override func resetCursorRects() {
-        addCursorRect(island.frame, cursor: .arrow)
-        var clickables: [NSView] = rowViews
-        if !taskButton.isHidden { clickables.append(taskButton) }
-        if !taskRenameButton.isHidden { clickables.append(taskRenameButton) }
-        for view in clickables {
-            addCursorRect(view.convert(view.bounds, to: self), cursor: .pointingHand)
-        }
-    }
+/// NSScrollView 的文档坐标从上向下增长，任务排序与键盘移动因此保持直观。
+private final class FlippedRowsView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// 内联任务选择器的行（terminal palette）：高亮/勾选/尾注。
@@ -565,6 +648,7 @@ private final class TaskRowView: NSView {
          foreground: NSColor) {
         self.rowForeground = foreground
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = 5
 
@@ -634,6 +718,14 @@ private final class HoverRowButton: NSButton {
     var hoverFill: NSColor = .clear
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
+    private var cursorInstalled = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard !cursorInstalled else { return }
+        cursorInstalled = true
+        HoverCursor.installPointingHand(on: self)
+    }
 
     private func applyFill() {
         layer?.backgroundColor = hovered ? hoverFill.cgColor : NSColor.clear.cgColor

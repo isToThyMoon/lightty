@@ -7,14 +7,14 @@ final class PaneSplitView: NSSplitView {
     override var dividerThickness: CGFloat { 1 }
 }
 
-/// 终端窗口：保留一条原生标题栏作顶部操作栏（红黄绿三键 + 侧边栏按钮，
-/// 2026-08-23 用户定稿，推翻此前的整体隐藏方案）。标题栏无系统标题文字；应用
-/// chrome 使用独立的 Codex 浅色样式，terminal surface 仍完整遵守 Ghostty config。
+/// 终端窗口：原生标题栏只承载红黄绿三键与侧栏按钮，content 以 full-size
+/// 铺到窗口四边。工作区侧栏自行避让标题栏高度；右侧 terminal 则延伸到顶边。
+/// 标题栏无系统标题文字，terminal surface 仍完整遵守 Ghostty config。
 final class TerminalWindow: NSWindow {
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
         titleVisibility = .hidden

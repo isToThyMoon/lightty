@@ -1,0 +1,168 @@
+# 推 v* tag 触发：编内核（按 commit 缓存）→ 打包 universal .app → 签名/公证
+# （secrets 齐备时）→ 建 GitHub Release 并上传 DMG。
+#
+# 需要的 repo secrets（缺则跳过对应步骤，产出 ad-hoc 签名的 DMG）：
+#   MACOS_CERT_P12        Developer ID Application 证书导出的 .p12，base64 编码
+#   MACOS_CERT_PASSWORD   .p12 密码
+#   NOTARY_APPLE_ID       Apple ID（公证用）
+#   NOTARY_TEAM_ID        团队 ID（10 位）
+#   NOTARY_PASSWORD       该 Apple ID 的 app-specific password
+name: release
+
+# main 分支也触发：GitHub 缓存按 ref 隔离，tag 之间互不可见，只有 main 上的
+# 缓存全局可读——内核缓存必须由 main 的 run 播种，tag 发版才能命中。
+# main 上发布类步骤被 ref_type == tag 门禁跳过，只做构建打包（兼当 CI 冒烟）。
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+
+# 默认 GITHUB_TOKEN 是只读的；建 Release / 传资产需要 contents 写权限
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      GHOSTTY_REPO: isToThyMoon/ghostty
+      GHOSTTY_REF: lightty-patches
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 打包脚本用 rev-list --count 生成 build number
+
+      - name: Checkout ghostty kernel (lightty-patches)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GHOSTTY_REPO }}
+          ref: ${{ env.GHOSTTY_REF }}
+          path: vendor/ghostty
+
+      - name: Resolve kernel commit (cache key)
+        id: kernel
+        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache GhosttyKit
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          # 必须覆盖打包脚本消费的全部内核产物（xcframework + 资源三件套），
+          # 缺一个就会在缓存命中的 run 里打包失败（terminfo 缺失事故，v2 起修复）
+          path: |
+            vendor/ghostty/macos/GhosttyKit.xcframework
+            vendor/ghostty/zig-out/share/ghostty
+            vendor/ghostty/zig-out/share/terminfo
+            vendor/ghostty/zig-out/share/locale
+          key: ghosttykit-v2-${{ steps.kernel.outputs.sha }}
+
+      - name: Install zig
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build kernel
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/ghostty
+          zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast
+
+      - name: Sync GhosttyKit into SwiftPM layout
+        run: scripts/sync-ghosttykit.sh
+
+      - name: Import Developer ID certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          rm cert.p12
+
+      - name: Package app + DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
+          MAKE_DMG=1 scripts/package-app.sh "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Sign update + generate appcast
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          SIGN_TOOL="$(find .build/artifacts -path '*Sparkle/bin/sign_update' | head -1)"
+          # --ed-key-file -：私钥经 stdin 传入，不落盘
+          SIGNATURE="$(echo "$SPARKLE_ED_PRIVATE_KEY" | "$SIGN_TOOL" --ed-key-file - "dist/lightty-$VERSION.dmg")"
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg"
+          cat > dist/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>lightty</title>
+              <item>
+                <title>v$VERSION</title>
+                <sparkle:version>$BUILD_NUMBER</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <link>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}</link>
+                <pubDate>$(date -u +"%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <enclosure url="$DMG_URL" $SIGNATURE type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
+      - name: Notarize + staple
+        if: env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          DMG="dist/lightty-$VERSION.dmg"
+          xcrun notarytool submit "$DMG" --wait \
+            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+          xcrun stapler staple "$DMG"
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## 下载 / Download
+
+          | 平台 | 下载 |
+          |---|---|
+          | macOS 13+（Apple Silicon / Intel 通用） | [lightty-$VERSION.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg) |
+
+          ## 安装 / Install
+
+          应用已签名但未公证。首次打开若提示「无法验证开发者」：
+          **系统设置 → 隐私与安全性 → 拉到底部 → 「仍要打开」**；
+          或在终端执行 \`xattr -cr /Applications/lightty.app\` 后正常打开。
+
+          The app is signed but not notarized. If Gatekeeper blocks the first
+          launch: **System Settings → Privacy & Security → scroll down →
+          "Open Anyway"**, or run \`xattr -cr /Applications/lightty.app\`.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            --title "v$VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "dist/lightty-$VERSION.dmg" "dist/appcast.xml"

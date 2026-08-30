@@ -9,11 +9,16 @@ final class AppState {
     let taskStore: TaskStore
     var windowControllers: [TerminalWindowController] = []
 
-    init() {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+    init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true) {
+        let dir = taskDirectory ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".lightty/tasks", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.taskStore = TaskStore(directory: dir)
+        // 上次崩溃/强杀留下的 pane 运行时目录在这里回收（按 owner.pid 判活，
+        // 不会误删另一个 lightty 实例的）。必须在任何 pane 创建之前跑。
+        if sweepStalePanes {
+            PaneStatusStore.shared.sweepStale()
+        }
     }
 
     @discardableResult

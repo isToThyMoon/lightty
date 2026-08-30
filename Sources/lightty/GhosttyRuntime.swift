@@ -37,13 +37,13 @@ final class GhosttyRuntime {
             fatalError("ghostty_init failed")
         }
 
-        // 终端配置边界：只走 Ghostty 的全局配置链，并把 finalize 后的同一份 config
-        // 原样交给 ghostty_app_new。lightty 不加载覆盖文件，也不改写任何 terminal 选项。
-        // 有意跳过 load_cli_args：这里的命令行属于 lightty，而不是 Ghostty.app。
-        guard let config = ghostty_config_new() else { fatalError("ghostty_config_new failed") }
-        ghostty_config_load_default_files(config)
-        ghostty_config_load_recursive_files(config)
-        ghostty_config_finalize(config)
+        // 终端配置边界：先加载随包基线，再让 Ghostty 用户配置覆盖它，最后把
+        // finalize 后的同一份 config 原样交给 ghostty_app_new。Lightty 不在壳层
+        // 二次解析或改写 terminal 选项。有意跳过 load_cli_args：这里的命令行属于
+        // Lightty，而不是 Ghostty.app。
+        guard let config = Self.loadGlobalConfig() else {
+            fatalError("failed to load terminal configuration")
+        }
         self.configValues = Self.readConfigValues(config)
         self.configDiagnostics = Self.readDiagnostics(config)
         self.loadedConfig = config
@@ -153,14 +153,45 @@ final class GhosttyRuntime {
         ghostty_app_tick(app)
     }
 
-    /// 与官方 Ghostty.Config 相同的文件加载链。这是 reload 的唯一入口，
-    /// 不允许 lightty overlay 或壳层二次解析。
+    /// 菜单偏好变更后全局刷新现有 surface；启动和 core reload 也走同一加载链。
+    func reloadGlobalConfig() {
+        reloadConfig(surface: nil, soft: false)
+    }
+
+    /// 启动与 reload 共用的唯一配置入口。普通随包配置只提供缺省值，用户的
+    /// 全局配置与递归 config-file 均可覆盖它；勾选内置主题时，仅把 `theme`
+    /// 选择在用户配置之后重放，不接管其他 terminal 选项。
     private static func loadGlobalConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
+
+        guard loadBundledConfig(named: "lightty-default", into: config) else {
+            ghostty_config_free(config)
+            return nil
+        }
+
         ghostty_config_load_default_files(config)
         ghostty_config_load_recursive_files(config)
+
+        if TerminalThemePreference.usesBuiltInTheme(),
+           !loadBundledConfig(named: "lightty-theme", into: config) {
+            ghostty_config_free(config)
+            return nil
+        }
+
         ghostty_config_finalize(config)
         return config
+    }
+
+    private static func loadBundledConfig(
+        named name: String,
+        into config: ghostty_config_t
+    ) -> Bool {
+        guard let path = Bundle.module.path(forResource: name, ofType: "ghostty") else {
+            assertionFailure("missing bundled terminal config: \(name).ghostty")
+            return false
+        }
+        ghostty_config_load_file(config, path)
+        return true
     }
 
     private func reloadConfig(surface: ghostty_surface_t?, soft: Bool) {
@@ -356,8 +387,11 @@ final class GhosttyRuntime {
                     NSLog("INITIAL_SIZE %dx%d, located=%@", size.width, size.height,
                           locate() != nil ? "yes" : "no")
                 }
-                guard let (controller, _) = locate(), let window = controller.window,
-                      controller.panes().count == 1,
+                guard let (controller, _) = locate(), let window = controller.window else { return }
+                // 尺寸应用完成前窗口保持透明（见 TerminalWindowController.init）；
+                // 无论是否满足单 pane 单 tab 的调整条件，此刻都必须显形。
+                defer { controller.revealWindowIfNeeded() }
+                guard controller.panes().count == 1,
                       controller.tabCount == 1 else { return }
                 window.setContentSize(NSSize(
                     width: CGFloat(size.width),
@@ -531,6 +565,13 @@ final class GhosttyRuntime {
             return false
 
         case GHOSTTY_ACTION_PWD:
+            guard let view = targetView(),
+                  let directory = copiedString(
+                    action.action.pwd.pwd,
+                    length: UInt(strlen(action.action.pwd.pwd))) else { return false }
+            DispatchQueue.main.async { [weak view] in
+                view?.setWorkingDirectory(directory)
+            }
             return true
 
         // MARK: - 安全输入
@@ -558,6 +599,9 @@ final class GhosttyRuntime {
             }
             let body = copiedString(notification.body, length: UInt(strlen(notification.body))) ?? ""
             DispatchQueue.main.async {
+                // 裸可执行（swift build）没有 bundle，UNUserNotificationCenter.current()
+                // 会抛 NSInternalInconsistencyException 直接崩。守卫在 PaneNotifier 里。
+                guard let center = PaneNotifier.center else { return }
                 let content = UNMutableNotificationContent()
                 content.title = title
                 content.body = body
@@ -566,7 +610,7 @@ final class GhosttyRuntime {
                     identifier: UUID().uuidString,
                     content: content,
                     trigger: nil)
-                UNUserNotificationCenter.current().add(request)
+                center.add(request)
             }
             return true
 
@@ -761,10 +805,10 @@ final class GhosttyRuntime {
             if !trustedSchemes.contains(url.scheme?.lowercased() ?? "") {
                 DispatchQueue.main.async {
                     let alert = NSAlert()
-                    alert.messageText = "打开终端链接？"
+                    alert.messageText = L("Open terminal link?")
                     alert.informativeText = value
                     alert.alertStyle = .warning
-                    alert.addButton(withTitle: "打开")
+                    alert.addButton(withTitle: L("Open"))
                     alert.addButton(withTitle: "取消")
                     let completion: (NSApplication.ModalResponse) -> Void = { response in
                         if response == .alertFirstButtonReturn { NSWorkspace.shared.open(url) }
@@ -897,8 +941,8 @@ final class GhosttyRuntime {
             guard let view, let surface = view.surface else { return }
             let alert = NSAlert()
             alert.messageText = request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ
-                ? "允许终端读取剪贴板？"
-                : "粘贴剪贴板内容？"
+                ? L("Allow terminal to read the clipboard?")
+                : L("Paste from clipboard?")
             alert.informativeText = String(contents.prefix(500))
             alert.alertStyle = .warning
             alert.addButton(withTitle: "允许")
@@ -945,7 +989,7 @@ final class GhosttyRuntime {
                 return
             }
             let alert = NSAlert()
-            alert.messageText = "允许终端写入剪贴板？"
+            alert.messageText = L("Allow terminal to write to the clipboard?")
             alert.informativeText = String(text.prefix(500))
             alert.alertStyle = .warning
             alert.addButton(withTitle: "允许")

@@ -10,14 +10,23 @@ extension NSPasteboard.PasteboardType {
 enum PaneDropZone: CaseIterable, Equatable {
     case top, bottom, left, right
 
+    /// 与官方逐式对齐：先归一化再比距离（对角线切出四个等面积三角区）。
+    /// 绝对距离在瘦高 pane 里会让左右区吞掉几乎全部面积，上下分无从落点。
+    /// 判序也保持官方一致：left → right → top → bottom。
     static func calculate(at point: NSPoint, in bounds: NSRect) -> PaneDropZone {
-        let distances: [(PaneDropZone, CGFloat)] = [
-            (.left, max(0, point.x - bounds.minX)),
-            (.right, max(0, bounds.maxX - point.x)),
-            (.bottom, max(0, point.y - bounds.minY)),
-            (.top, max(0, bounds.maxY - point.y)),
-        ]
-        return distances.min { $0.1 < $1.1 }?.0 ?? .right
+        guard bounds.width > 0, bounds.height > 0 else { return .right }
+        let relX = (point.x - bounds.minX) / bounds.width
+        let relY = (point.y - bounds.minY) / bounds.height
+        let distToLeft = relX
+        let distToRight = 1 - relX
+        // AppKit y 轴向上：minY 是底边
+        let distToBottom = relY
+        let distToTop = 1 - relY
+        let minDist = min(distToLeft, distToRight, distToTop, distToBottom)
+        if minDist == distToLeft { return .left }
+        if minDist == distToRight { return .right }
+        if minDist == distToTop { return .top }
+        return .bottom
     }
 
     func frame(in bounds: NSRect) -> NSRect {
@@ -39,13 +48,12 @@ enum PaneDropZone: CaseIterable, Equatable {
 }
 
 /// Ghostty drop overlay 的 AppKit 对应物；只绘制，不参与命中测试。
+/// 样式对齐官方 `TerminalSplitDropZone.overlay`：accent 30% 纯色半区填充、无描边。
 final class PaneDropOverlayView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.24).cgColor
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.65).cgColor
-        layer?.borderWidth = 1
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor
     }
 
     required init?(coder: NSCoder) { fatalError() }

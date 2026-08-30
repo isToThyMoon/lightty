@@ -25,7 +25,7 @@ lightty 任务数据的唯一持久化格式。`Sources/LighttyCore` 与将来�
 ---
 name: 修会话管理方案
 status: active
-cwd: /Users/me/project/foo
+workdir: /Users/me/project/foo
 tool: claude
 created: 2026-08-22T10:00:00Z
 updated: 2026-08-22T12:30:00Z
@@ -54,17 +54,44 @@ sessions:
 | 键 | 必填 | 取值 | 说明 |
 |---|---|---|---|
 | `name` | 是 | 任意单行文本 | 任务名原文（未净化） |
-| `status` | 是 | `active` \| `stuck` \| `done` | **已弃用**（仅兼容保留），见下节 |
-| `cwd` | 是 | 绝对路径 | 任务工作目录 |
+| `status` | 是 | 任意单行文本 | **已弃用**（仅兼容保留），取值不校验，见下节 |
+| `workdir` | 是* | 绝对路径 | 任务创建现场的工作目录，见下节；旧键 `cwd` 读取兼容 |
 | `tool` | 否 | 工具名（如 `claude`） | 缺省时序列化不写该键 |
 | `created` | 是 | ISO8601 UTC，如 `2026-08-22T10:00:00Z` | 创建时间 |
 | `updated` | 是 | ISO8601 UTC | 最后修改时间；每次写入必须刷新 |
 | `sessions` | 否 | 列表，条目 `<tool>:<session-id>` | 关联会话，追加时去重（tool+id 相同视为重复） |
 
+### workdir：创建现场，恢复时的起始目录（2026-09-04）
+
+原键名 `cwd`，2026-09-04 更名：字段既非「当前」也不随时间更新，*current*
+的时间性暗示不准。迁移是干净切换：**写入只写 `workdir`**；读取时 `cwd`
+是 `workdir` 的**别名**（解析入口归一化，双键并存按键重复报错）；旧文件
+重写时自动升级键名。已知代价：v0.3.0 及更早版本的解析器视 `cwd` 为必填，读不了新版
+写出的文件（会从列表剔除）——只影响降级或多机共享任务目录且版本不一的
+场景，升级单向，可接受。
+
+写入端只有「pane 内新建任务」一处，首选 shell 的 OSC PWD：agent 全屏期间它
+停在最后一次提示符的目录——正是用户启动 agent 的地方，即 agent 继承的出生
+目录，不是过期数据。刻意不优先 agent 上报的 cwd：那是 agent 自己填的，探查
+或在别的目录跑命令时可能跟着漂，会记下瞬时的错误目录；它只做 shell 没发
+OSC 7（未配 shell-integration）时的兜底，最后回退 home。侧栏「新任务」按钮
+建档无 pane 上下文，写 home。
+
+之后任何一方都不再改写它：**绑定已有任务不覆盖**（可能是在无关目录的临时
+pane 里绑的）、改名/解绑原样搬运、agent 写回 handoff 按协议不碰 frontmatter
+（只刷 `updated`）。绑定期间也不跟随 agent 的 cd 漂移回写——语义钉为
+「创建现场」，项目搬家手改此键即可。
+
+读取端是恢复任务（气泡三目的地、⇧⇧ 搜索打开）：新 pane 的 shell 直接以
+`workdir` 为起始目录（走 libghostty 的 `working_directory`）；目录已不存在
+则不传、回退内核默认，不让 spawn 失败。
+
 ### status：已弃用（2026-08-30）
 
-`status` 保留在格式里仅为兼容既有文件与解析器校验：解析照旧、建档固定写
-`active`、任何一方都不再更新或读取其语义。弃用理由：
+`status` 保留在格式里仅为兼容既有文件：建档固定写 `active`、任何一方都不再
+更新或读取其语义。2026-09-04 起取值不再校验（原枚举 active|stuck|done）：
+agent 手写文件常用 `completed` 等自然词，为死字段的取值校验把整个文件从
+列表毙掉不成比例——现读写原样保留任意单行值。弃用理由：
 
 - 实时的活跃/休眠由 UI 按「有无 pane 绑定」派生，不需要落盘；
 - 接手的 agent 读的是正文（「下一步」「卡点与风险」），status 对它是冗余压缩;
@@ -74,9 +101,15 @@ sessions:
 若将来任务量大到列表需要不点击即可分诊，再重新赋予语义——届时按真实需求
 定义，而不是先造字段再找用途。
 
+**不要把 agent 的实时状态塞回这个字段。** pane 里 agent 正在做什么（思考中 /
+执行工具 / 需要介入 / 已完成）由 agent hook 驱动，落在
+`~/.lightty/panes/<pane-uuid>/status.json`，是**易失的运行时信号**，不进任务文件。
+两者的性质相反：这里的 `status` 是 agent 临别时手写的一次性判断（会滞后、会撒谎），
+那边是机器从生命周期事件派生的实时事实。详见 `docs/specs/pane-status.md`。
+
 ### 序列化顺序
 
-写文件时已知键按固定顺序输出：`name`、`status`、`cwd`、`tool`（有值时）、`created`、`updated`、未知键原始行（按读取顺序）、`sessions`（非空时）。
+写文件时已知键按固定顺序输出：`name`、`status`、`workdir`、`tool`（有值时）、`created`、`updated`、未知键原始行（按读取顺序）、`sessions`（非空时）。
 
 ### 错误处理
 
@@ -84,7 +117,7 @@ sessions:
 
 - 文件不以 `---\n` 开头 / frontmatter 未用 `---` 行闭合
 - 无 `:` 或冒号后无 ` ` 的行；键重复
-- `status` 不在枚举内；`created`/`updated` 不是 ISO8601
+- `created`/`updated` 不是 ISO8601
 - `sessions:` 块外出现 `  - ` 条目行；条目缺 `:` 分隔
 
 批量列出任务时，单个非法文件只从结果中剔除并记入失败清单，不得中断整个列表。
@@ -103,12 +136,13 @@ sessions:
 
 正文即任务的 handoff 文档，原则采纳自 mattpocock 的 handoff skill（详见 HANDOVER.md 第 8.3 节）：为接手的 agent 写、引用不复制（commit/路径/URL 指向已有产物）、脱敏（key/密码/PII 不落盘）、面向下一步裁剪。
 
-hook 覆盖式快照按以下结构重写正文；人工里程碑另起日期段追加，不被快照覆盖：
+覆盖式快照按以下结构重写正文；人工里程碑另起日期段追加，不被快照覆盖。
+节头为英文（协议语言，2026-08-30 起；此前的中文节头由摘要解析兼容，旧文件无需迁移）：
 
 ```
-## 下一步          ← 接手 agent 读的第一句话
-## 当前状态
-## 关键决策与约束   ← 引用式：commit/文件路径/文档链接
-## 卡点与风险
-## 建议命令与技能
+## Next steps                    ← 接手 agent 读的第一句话
+## Current state
+## Key decisions & constraints   ← 引用式：commit/文件路径/文档链接
+## Blockers & risks
+## Suggested commands & skills
 ```

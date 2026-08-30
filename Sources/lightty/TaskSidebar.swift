@@ -1,27 +1,10 @@
 import AppKit
 import LighttyCore
 
-/// 搜索图标只负责绘制，点击穿透给下方容器，保证整块搜索区域都能聚焦。
-private final class TaskSearchIconView: NSImageView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-private final class TaskSearchContainerView: NSView {
-    weak var searchField: NSSearchField?
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(searchField)
-    }
-}
-
-/// 标题栏入口控制的任务抽屉；不注册任何键盘快捷键。
-///
-/// 视觉与交互借鉴 Codex 桌面端：低对比表面、圆角选中态、大点击区域、明确的
-/// 列表→详情层级。hover 是覆盖 terminal 的临时预览；click 钉住后切换为真正
-/// 占位的 docked 侧栏。钉住后点击 terminal 不收起，避免抢占 Ghostty 鼠标交互。
-final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
-                         NSTextViewDelegate, NSSearchFieldDelegate {
-    static let width = ShellStyle.sidebarWidth
+/// 任务浮层卡片（Ulysses 式悬浮面板）：标题栏侧栏按钮控制开合。
+/// 与工作区侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
+/// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
+final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private struct Entry {
         let fileURL: URL
@@ -33,44 +16,41 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 列表页
 
     private let listPage = NSView()
-    private let titleLabel = NSTextField(labelWithString: "任务")
-    private let countLabel = NSTextField(labelWithString: "")
-    private let searchContainer = TaskSearchContainerView()
-    private let searchIcon = TaskSearchIconView()
-    private let searchField = NSSearchField()
+    // 首行 = 节标签行：功能性小节标签（Finder「个人收藏」/ VS Code「EXPLORER」
+    // 的角色，非品牌）+ 右侧 搜索/建档 图标按钮。品牌归 Dock 图标和 About。
+    // 搜索走全文浮层（⇧⇧ 或点按钮），侧栏不再有常驻输入框。
+    private let titleLabel = NSTextField(labelWithString: L("Tasks"))
+    private let searchButton = ShellIconButton(
+        symbol: "magnifyingglass", accessibilityLabel: L("Search tasks"),
+        target: nil, action: nil)
     private let tableView = NSTableView()
-    private let emptyLabel = NSTextField(labelWithString: "没有匹配的任务")
+    private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
     private let newTaskButton = ShellIconButton(
-        symbol: "doc.badge.plus", accessibilityLabel: "新建任务", target: nil, action: nil)
+        symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
-    private var hoverTrackingArea: NSTrackingArea?
-
-    /// 详情页已移除（handoff 编辑交给系统编辑器），侧栏不再有需要钉住的编辑态。
-    var isDirty: Bool { false }
 
     var onRequestClose: (() -> Void)?
-    var onHoverChange: ((Bool) -> Void)?
 
-    /// 内容避开顶部标题栏区域的高度（抽屉背景本体延伸到窗口最顶端）
-    private let topInset: CGFloat
+    /// 卡片右缘贴边吸附的关闭钮（与窗口左缘展开钮同形镜像）。不作为子视图：
+    /// 由 controller 挂到 themeFrame——命中区向右溢出卡片 bounds，做子视图会被裁断，
+    /// 且卡片 layer 有圆角遮罩。
+    let closeControl = EdgeToggleControl(pointing: .left)
 
-    init(topInset: CGFloat) {
-        self.topInset = topInset
+    init() {
         super.init(frame: .zero)
+        closeControl.onTap = { [weak self] in self?.onRequestClose?() }
 
         clipsToBounds = false
         wantsLayer = true
         // 不 pin Aqua：壳层 palette 是明暗动态色，随系统外观切换。
 
-        // 不画右缘边线：侧栏与标题栏同色拼成一体 chrome，terminal 自身底色
-        // 已提供足够的视觉分界（Notion 式无边框）。
         buildListPage()
         listPage.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listPage)
         NSLayoutConstraint.activate([
-            listPage.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
+            listPage.topAnchor.constraint(equalTo: topAnchor),
             listPage.bottomAnchor.constraint(equalTo: bottomAnchor),
             listPage.leadingAnchor.constraint(equalTo: leadingAnchor),
             listPage.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -109,10 +89,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private func applyAppearanceColors() {
         let appearance = effectiveAppearance
         layer?.backgroundColor =
-            ShellStyle.sidebarBackground.shellResolvedCGColor(for: appearance)
-        searchContainer.layer?.backgroundColor =
-            ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
-        searchContainer.layer?.borderColor =
+            ShellStyle.raisedSurface.shellResolvedCGColor(for: appearance)
+        layer?.borderColor =
             ShellStyle.divider.shellResolvedCGColor(for: appearance)
     }
 
@@ -121,23 +99,19 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         applyAppearanceColors()
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self)
-        addTrackingArea(area)
-        hoverTrackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
-    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
-
-    /// 呼出时把焦点交给搜索框。
-    func focusSearch() {
-        window?.makeFirstResponder(searchField)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, let layer else { return }
+        // 悬浮卡片质感（layer 配置延迟到挂窗后：backing layer 重建会吃掉
+        // init 期配置；投影用 NSView.shadow，AppKit 维护不丢）
+        layer.cornerRadius = 12
+        layer.borderWidth = 1
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
+        shadow.shadowBlurRadius = 32
+        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        self.shadow = shadow
+        applyAppearanceColors()
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -160,7 +134,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 if ($0.running != nil) != ($1.running != nil) { return $0.running != nil }
                 return $0.task.updated > $1.task.updated
             }
-        applyFilter(searchField.stringValue)
+        applyFilter("")
     }
 
     private func applyFilter(_ query: String) {
@@ -176,10 +150,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 .map { $0.0 }
         }
 
-        let runningCount = allEntries.filter { $0.running != nil }.count
-        countLabel.stringValue = runningCount > 0
-            ? "\(runningCount) 个活跃 · 共 \(allEntries.count) 个"
-            : "\(allEntries.count) 个任务"
         emptyLabel.isHidden = !filtered.isEmpty
         tableView.reloadData()
         if !filtered.isEmpty {
@@ -195,44 +165,14 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 列表页
 
     private func buildListPage() {
-        titleLabel.stringValue = "Lightty"
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        titleLabel.textColor = ShellStyle.primaryText
-
-        countLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        countLabel.textColor = ShellStyle.tertiaryText
-
         newTaskButton.target = self
         newTaskButton.action = #selector(newTask)
 
-        searchContainer.wantsLayer = true
-        searchContainer.layer?.backgroundColor = ShellStyle.controlFill.cgColor
-        searchContainer.layer?.cornerRadius = 9
-        searchContainer.layer?.borderColor = ShellStyle.divider.cgColor
-        searchContainer.layer?.borderWidth = 0.5
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        titleLabel.textColor = ShellStyle.tertiaryText
 
-        searchIcon.image = NSImage(
-            systemSymbolName: "magnifyingglass",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
-        searchIcon.contentTintColor = ShellStyle.tertiaryText
-        searchIcon.imageScaling = .scaleProportionallyDown
-
-        searchField.placeholderString = "搜索任务"
-        searchField.controlSize = .regular
-        searchField.isBezeled = false
-        searchField.drawsBackground = false
-        searchField.focusRingType = .none
-        searchField.font = .systemFont(ofSize: 12)
-        searchField.textColor = ShellStyle.primaryText
-        searchField.delegate = self
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
-        // Borderless NSSearchFieldCell 在聚焦态会让原生 searchButtonRect 与
-        // searchTextRect 发生重叠。图标由相邻 NSImageView 绘制，cell 只管文字
-        // 与原生 cancel button，避免 placeholder 与放大镜共享起点。
-        (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
-        searchContainer.searchField = searchField
+        searchButton.target = self
+        searchButton.action = #selector(openSearchPalette)
 
         let column = NSTableColumn(identifier: .init("task"))
         tableView.addTableColumn(column)
@@ -259,50 +199,33 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
 
-        for v in [titleLabel, countLabel, newTaskButton, searchContainer, scroll, emptyLabel] {
+        for v in [titleLabel, searchButton, newTaskButton, scroll, emptyLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listPage.addSubview(v)
         }
-        for view in [searchIcon, searchField] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            searchContainer.addSubview(view)
-        }
 
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: listPage.topAnchor, constant: 20),
-            titleLabel.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 16),
+            // 首行 = 品牌行（行高模数 chromeRowHeight = 28，顶距 8）：
+            // Lightty 文字落内容左轴 20，右侧 搜索 + 建档 图标按钮；
+            // 横向统一 10 的边缘线。
+            titleLabel.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 20),
+            titleLabel.centerYAnchor.constraint(equalTo: newTaskButton.centerYAnchor),
 
-            countLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            countLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-
-            newTaskButton.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -12),
-            newTaskButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            newTaskButton.topAnchor.constraint(equalTo: listPage.topAnchor, constant: 8),
+            newTaskButton.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -10),
             newTaskButton.widthAnchor.constraint(equalToConstant: 28),
             newTaskButton.heightAnchor.constraint(equalToConstant: 28),
 
-            searchContainer.topAnchor.constraint(equalTo: countLabel.bottomAnchor, constant: 16),
-            searchContainer.leadingAnchor.constraint(
-                equalTo: listPage.leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
-            searchContainer.trailingAnchor.constraint(
-                equalTo: listPage.trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
-            searchContainer.heightAnchor.constraint(equalToConstant: 34),
+            searchButton.trailingAnchor.constraint(equalTo: newTaskButton.leadingAnchor, constant: -4),
+            // +1 光学微调：放大镜镜柄在右下，字形视觉重心偏上，几何同心时显高
+            searchButton.centerYAnchor.constraint(
+                equalTo: newTaskButton.centerYAnchor, constant: 1),
+            searchButton.widthAnchor.constraint(equalToConstant: 28),
+            searchButton.heightAnchor.constraint(equalToConstant: 28),
 
-            searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
-            // SF Symbol 的可见笔画在 13pt image frame 内约下沉 2pt；用 optical
-            // offset 对齐 12pt 输入文字，而不是让两个 frame 的几何中心硬重合。
-            searchIcon.centerYAnchor.constraint(
-                equalTo: searchContainer.centerYAnchor, constant: -2),
-            searchIcon.widthAnchor.constraint(equalToConstant: 13),
-            searchIcon.heightAnchor.constraint(equalToConstant: 13),
-
-            searchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 6),
-            searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -7),
-            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
-            searchField.heightAnchor.constraint(equalToConstant: 22),
-
-            scroll.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 12),
-            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 8),
-            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -8),
+            scroll.topAnchor.constraint(equalTo: newTaskButton.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 10),
+            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -10),
             scroll.bottomAnchor.constraint(equalTo: listPage.bottomAnchor, constant: -8),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
@@ -313,12 +236,12 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
     @objc private func newTask() {
         NameEditorPopover.present(
-            from: newTaskButton, title: "新建任务", confirmLabel: "创建"
+            from: newTaskButton, title: L("New task"), confirmLabel: L("Create")
         ) { name in
             do {
                 _ = try AppState.shared.taskStore.create(
                     name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    workdir: FileManager.default.homeDirectoryForCurrentUser.path,
                     tool: nil)
                 NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
             } catch {
@@ -327,7 +250,9 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             }
         }
     }
-    @objc private func searchChanged() { applyFilter(searchField.stringValue) }
+    @objc private func openSearchPalette() {
+        (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
+    }
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
@@ -350,7 +275,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
         // 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
-        let activity = entry.running != nil ? "活跃" : "休眠"
+        let activity = entry.running != nil ? L("Active") : L("Dormant")
         let subtitle = NSTextField(
             labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
         subtitle.font = .systemFont(ofSize: 10.5)
@@ -359,7 +284,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         // 更多操作（⋯）：与行本体的"跳转/打开"语义分开——管理动作都在这个菜单里。
         let detailButton = ShellIconButton(
-            symbol: "ellipsis", accessibilityLabel: "更多操作", target: self,
+            symbol: "ellipsis", accessibilityLabel: L("More actions"), target: self,
             action: #selector(showRowMenu(_:)))
         detailButton.tag = row
 
@@ -369,7 +294,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             cell.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 12),
+            // 行内衬 10：圆点落在内容左轴 20（滚动区缘 10 + 10）
+            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
             dot.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
@@ -390,18 +316,21 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         return cell
     }
 
+    /// 任务行的圆点只表达「有没有 pane 绑着它」，不掺 agent 活动状态：
+    /// 这张表是全量 reload 重建的（`lighttyTasksDidChange`），跟不上状态的频率，
+    /// 显示一个可能已经过期的状态比不显示更糟。实时状态在 pane 头和工作区侧栏。
     private func dotColor(for entry: Entry) -> NSColor {
-        entry.running != nil ? .systemGreen : .systemGray
+        ShellStyle.dotColor(bound: entry.running != nil, activity: nil)
     }
 
     private func relativeTime(_ date: Date) -> String {
         let seconds = max(0, -date.timeIntervalSinceNow)
-        if seconds < 60 { return "刚刚" }
-        if seconds < 3_600 { return "\(Int(seconds / 60)) 分钟前" }
-        if seconds < 86_400 { return "\(Int(seconds / 3_600)) 小时前" }
-        if seconds < 604_800 { return "\(Int(seconds / 86_400)) 天前" }
+        if seconds < 60 { return L("just now") }
+        if seconds < 3_600 { return L("%d min ago", Int(seconds / 60)) }
+        if seconds < 86_400 { return L("%d hr ago", Int(seconds / 3_600)) }
+        if seconds < 604_800 { return L("%d days ago", Int(seconds / 86_400)) }
         let formatter = DateFormatter()
-        formatter.dateFormat = "M月d日"
+        formatter.dateFormat = L("MMM d")
         return formatter.string(from: date)
     }
 
@@ -414,11 +343,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         let entry = filtered[sender.tag]
 
         var items: [ShellMenuPopover.Item] = [
-            .action("重命名任务…") { [weak self, weak sender] in
+            .action(L("Rename task…")) { [weak self, weak sender] in
                 guard let anchor = sender ?? self else { return }
                 NameEditorPopover.present(
-                    from: anchor, title: "重命名任务",
-                    initial: entry.task.name, confirmLabel: "重命名"
+                    from: anchor, title: L("Rename task"),
+                    initial: entry.task.name, confirmLabel: L("Rename")
                 ) { name in
                     do {
                         try AppState.shared.renameTask(at: entry.fileURL, to: name)
@@ -432,10 +361,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ]
         // 状态不提供手动修改也不展示：活跃/休眠由 pane 绑定派生；
         // 文件 status 字段已弃用（见 docs/task-format.md）。
-        items.append(.action("打开 handoff 文档") {
+        items.append(.action(L("Open handoff document")) {
             NSWorkspace.shared.open(entry.fileURL)
         })
-        items.append(.action("用其他应用打开…") { [weak self, weak sender] in
+        items.append(.action(L("Open with…")) { [weak self, weak sender] in
             guard let anchor = sender ?? self else { return }
             // 列系统里注册可打开 md 的应用；勾选 = 当前系统默认（想全局换默认
             // 走 Finder 显示简介 →「全部更改」，此处只做单次选择不持久化）。
@@ -463,11 +392,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             }
             ShellMenuPopover.present(from: anchor, items: appItems)
         })
-        items.append(.action("在 Finder 中显示") {
+        items.append(.action(L("Reveal in Finder")) {
             NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
         })
         items.append(.separator)
-        items.append(.action("归档任务") {
+        items.append(.action(L("Archive task")) {
             do {
                 // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的 pane 解绑。
                 try AppState.shared.taskStore.archive(at: entry.fileURL)
@@ -483,7 +412,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 NSLog("task archive failed: \(error)")
             }
         })
-        items.append(.action("删除任务（移到废纸篓）", destructive: true) {
+        items.append(.action(L("Delete task (move to Trash)"), destructive: true) {
             do {
                 // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
                 try FileManager.default.trashItem(
@@ -530,29 +459,4 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             fileURL: entry.fileURL, task: entry.task,
             from: anchor, in: controller)
     }
-
-    // 搜索框：回车 = 跳转/恢复，上下键移动选择，Esc 收起抽屉
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
-            jumpOrRestore()
-            return true
-        case #selector(NSResponder.moveDown(_:)):
-            guard !filtered.isEmpty else { return true }
-            tableView.selectRowIndexes(
-                [min(max(tableView.selectedRow, -1) + 1, filtered.count - 1)],
-                byExtendingSelection: false)
-            return true
-        case #selector(NSResponder.moveUp(_:)):
-            guard !filtered.isEmpty else { return true }
-            tableView.selectRowIndexes([max(tableView.selectedRow - 1, 0)], byExtendingSelection: false)
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            onRequestClose?()
-            return true
-        default:
-            return false
-        }
-    }
-
 }

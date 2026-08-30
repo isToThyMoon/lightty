@@ -1,10 +1,8 @@
 import AppKit
 import LighttyCore
 
-/// 恢复流程（2026-08-29 改版）：休眠任务 → 任务行旁的气泡（NSPopover）→ 三种
-/// 目的地：当前 tab 新 pane / 新 tab / 新窗口。
-/// **不自动注入/预填任何命令**——多行命令预填在 shell 里易碎，且 pane header 已有
-/// 「注入」按钮：用户自己起 agent 后点「注入」让它读 handoff 继续，职责不重叠。
+/// 任务打开流程：任务行旁的气泡展示 handoff 摘要、已打开的 pane，
+/// 以及当前工作区新 pane / 新工作区 / 新窗口三种目的地。
 enum RestoreFlow {
     private static var popover: NSPopover?
 
@@ -15,8 +13,12 @@ enum RestoreFlow {
         in controller: TerminalWindowController
     ) {
         popover?.close()
+        // 打开时重读磁盘：调用方传来的 task 是列表缓存的快照，agent 直接写
+        // 文件不触发内部通知，快照可能停在写入前（正文为空 → 摘要空白）。
+        // 气泡是「看一眼现状」的动作，以磁盘为准；读不了再用快照兜底。
+        let freshTask = (try? AppState.shared.taskStore.load(at: fileURL)) ?? task
         let content = RestorePopoverController(
-            fileURL: fileURL, task: task, controller: controller)
+            fileURL: fileURL, task: freshTask, controller: controller)
         let pop = NSPopover()
         pop.contentViewController = content
         pop.behavior = .transient
@@ -25,9 +27,13 @@ enum RestoreFlow {
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
     }
 
-    /// 摘要 = 正文「下一步」「当前状态」两节（进展/卡点/下一步的最短可读集）
+    /// 摘要 = 正文 Next steps / Current state / Blockers 三节（分诊最短可读集）。
+    /// 中文节头是 2026-08-30 协议迁英文前的旧格式，为既有任务文件保留解析。
     static func summarize(_ body: String) -> String {
-        let interesting = ["## 下一步", "## 当前状态", "## 卡点与风险"]
+        let interesting = [
+            "## Next steps", "## Current state", "## Blockers & risks",
+            "## 下一步", "## 当前状态", "## 卡点与风险",
+        ]
         var lines: [String] = []
         var keeping = false
         for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -37,20 +43,27 @@ enum RestoreFlow {
             if keeping { lines.append(String(line)) }
             if lines.count > 14 { break }
         }
-        let result = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return result.isEmpty
-            ? "还没有 handoff 摘要——收工后 agent 会写入「下一步 / 当前状态 / 卡点与风险」，此处按节抽取显示。"
-            : result
+        let result = lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !result.isEmpty { return result }
+        // 兜底：agent 写的节头不在协议集合里时，展示正文开头——有内容
+        // 就不该显示「暂无摘要」
+        let head = body.split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix(12)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return head.isEmpty ? L("No handoff summary yet") : head
     }
 }
 
-/// 气泡内容：任务名 + handoff 摘要 + 三个恢复目的地按钮。
+/// 任务气泡：任务名 + handoff 摘要 + 已打开 pane + 三个打开目的地。
 private final class RestorePopoverController: NSViewController {
     var onDone: (() -> Void)?
 
     private let fileURL: URL
     private let task: TaskFile
     private weak var controller: TerminalWindowController?
+    private var jumpTargets: [(controller: TerminalWindowController, pane: PaneView)] = []
 
     init(fileURL: URL, task: TaskFile, controller: TerminalWindowController) {
         self.fileURL = fileURL
@@ -64,7 +77,8 @@ private final class RestorePopoverController: NSViewController {
     override func loadView() {
         let root = NSView()
 
-        let title = NSTextField(labelWithString: "任务：\(task.name)")
+        // 气泡从任务行锚定弹出，上下文已经是这个任务，标题只写名字不加前缀
+        let title = NSTextField(labelWithString: task.name)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = ShellStyle.primaryText
 
@@ -74,12 +88,7 @@ private final class RestorePopoverController: NSViewController {
         summary.maximumNumberOfLines = 10
         summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let hint = NSTextField(
-            labelWithString: "恢复后启动 claude/codex，点 header「注入」让它接手")
-        hint.font = .systemFont(ofSize: 10)
-        hint.textColor = ShellStyle.tertiaryText
-
-        var rows: [NSView] = [title, summary, hint]
+        var rows: [NSView] = [title, summary]
         var buttonRows: [NSButton] = []
         var sectionLabels: [NSView] = []
 
@@ -88,18 +97,16 @@ private final class RestorePopoverController: NSViewController {
             $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
         }
         if !bound.isEmpty {
-            let opened = Self.sectionLabel("已打开")
+            let opened = Self.sectionLabel(L("Already open"))
             rows.append(opened)
             sectionLabels.append(opened)
-            // 工作区默认名全局计数、跨窗口唯一，标签无需窗口前缀；
-            // 跳转本身持 (controller, pane) 引用，重名（用户手改）也不影响落点。
             for (index, entry) in bound.enumerated() {
-                // 层级序：工作区（容器）› pane（叶子）
                 let workspace = entry.controller.workspaceName(of: entry.pane)
                 let label = workspace.map { "\($0) › \(entry.pane.header.title)" }
                     ?? entry.pane.header.title
                 let row = RestoreRowButton(
-                    "跳转 · \(label)", target: self, action: #selector(jumpToPane(_:)))
+                    L("Jump · %@", label), target: self,
+                    action: #selector(jumpToPane(_:)))
                 row.tag = index
                 jumpTargets = bound
                 rows.append(row)
@@ -107,15 +114,18 @@ private final class RestorePopoverController: NSViewController {
             }
         }
 
-        let destinations = Self.sectionLabel(bound.isEmpty ? "打开到" : "再开一个")
+        let destinations = Self.sectionLabel(bound.isEmpty ? L("Open in") : L("Open another"))
         rows.append(destinations)
         sectionLabels.append(destinations)
         let paneButton = RestoreRowButton(
-            "当前工作区分屏", target: self, action: #selector(restoreInPane))
+            L("Split in current workspace"), target: self,
+            action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
-            "新工作区", target: self, action: #selector(restoreInTab))
+            L("New workspace"), target: self,
+            action: #selector(restoreInTab))
         let windowButton = RestoreRowButton(
-            "新窗口", target: self, action: #selector(restoreInWindow))
+            L("New window"), target: self,
+            action: #selector(restoreInWindow))
         rows.append(contentsOf: [paneButton, tabButton, windowButton])
         buttonRows.append(contentsOf: [paneButton, tabButton, windowButton])
 
@@ -123,7 +133,6 @@ private final class RestorePopoverController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        // 分组标题上方拉开间距，分组结构靠留白显形
         for label in sectionLabels {
             if let index = rows.firstIndex(where: { $0 === label }), index > 0 {
                 stack.setCustomSpacing(14, after: rows[index - 1])
@@ -146,8 +155,6 @@ private final class RestorePopoverController: NSViewController {
         view = root
     }
 
-    private var jumpTargets: [(controller: TerminalWindowController, pane: PaneView)] = []
-
     private static func sectionLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
@@ -164,9 +171,7 @@ private final class RestorePopoverController: NSViewController {
     }
 
     private func makeBoundPane() -> PaneView {
-        let pane = PaneView()
-        pane.bind(to: fileURL, name: task.name)
-        return pane
+        PaneView.restoring(task: task, fileURL: fileURL)
     }
 
     @objc private func restoreInPane() {
@@ -185,13 +190,14 @@ private final class RestorePopoverController: NSViewController {
     }
 }
 
-/// 恢复气泡里的目的地行：整行等宽、文字左对齐、浅底 + hover 提亮，无选中态。
+/// 任务气泡里的操作行：整行等宽、文字左对齐、浅底 + hover 提亮，无选中态。
 private final class RestoreRowButton: NSButton {
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
 
     init(_ label: String, target: AnyObject?, action: Selector) {
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         self.target = target
         self.action = action
         isBordered = false

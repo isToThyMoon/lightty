@@ -34,7 +34,7 @@ final class TaskFileParseTests: XCTestCase {
     ---
     name: 修会话管理方案
     status: active
-    cwd: /Users/me/project/foo
+    workdir: /Users/me/project/foo
     tool: claude
     created: 2026-08-22T10:00:00Z
     updated: 2026-08-22T12:30:00Z
@@ -51,8 +51,8 @@ final class TaskFileParseTests: XCTestCase {
     func testParseFullFile() throws {
         let file = try TaskFile.parse(td(fullSample))
         XCTAssertEqual(file.name, "修会话管理方案")
-        XCTAssertEqual(file.status, .active)
-        XCTAssertEqual(file.cwd, "/Users/me/project/foo")
+        XCTAssertEqual(file.status, "active")
+        XCTAssertEqual(file.workdir, "/Users/me/project/foo")
         XCTAssertEqual(file.tool, "claude")
         XCTAssertEqual(file.created, utc("2026-08-22T10:00:00Z"))
         XCTAssertEqual(file.updated, utc("2026-08-22T12:30:00Z"))
@@ -79,7 +79,7 @@ final class TaskFileParseTests: XCTestCase {
         XCTAssertNil(file.tool)
         XCTAssertEqual(file.sessions, [])
         XCTAssertEqual(file.unknownLines, [])
-        XCTAssertEqual(file.status, .done)
+        XCTAssertEqual(file.status, "done")
         // 多行字面量闭合前的末尾空行只贡献闭合 --- 的换行，正文为空
         XCTAssertEqual(file.body, "")
     }
@@ -124,9 +124,13 @@ final class TaskFileParseTests: XCTestCase {
         assertParseError(input, line: 4, messageContains: "重复")
     }
 
-    func testErrorBadStatus() {
-        let input = "---\nname: a\nstatus: paused\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        assertParseError(input, line: 3, messageContains: "status")
+    func testArbitraryStatusValueIsPreserved() throws {
+        // status 已弃用：agent 手写的 completed/paused 等值不再毙掉整个文件，
+        // 读写原样保留
+        let input = "---\nname: a\nstatus: completed\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.status, "completed")
+        XCTAssertTrue(String(data: file.serialize(), encoding: .utf8)!.contains("status: completed"))
     }
 
     func testErrorBadTimestamp() {
@@ -151,8 +155,22 @@ final class TaskFileParseTests: XCTestCase {
     }
 
     func testErrorMissingRequiredKey() {
-        // 缺 cwd，报错落在闭合行
+        // workdir 与旧键 cwd 都缺，报错落在闭合行
         let input = "---\nname: a\nstatus: active\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        assertParseError(input, line: 6, messageContains: "cwd")
+        assertParseError(input, line: 6, messageContains: "workdir")
+    }
+
+    func testWorkdirAndLegacyCWDTogetherIsDuplicateKey() {
+        // cwd 是 workdir 的别名（入口归一），双键并存 = 键重复；
+        // 没有任何已发布版本写过双键，这种文件只能来自手改
+        let input = "---\nname: a\nstatus: active\nworkdir: /new\ncwd: /old\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        assertParseError(input, line: 5, messageContains: "键重复")
+    }
+
+    func testLegacyCWDOnlyStillParses() throws {
+        // ≤v0.3.0 的旧文件只有 cwd，必须继续可读
+        let input = "---\nname: a\nstatus: active\ncwd: /legacy\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.workdir, "/legacy")
     }
 }

@@ -6,6 +6,34 @@ extension Notification.Name {
     static let lighttyTasksDidChange = Notification.Name("lighttyTasksDidChange")
 }
 
+/// pane 身份岛的 frame 规划：折叠胶囊与展开岛保持同一水平中点、同一顶边，
+/// 因而展开只向左右等量延伸并向下生长。纯几何独立出来供回归测试锁住方向。
+struct PaneIdentityMorphGeometry {
+    static func panelFrame(around capsule: NSRect) -> NSRect {
+        NSRect(
+            x: capsule.midX - PaneIdentityPanel.panelWidth / 2,
+            y: capsule.maxY - PaneIdentityPanel.maxHeight,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+    }
+
+    static func collapsedIslandFrame(capsule: NSRect, panelFrame: NSRect) -> NSRect {
+        NSRect(
+            x: capsule.minX - panelFrame.minX,
+            y: capsule.minY - panelFrame.minY,
+            width: capsule.width,
+            height: capsule.height)
+    }
+
+    static func expandedIslandFrame(in panelBounds: NSRect, height: CGFloat) -> NSRect {
+        NSRect(
+            x: 0,
+            y: panelBounds.height - height,
+            width: PaneIdentityPanel.panelWidth,
+            height: height)
+    }
+}
+
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
@@ -16,7 +44,7 @@ final class PaneView: NSView {
 
     let header = PaneHeaderView()
     let terminal: TerminalSurfaceView
-    let dragIdentifier = UUID()
+    let dragIdentifier: UUID
     private(set) var binding: Binding = .unnamed
     private var terminalSearchBar: TerminalSearchBar?
     private var searchSelected: Int?
@@ -34,12 +62,20 @@ final class PaneView: NSView {
     private static var paneCounter = 0
 
     init(surfaceConfiguration: TerminalSurfaceConfiguration = .init()) {
-        terminal = TerminalSurfaceView(configuration: surfaceConfiguration)
+        let paneID = UUID()
+        dragIdentifier = paneID
+        // pane 身份下发给 shell：agent 的 hook 是 shell 的孙进程，环境变量沿进程树
+        // 继承，hook 据此找到本 pane 的运行时目录（状态回写 + handoff 指针读取）。
+        var configuration = surfaceConfiguration
+        configuration.envVars["LIGHTTY_PANE_ID"] = paneID.uuidString
+        // 状态走 datagram socket 推送，不落文件（状态是用完即弃的中间态）。
+        // 路径按本实例 pid 命名，随 spawn 下发——多实例各收各的。
+        configuration.envVars["LIGHTTY_SOCK"] = PaneRuntimeDirectory.socketPath().path
+        terminal = TerminalSurfaceView(configuration: configuration)
         Self.paneCounter += 1
         super.init(frame: .zero)
-        header.title = "终端 \(Self.paneCounter)"
+        header.title = L("Terminal %d", Self.paneCounter)
         header.dot = .unnamed
-        header.injectEnabled = false
         header.dragIdentifier = dragIdentifier
         header.onSelect = { [weak self] in self?.focusTerminal() }
         header.dragPreviewProvider = { [weak self] in self?.makeDragPreview() }
@@ -73,12 +109,27 @@ final class PaneView: NSView {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ruler.needsDisplay = true }
         }
 
-        header.onFinish = { [weak self] in self?.finish() }
-        header.onInject = { [weak self] in self?.inject() }
         header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
+        // ✕ 走内核关闭流程（与 cmd+W 同路），最终回到 close_surface_cb
+        header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
             self.onClose?(self)
+        }
+
+        // 运行时目录 + 状态监听。放在 init 而不是各个关闭路径的对称位置，是因为
+        // pane 的死法有好几种（✕、cmd+W、关 tab、关窗、shell 退出），deinit 是唯一
+        // 能一网打尽的点；跨窗口拖动时 PaneView 本体存活，不会误触发。
+        PaneStatusStore.shared.attach(paneID)
+    }
+
+    deinit {
+        let paneID = dragIdentifier
+        // deinit 不保证在主线程；store 是主线程独占的
+        if Thread.isMainThread {
+            PaneStatusStore.shared.detach(paneID)
+        } else {
+            DispatchQueue.main.async { PaneStatusStore.shared.detach(paneID) }
         }
     }
 
@@ -89,7 +140,7 @@ final class PaneView: NSView {
         binding = .bound(fileURL: fileURL)
         header.setTaskName(name)
         header.dot = .active
-        header.injectEnabled = true
+        syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -100,7 +151,7 @@ final class PaneView: NSView {
         binding = .unnamed
         header.setTaskName(nil)
         header.dot = .unnamed
-        header.injectEnabled = false
+        syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -112,12 +163,65 @@ final class PaneView: NSView {
         guard case .bound = binding else { return }
         binding = .bound(fileURL: newURL)
         header.setTaskName(name)
+        syncTaskPointer()
         refreshIdentityPanel()
+    }
+
+    /// 把当前绑定的任务文件路径写进 pane 运行时目录，供 agent hook 读取并注入上下文
+    /// （docs/specs/pane-status.md §8）。hook 在 SessionStart 与 UserPromptSubmit 都会查，
+    /// 所以先开 agent 再绑/新建/改名也能拿到。解绑时删掉指针，连同 hook 的去重标记：
+    /// 否则同一会话里解绑再绑回同一任务，hook 会以为已经注过而跳过。
+    ///
+    /// 改名走 TaskStore 的移动语义，路径会变——所以 bind/unbind/rename 三处都要同步，
+    /// 否则 hook 会读到一个已经不存在的路径。
+    private func syncTaskPointer() {
+        let paneID = dragIdentifier.uuidString
+        let pointer = PaneRuntimeDirectory.taskPointerFile(for: paneID)
+        guard let url = taskFileURL else {
+            try? FileManager.default.removeItem(at: pointer)
+            try? FileManager.default.removeItem(at: PaneRuntimeDirectory.handoffMarkerFile(for: paneID))
+            return
+        }
+        try? PaneRuntimeDirectory.create(paneID: paneID)
+        try? PaneRuntimeDirectory.atomicWrite(Data((url.path + "\n").utf8), to: pointer)
     }
 
     var taskFileURL: URL? {
         if case .bound(let url) = binding { return url }
         return nil
+    }
+
+    /// 建档写入的 `cwd` = 任务创建现场。首选 shell 的 OSC PWD：agent 全屏期间
+    /// 它「停」在最后一次提示符的目录——正是用户敲 `claude` 的地方，即 agent
+    /// 继承的出生目录，不是过期数据。刻意不优先 agent 上报的 cwd：那个值是
+    /// agent 自己填的，探查/在别的目录跑命令时可能跟着漂，会记下瞬时的错误
+    /// 目录；它只做 shell 没发 OSC 7（未配 shell-integration）时的兜底。
+    /// 只有「新建任务」走这里：绑定已有任务不覆盖其 cwd（你可能在 home 的
+    /// 临时 pane 里绑一个项目任务），改名/解绑/agent 写回也都不碰它。
+    private func taskCreationWorkingDirectory() -> String {
+        if let shellCWD = terminal.currentWorkingDirectory, !shellCWD.isEmpty {
+            return shellCWD
+        }
+        if let agentCWD = PaneStatusStore.shared.status(for: dragIdentifier)?.cwd,
+            !agentCWD.isEmpty {
+            return agentCWD
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    /// 恢复任务用的 pane 工厂：新 shell 直接生在任务的 `cwd`（创建现场），
+    /// agent 起来就在项目里，退出 agent 后 shell 也还在。目录已不存在则不传，
+    /// 回退内核默认目录——不能让 spawn 失败。气泡三目的地与 ⇧⇧ 搜索共用。
+    static func restoring(task: TaskFile, fileURL: URL) -> PaneView {
+        var configuration = TerminalSurfaceConfiguration()
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: task.workdir, isDirectory: &isDirectory),
+            isDirectory.boolValue {
+            configuration.workingDirectory = task.workdir
+        }
+        let pane = PaneView(surfaceConfiguration: configuration)
+        pane.bind(to: fileURL, name: task.name)
+        return pane
     }
 
     // MARK: - 身份面板（灵动岛式展开）
@@ -143,9 +247,7 @@ final class PaneView: NSView {
     /// 收起反向缩回。frame 驱动动画，不用 Auto Layout 钉面板位置。
     /// 岛体在面板内的 rect：顶边恒对齐面板顶边，高度 h（非翻转坐标）。
     private func islandRect(in panel: PaneIdentityPanel, height: CGFloat) -> NSRect {
-        NSRect(
-            x: 0, y: panel.bounds.height - height,
-            width: PaneIdentityPanel.panelWidth, height: height)
+        PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: height)
     }
 
     private func showIdentityPanel() {
@@ -174,12 +276,13 @@ final class PaneView: NSView {
             self?.bind(to: entry.fileURL, name: entry.task.name)
         }
         panel.onCreateTask = { [weak self] name in
+            guard let self else { return }
             do {
                 let created = try AppState.shared.taskStore.create(
                     name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    workdir: self.taskCreationWorkingDirectory(),
                     tool: nil)
-                self?.bind(to: created.fileURL, name: name)
+                self.bind(to: created.fileURL, name: name)
             } catch {
                 NSSound.beep()
                 NSLog("task create failed: \(error)")
@@ -219,15 +322,13 @@ final class PaneView: NSView {
         // 面板高度取上限（岛体在其中生长），本体静止、永不动画。
         guard let host = window?.contentView else { return }
         let start = host.convert(header.capsuleFrame, from: header)
-        panel.frame = NSRect(
-            x: start.minX,
-            y: start.maxY - PaneIdentityPanel.maxHeight,
-            width: PaneIdentityPanel.panelWidth,
-            height: PaneIdentityPanel.maxHeight)
-        panel.extras.alphaValue = 0 // 第一行不参与淡入：标题原地不动，只有扩展区渐显
-        panel.island.frame = NSRect(
-            x: start.minX - panel.frame.minX, y: start.minY - panel.frame.minY,
-            width: start.width, height: start.height)
+        panel.frame = PaneIdentityMorphGeometry.panelFrame(around: start)
+        let collapsedFrame = PaneIdentityMorphGeometry.collapsedIslandFrame(
+            capsule: start, panelFrame: panel.frame)
+        // 第一行不参与淡入且始终停在胶囊原位；所有扩展内容统一渐显。
+        panel.setExpandedContentAlpha(0, animated: false)
+        panel.setIdentityAnchorOffset(collapsedFrame.minX)
+        panel.island.frame = collapsedFrame
         host.addSubview(panel)
         identityPanel = panel
         panel.layoutSubtreeIfNeeded()
@@ -239,7 +340,7 @@ final class PaneView: NSView {
             context.allowsImplicitAnimation = true
             panel.island.animator().frame = islandRect(
                 in: panel, height: PaneIdentityPanel.baseHeight)
-            panel.extras.animator().alphaValue = 1
+            panel.setExpandedContentAlpha(1, animated: true)
         } completionHandler: { [weak panel] in
             panel?.focusNameField()
         }
@@ -268,16 +369,17 @@ final class PaneView: NSView {
         identityPanel = nil
 
         let end = (panel.superview ?? self).convert(header.capsuleFrame, from: header)
-        let islandEnd = NSRect(
-            x: end.minX - panel.frame.minX, y: end.minY - panel.frame.minY,
-            width: end.width, height: end.height)
+        let islandEnd = PaneIdentityMorphGeometry.collapsedIslandFrame(
+            capsule: end, panelFrame: panel.frame)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             context.allowsImplicitAnimation = true
-            // 内容静止，只缩回岛体背景层 + 扩展区渐隐
+            // 岛体缩回中心；第一行通常原地不动，仅在 header 曾移动时跟到新锚点。
             panel.island.animator().frame = islandEnd
-            panel.extras.animator().alphaValue = 0
+            panel.setIdentityAnchorOffset(islandEnd.minX)
+            panel.animator().layoutSubtreeIfNeeded()
+            panel.setExpandedContentAlpha(0, animated: true)
         } completionHandler: { [weak self, weak panel] in
             // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
             self?.header.setCapsuleHidden(false)
@@ -299,48 +401,14 @@ final class PaneView: NSView {
     }
 
 
-    /// 新建任务并绑定（收工的未绑定路径也走这里）。
-    private func presentCreateTaskEditor() {
-        NameEditorPopover.present(
-            from: header, title: "新建任务", confirmLabel: "创建"
-        ) { [weak self] name in
-            guard let self else { return }
-            do {
-                let created = try AppState.shared.taskStore.create(
-                    name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
-                    tool: nil)
-                self.bind(to: created.fileURL, name: name)
-                self.focusTerminal()
-            } catch {
-                NSSound.beep()
-                NSLog("task create failed: \(error)")
-            }
-        }
-    }
 
     // MARK: - pane 名（会话态标签，不落盘）
 
     private func rename(to name: String) {
         header.title = name
         onMetadataChange?(self)
-    }
-
-    // MARK: - 收工 / 注入（指令在点击时实时嵌入当前任务文件路径）
-
-    private func finish() {
-        switch binding {
-        case .unnamed:
-            // 未绑定任务：先建任务（收工产物需要落点）
-            presentCreateTaskEditor()
-        case .bound(let url):
-            terminal.sendText(HandoffPrompt.finish(taskFilePath: url.path) + "\r")
-        }
-    }
-
-    private func inject() {
-        guard case .bound(let url) = binding else { return }
-        terminal.sendText(HandoffPrompt.resume(taskFilePath: url.path) + "\r")
+        // 工作区列的 pane 行显示 pane 名，改名后需要活地图刷新
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
     func focusTerminal() {

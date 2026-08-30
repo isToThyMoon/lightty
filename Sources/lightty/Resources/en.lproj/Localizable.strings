@@ -1,0 +1,175 @@
+/* 菜单栏 */
+"About lightty" = "About lightty";
+"Quit lightty" = "Quit lightty";
+"Check for Updates…" = "Check for Updates…";
+"Tasks" = "Tasks";
+"New Task (New Window)" = "New Task (New Window)";
+"New Task (New Workspace)" = "New Task (New Workspace)";
+"Split Pane Right" = "Split Pane Right";
+"Split Pane Down" = "Split Pane Down";
+"Close Pane" = "Close Pane";
+"Workspace Sidebar" = "Workspace Sidebar";
+"Use Lightty Theme" = "Use Lightty Theme";
+"Download Maple Mono NF CN…" = "Download Maple Mono NF CN…";
+"Preview Font Download…" = "Preview Font Download…";
+"Previewing Font Download" = "Previewing Font Download";
+"Preview mode makes no network request and changes no font files." = "Preview mode makes no network request and changes no font files.";
+"Font download preview complete" = "Font download preview complete";
+"The preview completed without network or filesystem changes." = "The preview completed without network or filesystem changes.";
+"Downloading font…" = "Downloading font…";
+"Installing Maple Mono NF CN" = "Installing Maple Mono NF CN";
+"The verified font will be installed in ~/Library/Fonts and will be available to other apps." = "The verified font will be installed in ~/Library/Fonts and will be available to other apps.";
+"Verifying and installing…" = "Verifying and installing…";
+"Font installed" = "Font installed";
+"Maple Mono NF CN is now available to Lightty and other apps." = "Maple Mono NF CN is now available to Lightty and other apps.";
+"Could not install font" = "Could not install font";
+
+/* 通用 */
+"OK" = "OK";
+"Create" = "Create";
+"Rename" = "Rename";
+"Cancel" = "Cancel";
+"Open" = "Open";
+"Allow" = "Allow";
+"Press Return to confirm" = "Press Return to confirm";
+
+/* 终端权限弹窗 */
+"Open terminal link?" = "Open terminal link?";
+"Allow terminal to read the clipboard?" = "Allow terminal to read the clipboard?";
+"Paste from clipboard?" = "Paste from clipboard?";
+"Allow terminal to write to the clipboard?" = "Allow terminal to write to the clipboard?";
+
+/* pane / 工作区 */
+"Terminal %d" = "Terminal %d";
+"Workspace" = "Workspace";
+"Workspace %d" = "Workspace %d";
+"Rename workspace" = "Rename workspace";
+"Workspaces" = "Workspaces";
+"Close workspace" = "Close workspace";
+"Collapse workspace" = "Collapse workspace";
+"Expand workspace" = "Expand workspace";
+"Close pane" = "Close pane";
+"New workspace" = "New workspace";
+"New window" = "New window";
+"Open in" = "Open in";
+"Already open" = "Already open";
+"Open another" = "Open another";
+"No handoff summary yet" = "No handoff summary yet";
+"Split right" = "Split right";
+"Split down" = "Split down";
+"Split in current workspace" = "Split in current workspace";
+
+/* 侧栏 */
+"Search tasks" = "Search tasks";
+"Search task names and handoff content" = "Search task names and handoff content";
+"↩ Jump / open in current workspace · esc Close" = "↩ Jump / open in current workspace · esc Close";
+"No matching tasks" = "No matching tasks";
+"No tasks yet" = "No tasks yet";
+"%d active · %d total" = "%d active · %d total";
+"%d tasks" = "%d tasks";
+"Active" = "Active";
+"Dormant" = "Dormant";
+"More actions" = "More actions";
+"just now" = "just now";
+"%d min ago" = "%d min ago";
+"%d hr ago" = "%d hr ago";
+"%d days ago" = "%d days ago";
+"MMM d" = "MMM d";
+
+/* 任务操作 */
+"New task" = "New task";
+"Rename task…" = "Rename task…";
+"Rename task" = "Rename task";
+"Open handoff document" = "Open handoff document";
+"Open with…" = "Open with…";
+"Reveal in Finder" = "Reveal in Finder";
+"Archive task" = "Archive task";
+"Delete task (move to Trash)" = "Delete task (move to Trash)";
+
+/* 任务打开 / 跳转 */
+"Jump · %@" = "Jump · %@";
+
+/* 灵动岛 */
+"Name this terminal" = "Name this terminal";
+"Search, or type a new task name and press Return" = "Search or create a task";
+"Bind task" = "Bind task";
+"New task “%@”" = "New task “%@”";
+"Return" = "Return";
+"Unbind" = "Unbind";
+
+/* agent 状态：菜单栏与通知 */
+"Pane status" = "Pane status";
+"Window %d" = "Window %d";
+"No panes" = "No panes";
+"Mark All as Read" = "Mark All as Read";
+"Show in Menu Bar" = "Show in Menu Bar";
+"Pane" = "Pane";
+"Menu bar status hidden" = "Menu bar status hidden";
+"You can show it again from the lightty menu." = "You can show it again from the lightty menu.";
+"Agent finished" = "Agent finished";
+"Needs your attention" = "Needs your attention";
+"%d agents finished" = "%d agents finished";
+"%d panes need your attention" = "%d panes need your attention";
+
+/* agent 状态：hook 安装器 */
+"Agent status hooks" = "Agent status hooks";
+"Claude Code" = "Claude Code";
+"Codex" = "Codex";
+"Currently points at %@" = "Currently points at %@";
+"The helper is missing — expected at %@. Reinstall lightty, or build the lightty-hook target if you are running from source." = "The helper is missing — expected at %@. Reinstall lightty, or build the lightty-hook target if you are running from source.";
+"Could not refresh the helper link: %@" = "Could not refresh the helper link: %@";
+"Already up to date — nothing was changed." = "Already up to date — nothing was changed.";
+"Could not write %@ (%@)." = "Could not write %@ (%@).";
+"The hook helper is not available at %@ yet." = "The hook helper is not available at %@ yet.";
+"Install" = "Install";
+"Uninstall" = "Uninstall";
+"Not found on this Mac" = "Not found on this Mac";
+"Hook installed" = "Hook installed";
+"Partly installed — missing: %@" = "Partly installed — missing: %@";
+
+/* agent 状态：pane 头提示 */
+"Agent is thinking" = "Agent is thinking";
+"Running %@" = "Running %@";
+"Agent is working" = "Agent is working";
+"Agent needs your input" = "Agent needs your input";
+
+/* agent 状态：安装引导蒙层 */
+"Know when your agents finish" = "Know when your agents finish";
+"You can reopen this any time from the lightty menu." = "You can reopen this any time from the lightty menu.";
+"Not now" = "Not now";
+"Done" = "Done";
+
+/* agent 状态：安装引导蒙层（补充） */
+"Details" = "Details";
+"Registered command:" = "Registered command:";
+"Not installed" = "Not installed";
+"Config unreadable, lightty will not touch it (%@)" = "Config unreadable, lightty will not touch it (%@)";
+" · Codex will ask you to approve this on its next run" = " · Codex will ask you to approve this on its next run";
+
+/* agent 状态：插件式注册 */
+"Update" = "Update";
+"Installing…" = "Installing…";
+"Updating…" = "Updating…";
+"Removing…" = "Removing…";
+"Removed." = "Removed.";
+" · An update is available" = " · An update is available";
+"Installed. Restart claude/codex in your panes to pick it up." = "Installed. Restart claude/codex in your panes to pick it up.";
+"Updated. Restart claude/codex in your panes to pick it up." = "Updated. Restart claude/codex in your panes to pick it up.";
+"The %@ command was not found on this Mac." = "The %@ command was not found on this Mac.";
+"“%@” did not finish within %ds. You can run it yourself to see why." = "“%@” did not finish within %ds. You can run it yourself to see why.";
+"“%@” failed. Nothing was changed." = "“%@” failed. Nothing was changed.";
+"“%@” failed: %@" = "“%@” failed: %@";
+"Could not read %@ to check the current state (%@)." = "Could not read %@ to check the current state (%@).";
+"Could not read the current state — unrecognised config shape (%@)." = "Could not read the current state — unrecognised config shape (%@).";
+
+/* agent 状态：引导蒙层文案（插件路线）*/
+"Plugin source:" = "Plugin source:";
+"%@ · commands lightty will run" = "%@ · commands lightty will run";
+"lightty ships a small plugin and asks claude/codex to install it with their own CLI. lightty never edits your agent config itself." = "lightty ships a small plugin and asks claude/codex to install it with their own CLI. lightty never edits your agent config itself.";
+"The plugin is generated under ~/.lightty and registered by your agent’s own CLI — lightty does not write your agent config. Uninstall removes it the same way. Status files stay under ~/.lightty and are never uploaded." = "The plugin is generated under ~/.lightty and registered by your agent’s own CLI — lightty does not write your agent config. Uninstall removes it the same way. Status files stay under ~/.lightty and are never uploaded.";
+
+/* agent 状态：侧栏行的状态文字 */
+"Thinking" = "Thinking";
+"Working" = "Working";
+"Needs you" = "Needs you";
+"Finished" = "Finished";

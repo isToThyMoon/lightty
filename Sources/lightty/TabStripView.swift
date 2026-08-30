@@ -4,7 +4,7 @@ import AppKit
 /// tab 是 lightty 的窗口内概念（一个 pane 树容器），不是 macOS 原生 tab（那是
 /// 多个 NSWindow 结组，tab bar 横跨全窗宽，与"一窗一侧栏"语义冲突，已弃用）。
 final class TabStripView: NSView {
-    static let height: CGFloat = 34
+    static let height: CGFloat = ShellStyle.chromeRowHeight
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
@@ -18,7 +18,7 @@ final class TabStripView: NSView {
         wantsLayer = true
         applyBackground()
 
-        // 「新 Tab」入口固定在标题栏，条内不放重复「+」（入口搬家伤心智）。
+        // 「新工作区」入口固定在工作区侧栏标题行，条内不放重复「+」。
         stack.orientation = .horizontal
         stack.spacing = 4
         stack.alignment = .centerY
@@ -29,7 +29,7 @@ final class TabStripView: NSView {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.heightAnchor.constraint(equalToConstant: 26),
+            stack.heightAnchor.constraint(equalToConstant: 22),
             stack.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -8),
         ])
@@ -57,7 +57,7 @@ final class TabStripView: NSView {
             item.onRenameRequest = { [weak self, weak item] in
                 guard let self, let item else { return }
                 NameEditorPopover.present(
-                    from: item, title: "重命名工作区", initial: title, confirmLabel: "重命名"
+                    from: item, title: L("Rename workspace"), initial: title, confirmLabel: L("Rename")
                 ) { [weak self] name in
                     self?.onRename?(index, name)
                 }
@@ -93,7 +93,7 @@ private final class TabItemView: NSView {
     init(title: String, isActive: Bool) {
         self.isActive = isActive
         closeButton = ShellIconButton(
-            symbol: "xmark", accessibilityLabel: "关闭 Tab", target: nil, action: nil)
+            symbol: "xmark", accessibilityLabel: L("Close workspace"), target: nil, action: nil)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.controlCornerRadius

@@ -1,11 +1,6 @@
 import Foundation
 
-/// 任务状态，取值集合由 docs/task-format.md 固定
-public enum TaskStatus: String, CaseIterable, Equatable {
-    case active
-    case stuck
-    case done
-}
+
 
 /// 关联会话条目，序列化为 `<tool>:<session-id>`
 public struct TaskSession: Equatable, Hashable {
@@ -34,8 +29,13 @@ public struct TaskParseError: Error, Equatable, CustomStringConvertible {
 /// 单个任务文件的内存表示。格式规范见 docs/task-format.md。
 public struct TaskFile: Equatable {
     public var name: String
-    public var status: TaskStatus
-    public var cwd: String
+    /// 已弃用字段（docs/task-format.md）：任何一方不读其语义。原为
+    /// active|stuck|done 枚举；agent 手写文件常用 completed 等自然词，
+    /// 为死字段的取值校验把整个文件从列表毙掉不成比例，2026-09-04 起
+    /// 改为原样保留的字符串，读写不校验取值。
+    public var status: String
+    /// 任务创建现场的工作目录（规范键 `workdir`；旧键 `cwd` 仅读取兼容，写入不再输出）
+    public var workdir: String
     public var tool: String?
     public var created: Date
     public var updated: Date
@@ -47,8 +47,8 @@ public struct TaskFile: Equatable {
 
     public init(
         name: String,
-        status: TaskStatus,
-        cwd: String,
+        status: String,
+        workdir: String,
         tool: String? = nil,
         created: Date,
         updated: Date,
@@ -58,7 +58,7 @@ public struct TaskFile: Equatable {
     ) {
         self.name = name
         self.status = status
-        self.cwd = cwd
+        self.workdir = workdir
         self.tool = tool
         self.created = created
         self.updated = updated
@@ -116,8 +116,8 @@ public struct TaskFile: Equatable {
 
         // 逐行解析键值
         var name: String?
-        var status: TaskStatus?
-        var cwd: String?
+        var status: String?
+        var workdir: String?
         var tool: String?
         var created: Date?
         var updated: Date?
@@ -156,9 +156,9 @@ public struct TaskFile: Equatable {
             guard let colon = text.firstIndex(of: ":") else {
                 throw TaskParseError(line: line, message: "缺少冒号分隔的键值行")
             }
-            let key = String(text[..<colon])
-            guard !key.isEmpty, !key.contains(where: { $0.isWhitespace }) else {
-                throw TaskParseError(line: line, message: "非法键名: \(key)")
+            let rawKey = String(text[..<colon])
+            guard !rawKey.isEmpty, !rawKey.contains(where: { $0.isWhitespace }) else {
+                throw TaskParseError(line: line, message: "非法键名: \(rawKey)")
             }
             let afterColon = text.index(after: colon)
             guard afterColon < text.endIndex, text[afterColon] == " " else {
@@ -168,6 +168,9 @@ public struct TaskFile: Equatable {
             guard !value.isEmpty, !value.hasPrefix(" ") else {
                 throw TaskParseError(line: line, message: "冒号后须恰好一个空格起值")
             }
+            // 2026-09-04 格式升版：cwd 是 workdir 的旧名，入口处归一。
+            // 此后整条流水线只认识 workdir——双键并存按键重复报错。
+            let key = (rawKey == "cwd") ? "workdir" : rawKey
             guard seenKeys.insert(key).inserted else {
                 throw TaskParseError(line: line, message: "键重复: \(key)")
             }
@@ -176,12 +179,9 @@ public struct TaskFile: Equatable {
             case "name":
                 name = value
             case "status":
-                guard let s = TaskStatus(rawValue: value) else {
-                    throw TaskParseError(line: line, message: "status 取值非法: \(value)")
-                }
-                status = s
-            case "cwd":
-                cwd = value
+                status = value
+            case "workdir":
+                workdir = value
             case "tool":
                 tool = value
             case "created":
@@ -201,12 +201,14 @@ public struct TaskFile: Equatable {
 
         guard let name else { throw TaskParseError(line: closingLine, message: "缺少必填键: name") }
         guard let status else { throw TaskParseError(line: closingLine, message: "缺少必填键: status") }
-        guard let cwd else { throw TaskParseError(line: closingLine, message: "缺少必填键: cwd") }
+        guard let workdir else {
+            throw TaskParseError(line: closingLine, message: "缺少必填键: workdir")
+        }
         guard let created else { throw TaskParseError(line: closingLine, message: "缺少必填键: created") }
         guard let updated else { throw TaskParseError(line: closingLine, message: "缺少必填键: updated") }
 
         return TaskFile(
-            name: name, status: status, cwd: cwd, tool: tool,
+            name: name, status: status, workdir: workdir, tool: tool,
             created: created, updated: updated,
             sessions: sessions, unknownLines: unknownLines, body: body
         )
@@ -214,12 +216,12 @@ public struct TaskFile: Equatable {
 
     // MARK: - 序列化
 
-    /// 按规范固定键序输出：name、status、cwd、tool（有值）、created、updated、未知键、sessions（非空）
+    /// 按规范固定键序输出：name、status、workdir、tool（有值）、created、updated、未知键、sessions（非空）
     public func serialize() -> Data {
         var s = "---\n"
         s += "name: \(name)\n"
-        s += "status: \(status.rawValue)\n"
-        s += "cwd: \(cwd)\n"
+        s += "status: \(status)\n"
+        s += "workdir: \(workdir)\n"
         if let tool {
             s += "tool: \(tool)\n"
         }

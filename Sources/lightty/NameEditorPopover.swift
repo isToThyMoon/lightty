@@ -9,7 +9,7 @@ enum NameEditorPopover {
         from anchor: NSView,
         title: String,
         initial: String = "",
-        confirmLabel: String = "确认",
+        confirmLabel: String = L("OK"),
         onCommit: @escaping (String) -> Void
     ) {
         popover?.close()
@@ -69,7 +69,7 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
         field.translatesAutoresizingMaskIntoConstraints = false
 
         // 无确认按钮：回车提交、Esc/点外部取消（多一步确认是冗余操作）
-        let hint = NSTextField(labelWithString: "回车确认")
+        let hint = NSTextField(labelWithString: L("Press Return to confirm"))
         hint.font = .systemFont(ofSize: 9.5)
         hint.textColor = ShellStyle.tertiaryText
 
