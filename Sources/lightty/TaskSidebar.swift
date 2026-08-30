@@ -232,6 +232,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         // searchTextRect 发生重叠。图标由相邻 NSImageView 绘制，cell 只管文字
         // 与原生 cancel button，避免 placeholder 与放大镜共享起点。
         (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
+        (searchField.cell as? NSSearchFieldCell)?.usesSingleLineMode = true
         searchContainer.searchField = searchField
 
         let column = NSTableColumn(identifier: .init("task"))
@@ -288,17 +289,18 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             searchContainer.heightAnchor.constraint(equalToConstant: 34),
 
             searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
-            // SF Symbol 的可见笔画在 13pt image frame 内约下沉 2pt；用 optical
-            // offset 对齐 12pt 输入文字，而不是让两个 frame 的几何中心硬重合。
+            // 文字已真居中；-1 是对齐文字视觉中心的光学微调（实测定值）。
             searchIcon.centerYAnchor.constraint(
-                equalTo: searchContainer.centerYAnchor, constant: -2),
+                equalTo: searchContainer.centerYAnchor, constant: -1),
             searchIcon.widthAnchor.constraint(equalToConstant: 13),
             searchIcon.heightAnchor.constraint(equalToConstant: 13),
 
             searchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 6),
             searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -7),
             searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
-            searchField.heightAnchor.constraint(equalToConstant: 22),
+            // 高度贴合 12pt 单行文字：NSTextFieldCell 在超高 frame 里顶对齐，
+            // 多余高度全垫在下方，centerY 就假居中了（22 → 18 修文字偏上）。
+            searchField.heightAnchor.constraint(equalToConstant: 18),
 
             scroll.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 8),
