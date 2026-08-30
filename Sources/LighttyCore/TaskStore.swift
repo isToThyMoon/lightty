@@ -85,6 +85,23 @@ public final class TaskStore {
         return target
     }
 
+    /// 归档：移入 archive/ 子目录。list() 只扫顶层，归档后自然从列表消失；
+    /// md 文件原样保留，用户可自行翻阅或另行同步。返回归档后路径。
+    @discardableResult
+    public func archive(at fileURL: URL) throws -> URL {
+        let archiveDir = directory.appendingPathComponent("archive", isDirectory: true)
+        try fm.createDirectory(at: archiveDir, withIntermediateDirectories: true)
+        let base = fileURL.deletingPathExtension().lastPathComponent
+        var target = archiveDir.appendingPathComponent(fileURL.lastPathComponent)
+        var n = 2
+        while fm.fileExists(atPath: target.path) {
+            target = archiveDir.appendingPathComponent("\(base)-\(n).md")
+            n += 1
+        }
+        try fm.moveItem(at: fileURL, to: target)
+        return target
+    }
+
     /// 追加会话；tool+id 相同视为重复，去重且不写盘
     @discardableResult
     public func appendSession(at fileURL: URL, tool: String, id: String) throws -> TaskFile {

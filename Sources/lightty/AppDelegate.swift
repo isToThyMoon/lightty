@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // keybind（含默认 cmd+N/T/D/W、cmd+[]、cmd+alt+方向等）匹配后经 action_cb 回来。
         // 菜单项仅供鼠标点选。
         taskMenu.addItem(makeItem("新任务（新窗口）", #selector(newTaskWindow)))
-        taskMenu.addItem(makeItem("新任务（新标签页）", #selector(newTaskTab)))
+        taskMenu.addItem(makeItem("新任务（新工作区）", #selector(newTaskTab)))
         taskMenu.addItem(.separator())
         taskMenu.addItem(makeItem("向右分 pane", #selector(splitRight)))
         taskMenu.addItem(makeItem("向下分 pane", #selector(splitDown)))

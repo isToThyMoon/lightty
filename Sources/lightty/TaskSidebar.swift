@@ -26,7 +26,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private struct Entry {
         let fileURL: URL
         let task: TaskFile
-        /// 有 pane 绑着 = 运行中
+        /// 有 pane 绑着 = 活跃（派生态，仅存在于 UI 层，不落盘）
         let running: (controller: TerminalWindowController, pane: PaneView)?
     }
 
@@ -41,7 +41,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let tableView = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "没有匹配的任务")
     private let newTaskButton = ShellIconButton(
-        symbol: "plus", accessibilityLabel: "新任务", target: nil, action: nil)
+        symbol: "doc.badge.plus", accessibilityLabel: "新建任务", target: nil, action: nil)
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
@@ -51,7 +51,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     var isDirty: Bool { false }
 
     var onRequestClose: (() -> Void)?
-    var onRequestNewTask: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
 
     /// 内容避开顶部标题栏区域的高度（抽屉背景本体延伸到窗口最顶端）
@@ -93,8 +92,17 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         NotificationCenter.default.removeObserver(self)
     }
 
+    private var reloadScheduled = false
+
     @objc private func tasksDidChange() {
-        reload()
+        // 合并到下一个 runloop tick：bind() 在 pane 挂进视图树之前发通知，
+        // 同步 reload 会读到「已绑定但还不在树上」的中间态，误判为休眠。
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.reloadScheduled = false
+            self?.reload()
+        }
     }
 
     /// layer.backgroundColor 是 CGColor 快照，外观切换时必须按当前明暗重解析。
@@ -148,7 +156,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 return Entry(fileURL: entry.fileURL, task: entry.task, running: bound)
             }
             .sorted {
-                // 运行中置顶，其余按最近更新
+                // 活跃置顶，其余按最近更新
                 if ($0.running != nil) != ($1.running != nil) { return $0.running != nil }
                 return $0.task.updated > $1.task.updated
             }
@@ -170,7 +178,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         let runningCount = allEntries.filter { $0.running != nil }.count
         countLabel.stringValue = runningCount > 0
-            ? "\(runningCount) 个运行中 · 共 \(allEntries.count) 个"
+            ? "\(runningCount) 个活跃 · 共 \(allEntries.count) 个"
             : "\(allEntries.count) 个任务"
         emptyLabel.isHidden = !filtered.isEmpty
         tableView.reloadData()
@@ -302,7 +310,23 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ])
     }
 
-    @objc private func newTask() { onRequestNewTask?() }
+    /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
+    @objc private func newTask() {
+        NameEditorPopover.present(
+            from: newTaskButton, title: "新建任务", confirmLabel: "创建"
+        ) { name in
+            do {
+                _ = try AppState.shared.taskStore.create(
+                    name: name,
+                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    tool: nil)
+                NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+            } catch {
+                NSSound.beep()
+                NSLog("task create failed: \(error)")
+            }
+        }
+    }
     @objc private func searchChanged() { applyFilter(searchField.stringValue) }
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
@@ -324,8 +348,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         title.textColor = ShellStyle.primaryText
         title.lineBreakMode = .byTruncatingTail
 
-        let state = entry.running != nil ? "运行中" : statusTitle(entry.task.status)
-        let subtitle = NSTextField(labelWithString: "\(state)  ·  \(relativeTime(entry.task.updated))")
+        // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
+        // 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
+        let activity = entry.running != nil ? "活跃" : "休眠"
+        let subtitle = NSTextField(
+            labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
         subtitle.font = .systemFont(ofSize: 10.5)
         subtitle.textColor = ShellStyle.tertiaryText
         subtitle.lineBreakMode = .byTruncatingTail
@@ -364,20 +391,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     }
 
     private func dotColor(for entry: Entry) -> NSColor {
-        if entry.running != nil { return .systemGreen }
-        switch entry.task.status {
-        case .active: return .systemGray
-        case .stuck: return .systemOrange
-        case .done: return .systemGray.withAlphaComponent(0.45)
-        }
-    }
-
-    private func statusTitle(_ status: TaskStatus) -> String {
-        switch status {
-        case .active: return "休眠"
-        case .stuck: return "卡住"
-        case .done: return "已完成"
-        }
+        entry.running != nil ? .systemGreen : .systemGray
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -393,129 +407,101 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
 
-    // MARK: - 行「⋯」菜单：任务管理动作（详情页已移除，编辑交给系统编辑器）
+    // MARK: - 行「⋯」菜单（自绘气泡；纯管理动作，跳转走单击气泡/双击）
 
     @objc private func showRowMenu(_ sender: NSButton) {
         guard sender.tag >= 0, sender.tag < filtered.count else { return }
         let entry = filtered[sender.tag]
-        let menu = NSMenu()
 
-        let rename = NSMenuItem(
-            title: "重命名任务…", action: #selector(renameFromMenu(_:)), keyEquivalent: "")
-        rename.target = self
-        rename.representedObject = RowMenuContext(entry: entry, anchor: sender)
-        menu.addItem(rename)
-
-        let statusItem = NSMenuItem(title: "状态", action: nil, keyEquivalent: "")
-        let statusMenu = NSMenu()
-        for status in TaskStatus.allCases {
-            let item = NSMenuItem(
-                title: statusTitle(status), action: #selector(setStatusFromMenu(_:)),
-                keyEquivalent: "")
-            item.target = self
-            item.representedObject = RowMenuContext(entry: entry, anchor: sender, status: status)
-            item.state = entry.task.status == status ? .on : .off
-            statusMenu.addItem(item)
-        }
-        statusItem.submenu = statusMenu
-        menu.addItem(statusItem)
-
-        menu.addItem(.separator())
-
-        let open = NSMenuItem(
-            title: "打开 handoff 文档", action: #selector(openDocFromMenu(_:)), keyEquivalent: "")
-        open.target = self
-        open.representedObject = RowMenuContext(entry: entry, anchor: sender)
-        menu.addItem(open)
-
-        let reveal = NSMenuItem(
-            title: "在 Finder 中显示", action: #selector(revealFromMenu(_:)), keyEquivalent: "")
-        reveal.target = self
-        reveal.representedObject = RowMenuContext(entry: entry, anchor: sender)
-        menu.addItem(reveal)
-
-        menu.addItem(.separator())
-
-        let delete = NSMenuItem(
-            title: "删除任务（移到废纸篓）", action: #selector(deleteFromMenu(_:)),
-            keyEquivalent: "")
-        delete.target = self
-        delete.representedObject = RowMenuContext(entry: entry, anchor: sender)
-        menu.addItem(delete)
-
-        menu.popUp(
-            positioning: nil,
-            at: NSPoint(x: 0, y: sender.bounds.maxY + 4),
-            in: sender)
-    }
-
-    private final class RowMenuContext: NSObject {
-        let entry: Entry
-        let anchor: NSView
-        let status: TaskStatus?
-
-        init(entry: Entry, anchor: NSView, status: TaskStatus? = nil) {
-            self.entry = entry
-            self.anchor = anchor
-            self.status = status
-        }
-    }
-
-    @objc private func renameFromMenu(_ sender: NSMenuItem) {
-        guard let context = sender.representedObject as? RowMenuContext else { return }
-        NameEditorPopover.present(
-            from: context.anchor, title: "重命名任务",
-            initial: context.entry.task.name, confirmLabel: "重命名"
-        ) { name in
+        var items: [ShellMenuPopover.Item] = [
+            .action("重命名任务…") { [weak self, weak sender] in
+                guard let anchor = sender ?? self else { return }
+                NameEditorPopover.present(
+                    from: anchor, title: "重命名任务",
+                    initial: entry.task.name, confirmLabel: "重命名"
+                ) { name in
+                    do {
+                        try AppState.shared.renameTask(at: entry.fileURL, to: name)
+                    } catch {
+                        NSSound.beep()
+                        NSLog("task rename failed: \(error)")
+                    }
+                }
+            },
+            .separator,
+        ]
+        // 状态不提供手动修改也不展示：活跃/休眠由 pane 绑定派生；
+        // 文件 status 字段已弃用（见 docs/task-format.md）。
+        items.append(.action("打开 handoff 文档") {
+            NSWorkspace.shared.open(entry.fileURL)
+        })
+        items.append(.action("用其他应用打开…") { [weak self, weak sender] in
+            guard let anchor = sender ?? self else { return }
+            // 列系统里注册可打开 md 的应用；勾选 = 当前系统默认（想全局换默认
+            // 走 Finder 显示简介 →「全部更改」，此处只做单次选择不持久化）。
+            let workspace = NSWorkspace.shared
+            let defaultApp = workspace.urlForApplication(toOpen: entry.fileURL)
+            var seenNames = Set<String>()
+            var appItems: [ShellMenuPopover.Item] = []
+            for appURL in workspace.urlsForApplications(toOpen: entry.fileURL) {
+                let name = FileManager.default.displayName(atPath: appURL.path)
+                guard seenNames.insert(name).inserted else { continue }
+                appItems.append(.action(name, checked: appURL == defaultApp) {
+                    workspace.open(
+                        [entry.fileURL], withApplicationAt: appURL,
+                        configuration: NSWorkspace.OpenConfiguration(),
+                        completionHandler: nil)
+                })
+            }
+            guard !appItems.isEmpty else { NSSound.beep(); return }
+            appItems.sort {
+                switch ($0.checked, $1.checked) {
+                case (true, false): return true
+                case (false, true): return false
+                default: return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                }
+            }
+            ShellMenuPopover.present(from: anchor, items: appItems)
+        })
+        items.append(.action("在 Finder 中显示") {
+            NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
+        })
+        items.append(.separator)
+        items.append(.action("归档任务") {
             do {
-                try AppState.shared.renameTask(at: context.entry.fileURL, to: name)
+                // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的 pane 解绑。
+                try AppState.shared.taskStore.archive(at: entry.fileURL)
+                for (_, pane) in AppState.shared.runningPanes()
+                where pane.taskFileURL?.standardizedFileURL
+                    == entry.fileURL.standardizedFileURL {
+                    pane.unbind()
+                }
+                NotificationCenter.default.post(
+                    name: .lighttyTasksDidChange, object: nil)
             } catch {
                 NSSound.beep()
-                NSLog("task rename failed: \(error)")
+                NSLog("task archive failed: \(error)")
             }
-        }
-    }
-
-    @objc private func setStatusFromMenu(_ sender: NSMenuItem) {
-        guard let context = sender.representedObject as? RowMenuContext,
-              let status = context.status else { return }
-        var task = context.entry.task
-        task.status = status
-        do {
-            try AppState.shared.taskStore.update(at: context.entry.fileURL, task: task)
-            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-        } catch {
-            NSSound.beep()
-            NSLog("task status update failed: \(error)")
-        }
-    }
-
-    @objc private func openDocFromMenu(_ sender: NSMenuItem) {
-        guard let context = sender.representedObject as? RowMenuContext else { return }
-        NSWorkspace.shared.open(context.entry.fileURL)
-    }
-
-    @objc private func revealFromMenu(_ sender: NSMenuItem) {
-        guard let context = sender.representedObject as? RowMenuContext else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([context.entry.fileURL])
-    }
-
-    @objc private func deleteFromMenu(_ sender: NSMenuItem) {
-        guard let context = sender.representedObject as? RowMenuContext else { return }
-        do {
-            // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
-            try FileManager.default.trashItem(
-                at: context.entry.fileURL, resultingItemURL: nil)
-            for (_, pane) in AppState.shared.runningPanes()
-            where pane.taskFileURL?.standardizedFileURL
-                == context.entry.fileURL.standardizedFileURL {
-                pane.unbind()
+        })
+        items.append(.action("删除任务（移到废纸篓）", destructive: true) {
+            do {
+                // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
+                try FileManager.default.trashItem(
+                    at: entry.fileURL, resultingItemURL: nil)
+                for (_, pane) in AppState.shared.runningPanes()
+                where pane.taskFileURL?.standardizedFileURL
+                    == entry.fileURL.standardizedFileURL {
+                    pane.unbind()
+                }
+                NotificationCenter.default.post(
+                    name: .lighttyTasksDidChange, object: nil)
+            } catch {
+                NSSound.beep()
+                NSLog("task delete failed: \(error)")
             }
-            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-        } catch {
-            NSSound.beep()
-            NSLog("task delete failed: \(error)")
-        }
+        })
+
+        ShellMenuPopover.present(from: sender, items: items)
     }
 
     /// 单击：统一弹任务气泡（已打开的列跳转行 + 打开到三目的地），侧栏保持展开。
