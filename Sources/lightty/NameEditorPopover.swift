@@ -22,6 +22,7 @@ enum NameEditorPopover {
             pop?.close()
             onCommit(name)
         }
+        content.onCancel = { [weak pop] in pop?.close() }
         popover = pop
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
         content.focusField()
@@ -67,10 +68,12 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
         fieldWrap.addSubview(field)
         field.translatesAutoresizingMaskIntoConstraints = false
 
-        let confirm = ShellTextButton(
-            confirmLabel, emphasis: .primary, target: self, action: #selector(commit))
+        // 无确认按钮：回车提交、Esc/点外部取消（多一步确认是冗余操作）
+        let hint = NSTextField(labelWithString: "回车确认")
+        hint.font = .systemFont(ofSize: 9.5)
+        hint.textColor = ShellStyle.tertiaryText
 
-        let stack = NSStackView(views: [title, fieldWrap, confirm])
+        let stack = NSStackView(views: [title, fieldWrap, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -80,14 +83,13 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             root.widthAnchor.constraint(equalToConstant: 240),
             fieldWrap.widthAnchor.constraint(equalTo: stack.widthAnchor),
             fieldWrap.heightAnchor.constraint(equalToConstant: 26),
             field.leadingAnchor.constraint(equalTo: fieldWrap.leadingAnchor, constant: 8),
             field.trailingAnchor.constraint(equalTo: fieldWrap.trailingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: fieldWrap.centerYAnchor),
-            confirm.heightAnchor.constraint(equalToConstant: 24),
         ])
         applyColors(to: fieldWrap)
         view = root
@@ -99,19 +101,28 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
     }
 
     private func applyColors(to wrap: NSView) {
+        // ⚠️ 不得访问 self.view：loadView 内 view 尚未赋值，getter 会重入
+        // loadView 造成无限递归爆栈。用 wrap 自身外观（未挂载时回退 NSApp 外观）。
         wrap.layer?.backgroundColor =
-            ShellStyle.controlFill.shellResolvedCGColor(for: view.effectiveAppearance)
+            ShellStyle.controlFill.shellResolvedCGColor(for: wrap.effectiveAppearance)
         field.textColor = ShellStyle.primaryText
     }
+
+    var onCancel: (() -> Void)?
 
     func control(
         _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
     ) -> Bool {
-        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
             commit()
             return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            onCancel?()
+            return true
+        default:
+            return false
         }
-        return false
     }
 
     @objc private func commit() {
