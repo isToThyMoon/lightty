@@ -38,7 +38,9 @@ enum RestoreFlow {
             if lines.count > 14 { break }
         }
         let result = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return result.isEmpty ? "（handoff 正文为空）" : result
+        return result.isEmpty
+            ? "还没有 handoff 摘要——收工后 agent 会写入「下一步 / 当前状态 / 卡点与风险」，此处按节抽取显示。"
+            : result
     }
 }
 
@@ -79,13 +81,18 @@ private final class RestorePopoverController: NSViewController {
 
         var rows: [NSView] = [title, summary, hint]
         var buttonRows: [NSButton] = []
+        var sectionLabels: [NSView] = []
 
         // 已打开：每个绑定该任务的运行中 pane 一行，点击直接跳转。
         let bound = AppState.shared.runningPanes().filter {
             $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
         }
         if !bound.isEmpty {
-            rows.append(Self.sectionLabel("已打开"))
+            let opened = Self.sectionLabel("已打开")
+            rows.append(opened)
+            sectionLabels.append(opened)
+            // 工作区默认名全局计数、跨窗口唯一，标签无需窗口前缀；
+            // 跳转本身持 (controller, pane) 引用，重名（用户手改）也不影响落点。
             for (index, entry) in bound.enumerated() {
                 // 层级序：工作区（容器）› pane（叶子）
                 let workspace = entry.controller.workspaceName(of: entry.pane)
@@ -100,11 +107,13 @@ private final class RestorePopoverController: NSViewController {
             }
         }
 
-        rows.append(Self.sectionLabel(bound.isEmpty ? "打开到" : "再开一个"))
+        let destinations = Self.sectionLabel(bound.isEmpty ? "打开到" : "再开一个")
+        rows.append(destinations)
+        sectionLabels.append(destinations)
         let paneButton = RestoreRowButton(
-            "当前 Tab 分屏", target: self, action: #selector(restoreInPane))
+            "当前工作区分屏", target: self, action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
-            "新 Tab", target: self, action: #selector(restoreInTab))
+            "新工作区", target: self, action: #selector(restoreInTab))
         let windowButton = RestoreRowButton(
             "新窗口", target: self, action: #selector(restoreInWindow))
         rows.append(contentsOf: [paneButton, tabButton, windowButton])
@@ -114,6 +123,12 @@ private final class RestorePopoverController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
+        // 分组标题上方拉开间距，分组结构靠留白显形
+        for label in sectionLabels {
+            if let index = rows.firstIndex(where: { $0 === label }), index > 0 {
+                stack.setCustomSpacing(14, after: rows[index - 1])
+            }
+        }
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         var constraints = [
@@ -135,8 +150,8 @@ private final class RestorePopoverController: NSViewController {
 
     private static func sectionLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 10, weight: .medium)
-        label.textColor = ShellStyle.tertiaryText
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = ShellStyle.secondaryText
         return label
     }
 
@@ -150,7 +165,7 @@ private final class RestorePopoverController: NSViewController {
 
     private func makeBoundPane() -> PaneView {
         let pane = PaneView()
-        pane.bind(to: fileURL, name: task.name, status: task.status)
+        pane.bind(to: fileURL, name: task.name)
         return pane
     }
 

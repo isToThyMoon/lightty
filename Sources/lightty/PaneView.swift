@@ -73,13 +73,9 @@ final class PaneView: NSView {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ruler.needsDisplay = true }
         }
 
-        header.onRename = { [weak self] name in self?.rename(to: name) }
-        header.onEditingEnded = { [weak self] in self?.focusTerminal() }
         header.onFinish = { [weak self] in self?.finish() }
         header.onInject = { [weak self] in self?.inject() }
-        header.onTaskPickerRequested = { [weak self] anchor in
-            self?.showTaskPicker(from: anchor)
-        }
+        header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
             self.onClose?(self)
@@ -89,11 +85,12 @@ final class PaneView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// 绑定任务：只改 pane 指向与 pill 显示，不动 pane 名（pane 名是独立会话态标签）。
-    func bind(to fileURL: URL, name: String, status: TaskStatus) {
+    func bind(to fileURL: URL, name: String) {
         binding = .bound(fileURL: fileURL)
         header.setTaskName(name)
-        header.dot = status == .stuck ? .stuck : .active
+        header.dot = .active
         header.injectEnabled = true
+        refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
@@ -104,6 +101,7 @@ final class PaneView: NSView {
         header.setTaskName(nil)
         header.dot = .unnamed
         header.injectEnabled = false
+        refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
@@ -114,6 +112,7 @@ final class PaneView: NSView {
         guard case .bound = binding else { return }
         binding = .bound(fileURL: newURL)
         header.setTaskName(name)
+        refreshIdentityPanel()
     }
 
     var taskFileURL: URL? {
@@ -121,86 +120,184 @@ final class PaneView: NSView {
         return nil
     }
 
-    // MARK: - 任务 pill 菜单
+    // MARK: - 身份面板（灵动岛式展开）
 
-    /// 任务列表（选中即绑定）+ 新建任务… + 已绑定时的重命名/解绑。
-    private func showTaskPicker(from anchor: NSView) {
-        let menu = NSMenu()
-        let running = AppState.shared.runningPanes()
-        let entries = AppState.shared.taskStore.list().tasks
-            .sorted { $0.task.updated > $1.task.updated }
+    private var identityPanel: PaneIdentityPanel?
+    private var panelDismissMonitor: Any?
 
-        for entry in entries {
-            let isCurrent = taskFileURL?.standardizedFileURL
-                == entry.fileURL.standardizedFileURL
-            let boundElsewhere = running.contains {
-                $0.pane !== self && $0.pane.taskFileURL?.standardizedFileURL
-                    == entry.fileURL.standardizedFileURL
+    /// pane 离窗（拖拽重组/关闭）时面板必须跟着收，否则悬浮在 contentView 上成孤儿。
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if identityPanel != nil { dismissIdentityPanel() }
+    }
+
+    private func toggleIdentityPanel() {
+        if identityPanel != nil {
+            dismissIdentityPanel()
+        } else {
+            showIdentityPanel()
+        }
+    }
+
+    /// 形变展开（灵动岛式）：面板从胶囊 frame 生长到展开尺寸，内容渐显；
+    /// 收起反向缩回。frame 驱动动画，不用 Auto Layout 钉面板位置。
+    /// 岛体在面板内的 rect：顶边恒对齐面板顶边，高度 h（非翻转坐标）。
+    private func islandRect(in panel: PaneIdentityPanel, height: CGFloat) -> NSRect {
+        NSRect(
+            x: 0, y: panel.bounds.height - height,
+            width: PaneIdentityPanel.panelWidth, height: height)
+    }
+
+    private func showIdentityPanel() {
+        let panel = PaneIdentityPanel()
+        panel.onPaneNameCommit = { [weak self] name in self?.rename(to: name) }
+        panel.taskProvider = { [weak self] in
+            let running = AppState.shared.runningPanes()
+            let current = self?.taskFileURL?.standardizedFileURL
+            return AppState.shared.taskStore.list().tasks
+                .sorted { $0.task.updated > $1.task.updated }
+                .map { entry in
+                    PaneIdentityPanel.TaskChoice(
+                        name: entry.task.name,
+                        fileURL: entry.fileURL,
+                        running: running.contains {
+                            $0.pane !== self && $0.pane.taskFileURL?.standardizedFileURL
+                                == entry.fileURL.standardizedFileURL
+                        },
+                        current: current == entry.fileURL.standardizedFileURL)
+                }
+        }
+        panel.onBindTask = { [weak self] url in
+            guard let entry = AppState.shared.taskStore.list().tasks.first(where: {
+                $0.fileURL.standardizedFileURL == url.standardizedFileURL
+            }) else { return }
+            self?.bind(to: entry.fileURL, name: entry.task.name)
+        }
+        panel.onCreateTask = { [weak self] name in
+            do {
+                let created = try AppState.shared.taskStore.create(
+                    name: name,
+                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    tool: nil)
+                self?.bind(to: created.fileURL, name: name)
+            } catch {
+                NSSound.beep()
+                NSLog("task create failed: \(error)")
             }
-            let item = NSMenuItem(
-                title: entry.task.name + (boundElsewhere ? " · 运行中" : ""),
-                action: #selector(bindTaskFromMenu(_:)),
-                keyEquivalent: "")
-            item.target = self
-            item.representedObject = entry.fileURL
-            item.state = isCurrent ? .on : .off
-            menu.addItem(item)
         }
-        if !entries.isEmpty { menu.addItem(.separator()) }
-
-        let create = NSMenuItem(
-            title: "新建任务…", action: #selector(createTaskFromMenu), keyEquivalent: "")
-        create.target = self
-        menu.addItem(create)
-
-        if case .bound = binding {
-            let rename = NSMenuItem(
-                title: "重命名任务…", action: #selector(renameTaskFromMenu), keyEquivalent: "")
-            rename.target = self
-            menu.addItem(rename)
-            let unbindItem = NSMenuItem(
-                title: "解除绑定", action: #selector(unbindFromMenu), keyEquivalent: "")
-            unbindItem.target = self
-            menu.addItem(unbindItem)
-        }
-
-        menu.popUp(
-            positioning: nil,
-            at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
-            in: anchor)
-    }
-
-    @objc private func bindTaskFromMenu(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL,
-              let entry = AppState.shared.taskStore.list().tasks.first(where: {
-                  $0.fileURL.standardizedFileURL == url.standardizedFileURL
-              }) else { return }
-        bind(to: entry.fileURL, name: entry.task.name, status: entry.task.status)
-        focusTerminal()
-    }
-
-    @objc private func createTaskFromMenu() {
-        presentCreateTaskEditor()
-    }
-
-    @objc private func renameTaskFromMenu() {
-        guard case .bound(let url) = binding else { return }
-        let current = header.titleOfBoundTask ?? ""
-        NameEditorPopover.present(
-            from: header, title: "重命名任务", initial: current, confirmLabel: "重命名"
-        ) { name in
+        panel.onUnbindTask = { [weak self] in self?.unbind() }
+        panel.onTaskRenameCommit = { [weak self] name in
+            guard let self, case .bound(let url) = self.binding else { return }
             do {
                 _ = try AppState.shared.renameTask(at: url, to: name)
+                self.refreshIdentityPanel()
             } catch {
                 NSSound.beep()
                 NSLog("task rename failed: \(error)")
             }
         }
+        panel.onDismiss = { [weak self] in
+            self?.dismissIdentityPanel()
+            self?.focusTerminal()
+        }
+        panel.onIslandHeightChange = { [weak self, weak panel] height in
+            guard let self, let panel else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.allowsImplicitAnimation = true
+                panel.island.animator().frame = self.islandRect(in: panel, height: height)
+            }
+        }
+        panel.applyTerminalTheme(
+            background: GhosttyRuntime.shared.configValues.backgroundColor,
+            foreground: header.terminalForeground)
+        refresh(panel: panel)
+
+        // 面板挂到窗口 contentView（所有 split 之上）：挂在 pane 里会被
+        // clipsToBounds 和相邻 pane 的更高兄弟层级裁剪/遮盖。
+        // 面板高度取上限（岛体在其中生长），本体静止、永不动画。
+        guard let host = window?.contentView else { return }
+        let start = host.convert(header.capsuleFrame, from: header)
+        panel.frame = NSRect(
+            x: start.minX,
+            y: start.maxY - PaneIdentityPanel.maxHeight,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+        panel.extras.alphaValue = 0 // 第一行不参与淡入：标题原地不动，只有扩展区渐显
+        panel.island.frame = NSRect(
+            x: start.minX - panel.frame.minX, y: start.minY - panel.frame.minY,
+            width: start.width, height: start.height)
+        host.addSubview(panel)
+        identityPanel = panel
+        panel.layoutSubtreeIfNeeded()
+        header.setCapsuleHidden(true) // 瞬时交接：面板第一行与胶囊逐像素同构
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            panel.island.animator().frame = islandRect(
+                in: panel, height: PaneIdentityPanel.baseHeight)
+            panel.extras.animator().alphaValue = 1
+        } completionHandler: { [weak panel] in
+            panel?.focusNameField()
+        }
+
+        // 点击岛体与胶囊之外任意处收起（判定用岛体实际 frame，面板是透明容器）
+        panelDismissMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard let self, let panel = self.identityPanel,
+                  event.window === self.window else { return event }
+            let inIsland = panel.island.frame.contains(
+                panel.convert(event.locationInWindow, from: nil))
+            let inHeader = self.header.bounds.contains(
+                self.header.convert(event.locationInWindow, from: nil))
+            if !inIsland && !inHeader {
+                self.dismissIdentityPanel()
+            }
+            return event
+        }
     }
 
-    @objc private func unbindFromMenu() {
-        unbind()
+    private func dismissIdentityPanel() {
+        guard let panel = identityPanel else { return }
+        if let panelDismissMonitor { NSEvent.removeMonitor(panelDismissMonitor) }
+        panelDismissMonitor = nil
+        identityPanel = nil
+
+        let end = (panel.superview ?? self).convert(header.capsuleFrame, from: header)
+        let islandEnd = NSRect(
+            x: end.minX - panel.frame.minX, y: end.minY - panel.frame.minY,
+            width: end.width, height: end.height)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            context.allowsImplicitAnimation = true
+            // 内容静止，只缩回岛体背景层 + 扩展区渐隐
+            panel.island.animator().frame = islandEnd
+            panel.extras.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak panel] in
+            // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
+            self?.header.setCapsuleHidden(false)
+            panel?.removeFromSuperview()
+        }
     }
+
+    /// 绑定/改名等状态变化后同步面板显示（若展开中）。
+    private func refreshIdentityPanel() {
+        guard let panel = identityPanel else { return }
+        refresh(panel: panel)
+    }
+
+    private func refresh(panel: PaneIdentityPanel) {
+        panel.update(
+            paneName: header.title,
+            taskName: header.titleOfBoundTask,
+            dot: header.dot.color)
+    }
+
 
     /// 新建任务并绑定（收工的未绑定路径也走这里）。
     private func presentCreateTaskEditor() {
@@ -213,7 +310,7 @@ final class PaneView: NSView {
                     name: name,
                     cwd: FileManager.default.homeDirectoryForCurrentUser.path,
                     tool: nil)
-                self.bind(to: created.fileURL, name: name, status: .active)
+                self.bind(to: created.fileURL, name: name)
                 self.focusTerminal()
             } catch {
                 NSSound.beep()

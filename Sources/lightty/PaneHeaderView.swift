@@ -1,35 +1,35 @@
 import AppKit
 import GhosttyKit
 
-/// 每 pane 一条 24pt 细 header：状态点 + 任务名 + 收工/注入按钮，双击改名。
+/// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）+
+/// 收工/注入按钮。胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
+/// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
+/// 并入胶囊，窄时只剩点 + pane 名，信息由展开面板承载。
 /// 它紧贴 terminal surface，底色/文字仍取 Ghostty config 的
 /// background/foreground + background-opacity；应用标题栏/侧栏则使用独立 ShellStyle。
 /// ⚠️ 必须 clipsToBounds：layer 化后自绘内容会落在超出 bounds 的 ContentLayer 上，
 /// 半透明底色会整张盖住终端（docs/libghostty-embedding.md 透明排查实录）。
-final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
+final class PaneHeaderView: NSView, NSDraggingSource {
     static let height: CGFloat = 24
 
     enum Dot: Equatable {
-        case unnamed        // 灰：未命名，仅内存
+        case unnamed        // 灰：未绑定任务
         case active         // 绿：已绑定任务文件
-        case stuck          // 橙
 
         var color: NSColor {
             switch self {
             case .unnamed: return .systemGray
             case .active: return .systemGreen
-            case .stuck: return .systemOrange
             }
         }
     }
 
-    var onRename: ((String) -> Void)?
     var onFinish: (() -> Void)?
     var onInject: (() -> Void)?
-    /// 改名编辑结束（提交或取消）后回调，pane 用它把焦点还给终端
-    var onEditingEnded: (() -> Void)?
     /// 单击/开始拖动 header 时把该 pane 设为 active。
     var onSelect: (() -> Void)?
+    /// 点击身份胶囊：展开/收起 PaneIdentityPanel。
+    var onIdentityTapped: (() -> Void)?
     var onDragEnded: (() -> Void)?
     /// Ghostty SurfaceDragSource 的轻量 AppKit 对应：UUID 只用于进程内定位现有 pane。
     var dragIdentifier: UUID?
@@ -37,21 +37,31 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     private var isDraggingPane = false
 
-    /// 点击弹任务选择菜单（anchor 为按钮本身）；绑定动作由 PaneView 执行。
-    var onTaskPickerRequested: ((NSView) -> Void)?
-
+    private let capsule = NSView()
     private let dotView = NSView()
     private let nameLabel = NSTextField(labelWithString: "")
-    private let nameEditor = NSTextField()
-    private let bindButton = NSButton()
+    private let taskHintLabel = NSTextField(labelWithString: "")
     private let finishButton = ShellTextButton(
         "收工", palette: .terminal, target: nil, action: nil)
     private let injectButton = ShellTextButton(
         "注入", palette: .terminal, target: nil, action: nil)
+    private var capsuleTracking: NSTrackingArea?
+    private var capsuleHovered = false {
+        didSet { applyCapsuleFill() }
+    }
 
     var title: String {
         get { nameLabel.stringValue }
         set { nameLabel.stringValue = newValue }
+    }
+
+    /// 胶囊在 header 坐标系中的 frame（面板形变动画的起点/终点）。
+    var capsuleFrame: NSRect { capsule.frame }
+
+    /// 面板展开期间胶囊隐身。瞬时切换、不淡出：面板第一行与胶囊逐像素同构，
+    /// 交接瞬间标题原地不动（灵动岛的"岛体扩展、内容不动"）。
+    func setCapsuleHidden(_ hidden: Bool) {
+        capsule.alphaValue = hidden ? 0 : 1
     }
 
     var dot: Dot = .unnamed {
@@ -63,20 +73,19 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         set { injectButton.isEnabled = newValue }
     }
 
-    /// 任务 pill 显示的绑定任务名；nil = 未绑定（显示「绑定任务」入口）。
-    /// pane 名与任务名分离：左段 pane 名随手改不落盘，此 pill 才代表持久任务。
+    /// 绑定任务名；nil = 未绑定。宽度富余时以「 · 任务名」并入胶囊。
     func setTaskName(_ name: String?) {
         boundTaskName = name
-        updatePillTitle()
+        updateTaskHint()
     }
 
     private var boundTaskName: String?
     var titleOfBoundTask: String? { boundTaskName }
 
-    /// core 通过 GHOSTTY_ACTION_COLOR_CHANGE 报告的当前 terminal 颜色
-    /// （主题明暗切换 / OSC 修改都会触发）；启动值来自全局 config。
+    /// core 通过 CONFIG_CHANGE / COLOR_CHANGE 报告的当前 terminal 颜色；
+    /// 启动值来自全局 config。
     private var terminalBackground: NSColor
-    private var terminalForeground: NSColor
+    private(set) var terminalForeground: NSColor
 
     init() {
         let cfg = GhosttyRuntime.shared.configValues
@@ -86,6 +95,9 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         clipsToBounds = true
         wantsLayer = true
 
+        capsule.wantsLayer = true
+        capsule.layer?.cornerRadius = 6
+
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3.5
         dotView.layer?.backgroundColor = dot.color.cgColor
@@ -93,16 +105,11 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        // 编辑器贴 header 样式：无边框、无焦点环，前景色随配置，底色用前景色淡化
-        nameEditor.font = nameLabel.font
-        nameEditor.isHidden = true
-        nameEditor.isBordered = false
-        nameEditor.drawsBackground = false
-        nameEditor.focusRingType = .none
-        nameEditor.wantsLayer = true
-        nameEditor.layer?.cornerRadius = 3
-        nameEditor.delegate = self
-        (nameEditor.cell as? NSTextFieldCell)?.usesSingleLineMode = true
+        taskHintLabel.font = .systemFont(ofSize: 10.5)
+        taskHintLabel.lineBreakMode = .byTruncatingTail
+        taskHintLabel.setContentCompressionResistancePriority(
+            .defaultLow, for: .horizontal)
+
         applyTerminalColors()
 
         finishButton.target = self
@@ -110,47 +117,37 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         injectButton.target = self
         injectButton.action = #selector(injectTapped)
 
-        // 任务 pill：显示绑定任务名（未绑定显示入口文案），点击弹任务菜单。
-        bindButton.image = NSImage(
-            systemSymbolName: "chevron.down", accessibilityDescription: "任务")
-        bindButton.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 7.5, weight: .semibold)
-        bindButton.isBordered = false
-        bindButton.imagePosition = .imageTrailing
-        bindButton.focusRingType = .none
-        bindButton.setButtonType(.momentaryChange)
-        bindButton.target = self
-        bindButton.action = #selector(taskPickerTapped)
-        bindButton.wantsLayer = true
-        bindButton.layer?.cornerRadius = 5
-        updatePillTitle()
-
-        for v in [dotView, nameLabel, nameEditor, bindButton, injectButton, finishButton] {
+        addSubview(capsule)
+        for v in [dotView, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(v)
+            capsule.addSubview(v)
+        }
+        for v in [capsule, injectButton, finishButton] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            if v !== capsule { addSubview(v) }
         }
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
 
-            dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            dotView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            capsule.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
+            capsule.heightAnchor.constraint(equalToConstant: 20),
+            capsule.trailingAnchor.constraint(
+                lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
+
+            dotView.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 6),
+            dotView.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
             dotView.widthAnchor.constraint(equalToConstant: 7),
             dotView.heightAnchor.constraint(equalToConstant: 7),
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -28),
+            nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
-            bindButton.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 12),
-            bindButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            bindButton.heightAnchor.constraint(equalToConstant: 17),
-
-            // 与 label 同字体同 cell 内边距，基线对齐 → 进出编辑态文字零位移
-            nameEditor.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            nameEditor.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-            nameEditor.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
-            nameEditor.trailingAnchor.constraint(lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
+            taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
+            taskHintLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
+            taskHintLabel.trailingAnchor.constraint(
+                equalTo: capsule.trailingAnchor, constant: -7),
 
             finishButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             finishButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -163,21 +160,65 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    // MARK: - 胶囊内容与 hover
+
+    /// 任务名 hint 的完整宽度（并入胶囊时的需求），layout 判定用。
+    private var fullHintWidth: CGFloat = 0
+
+    /// 任务名 hint：宽度富余时以次要色并入胶囊；窄时 layout 置空收回
+    /// （隐藏 label 仍参与约束会把胶囊撑宽，必须置空文本）。
+    private func updateTaskHint() {
+        let text = boundTaskName.map { " · \($0)" } ?? ""
+        fullHintWidth = text.isEmpty ? 0 : ceil(
+            (text as NSString).size(withAttributes: [
+                .font: taskHintLabel.font ?? NSFont.systemFont(ofSize: 10.5),
+            ]).width)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard injectButton.frame.minX > 0 else { return }
+        // 胶囊完整需求宽度 vs 可用宽度：不够时先收任务 hint（pane 名常显）。
+        let chrome: CGFloat = 6 + 7 + 6 + 7 // 胶囊内边距 + 点 + 间距
+        let nameWidth = ceil(nameLabel.intrinsicContentSize.width)
+        let available = injectButton.frame.minX - 8 - 4
+        let fits = chrome + nameWidth + fullHintWidth <= available
+        let want = (fits && boundTaskName != nil)
+            ? " · \(boundTaskName ?? "")" : ""
+        if taskHintLabel.stringValue != want {
+            taskHintLabel.stringValue = want
+        }
+    }
+
+    private func applyCapsuleFill() {
+        capsule.layer?.backgroundColor = terminalForeground
+            .withAlphaComponent(capsuleHovered ? 0.10 : 0.05).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let capsuleTracking { removeTrackingArea(capsuleTracking) }
+        let area = NSTrackingArea(
+            rect: convert(capsule.frame, from: capsule.superview),
+            options: [.mouseEnteredAndExited, .activeInKeyWindow],
+            owner: self)
+        addTrackingArea(area)
+        capsuleTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { capsuleHovered = true }
+    override func mouseExited(with event: NSEvent) { capsuleHovered = false }
+
+    // MARK: - 颜色
+
     private func applyTerminalColors() {
         let opacity = GhosttyRuntime.shared.configValues.backgroundOpacity
         layer?.backgroundColor = terminalBackground
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
-        nameEditor.textColor = terminalForeground
-        bindButton.contentTintColor = terminalForeground.withAlphaComponent(0.55)
-        bindButton.layer?.backgroundColor =
-            terminalForeground.withAlphaComponent(0.07).cgColor
-        bindButton.layer?.borderColor =
-            terminalForeground.withAlphaComponent(0.18).cgColor
-        bindButton.layer?.borderWidth = 0.5
-        updatePillTitle()
-        nameEditor.layer?.backgroundColor =
-            terminalForeground.withAlphaComponent(0.12).cgColor
+        taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
+        applyCapsuleFill()
         finishButton.terminalForeground = terminalForeground
         injectButton.terminalForeground = terminalForeground
     }
@@ -200,29 +241,21 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         applyTerminalColors()
     }
 
-    /// label/dot/空白都属于可拖 header；编辑器与动作按钮保留自己的点击语义。
+    // MARK: - 点击 / 拖拽
+
+    /// 胶囊/空白都属于可拖 header；动作按钮保留自己的点击语义。
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        if hit === nameEditor || hit.isDescendant(of: nameEditor)
-            || hit === finishButton || hit.isDescendant(of: finishButton)
-            || hit === injectButton || hit.isDescendant(of: injectButton)
-            || hit === bindButton || hit.isDescendant(of: bindButton) {
+        if hit === finishButton || hit.isDescendant(of: finishButton)
+            || hit === injectButton || hit.isDescendant(of: injectButton) {
             return hit
         }
         return self
     }
 
     override func mouseDown(with event: NSEvent) {
-        // pane 名是随手改的会话态标签（不落盘），双击直接编辑，无需确认。
-        if event.clickCount == 2 {
-            beginRename()
-            return
-        }
-
-        // NSHostingView 中 vendor 可直接收到 mouseDragged；纯 AppKit header 还会遇到
-        // first-responder/子控件重定向，因此在 mouseDown 的 event-tracking loop 内
-        // 明确区分 click 与 drag。拖动超过 3pt 才启动 session，普通点击仍在 mouseUp
-        // 时选择 pane。
+        // event-tracking loop 内区分 click 与 drag：拖动超过 3pt 启动拖拽 session；
+        // 普通点击在 mouseUp 时按落点分流——胶囊内 = 展开身份面板，其余 = 选中 pane。
         let origin = event.locationInWindow
         let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
         while let next = NSApp.nextEvent(
@@ -240,6 +273,10 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
                 return
             case .leftMouseUp:
                 onSelect?()
+                let point = capsule.convert(next.locationInWindow, from: nil)
+                if capsule.bounds.contains(point) {
+                    onIdentityTapped?()
+                }
                 return
             default:
                 continue
@@ -252,8 +289,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
     }
 
     private func beginPaneDrag(with event: NSEvent) {
-        guard !isDraggingPane, nameEditor.isHidden,
-              let dragIdentifier else { return }
+        guard !isDraggingPane, let dragIdentifier else { return }
 
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setString(dragIdentifier.uuidString, forType: .lighttyPaneID)
@@ -308,72 +344,6 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         return image
     }
 
-    /// pill 文案：文档图标 + 绑定任务名（或「绑定任务」入口）。
-    /// 图标让 pill 一眼读出"挂载的 handoff 文档"，与左侧 pane 名区隔。
-    /// 内边距用空格实现：段落缩进会挤压 NSButton 的 intrinsic 宽度导致截断。
-    private func updatePillTitle() {
-        let bound = boundTaskName != nil
-        let color = terminalForeground.withAlphaComponent(bound ? 0.7 : 0.45)
-        let result = NSMutableAttributedString()
-
-        if let icon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)?
-            .withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 8, weight: .medium)
-                    .applying(.init(paletteColors: [color]))) {
-            let attachment = NSTextAttachment()
-            attachment.image = icon
-            attachment.bounds = NSRect(x: 0, y: -1, width: icon.size.width, height: icon.size.height)
-            result.append(NSAttributedString(string: " "))
-            result.append(NSAttributedString(attachment: attachment))
-        }
-        result.append(NSAttributedString(
-            string: " \(boundTaskName ?? "绑定任务") ",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-                .foregroundColor: color,
-            ]))
-        bindButton.attributedTitle = result
-    }
-
-    func beginRename() {
-        // 占位符延续原 title（半透明前景色）：切入编辑态时文字内容与位置都不跳
-        nameEditor.placeholderAttributedString = NSAttributedString(
-            string: title,
-            attributes: [
-                .font: nameLabel.font!,
-                .foregroundColor: terminalForeground.withAlphaComponent(0.4),
-            ])
-        nameEditor.stringValue = title == "未命名" ? "" : title
-        nameEditor.isHidden = false
-        nameLabel.isHidden = true
-        window?.makeFirstResponder(nameEditor)
-    }
-
-    /// Enter/失焦提交，Esc 取消（空名视为取消）
-    private func endRename(commit: Bool) {
-        guard !nameEditor.isHidden else { return }
-        nameEditor.isHidden = true
-        nameLabel.isHidden = false
-        let name = nameEditor.stringValue.trimmingCharacters(in: .whitespaces)
-        if commit, !name.isEmpty, name != title {
-            onRename?(name)
-        }
-        onEditingEnded?()
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) {
-        endRename(commit: true)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            endRename(commit: false)
-            return true
-        }
-        return false
-    }
-
     @objc private func finishTapped() { onFinish?() }
     @objc private func injectTapped() { onInject?() }
-    @objc private func taskPickerTapped() { onTaskPickerRequested?(bindButton) }
 }
