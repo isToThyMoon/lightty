@@ -91,6 +91,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private weak var titlebarChrome: NSView?
+    private weak var workspaceLabel: TitlebarWorkspaceLabel?
     private weak var newTabButton: ShellIconButton?
     private var newTabButtonWidthConstraint: NSLayoutConstraint?
     private weak var lastFocusedPane: PaneView?
@@ -175,18 +176,37 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             self?.sidebarButtonHoverChanged(hovered)
         }
 
-        let newTaskButton = ShellIconButton(
-            symbol: "plus", accessibilityLabel: "新标签页", target: self,
-            action: #selector(newTaskFromTitlebar))
-        let splitButton = ShellIconButton(
-            symbol: "rectangle.split.2x1", accessibilityLabel: "向右分 pane", target: self,
-            action: #selector(splitFromTitlebar))
+        // 右侧按钮组（图标区分语义）：向右分屏 | 向下分屏 | 新 tab
+        let newTabButton = ShellIconButton(
+            symbol: "plus.rectangle.on.rectangle", accessibilityLabel: "新工作区", target: self,
+            action: #selector(newTabFromTitlebar))
+        let splitRightButton = ShellIconButton(
+            symbol: "rectangle.split.2x1", accessibilityLabel: "向右分屏", target: self,
+            action: #selector(splitRightFromTitlebar))
+        let splitDownButton = ShellIconButton(
+            symbol: "rectangle.split.1x2", accessibilityLabel: "向下分屏", target: self,
+            action: #selector(splitDownFromTitlebar))
 
-        for view in [button, splitButton, newTaskButton] {
+        // 单工作区时 tab 栏隐藏，用户无从感知/重命名当前工作区——标题栏放一个
+        // 安静的名字标签补位（多工作区时隐藏，感知交还给 tab 栏本身）。
+        let workspaceLabel = TitlebarWorkspaceLabel()
+        workspaceLabel.onRenameRequest = { [weak self, weak workspaceLabel] in
+            guard let self, let anchor = workspaceLabel else { return }
+            let index = self.activeTabIndex
+            guard self.tabs.indices.contains(index) else { return }
+            NameEditorPopover.present(
+                from: anchor, title: "重命名工作区",
+                initial: self.tabs[index].title
+            ) { [weak self] name in
+                self?.renameTab(at: index, to: name)
+            }
+        }
+
+        for view in [button, splitRightButton, splitDownButton, newTabButton, workspaceLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             chrome.addSubview(view)
         }
-        let newTabWidth = newTaskButton.widthAnchor.constraint(equalToConstant: 28)
+        let newTabWidth = newTabButton.widthAnchor.constraint(equalToConstant: 28)
         NSLayoutConstraint.activate([
             chrome.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor),
             chrome.trailingAnchor.constraint(equalTo: titlebar.trailingAnchor),
@@ -198,23 +218,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             button.widthAnchor.constraint(equalToConstant: 28),
             button.heightAnchor.constraint(equalToConstant: 24),
 
-            newTaskButton.trailingAnchor.constraint(equalTo: chrome.trailingAnchor, constant: -10),
-            newTaskButton.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
+            newTabButton.trailingAnchor.constraint(equalTo: chrome.trailingAnchor, constant: -10),
+            newTabButton.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
             newTabWidth,
-            newTaskButton.heightAnchor.constraint(equalToConstant: 24),
+            newTabButton.heightAnchor.constraint(equalToConstant: 24),
 
-            splitButton.trailingAnchor.constraint(equalTo: newTaskButton.leadingAnchor, constant: -3),
-            splitButton.centerYAnchor.constraint(equalTo: newTaskButton.centerYAnchor),
-            splitButton.widthAnchor.constraint(equalToConstant: 28),
-            splitButton.heightAnchor.constraint(equalToConstant: 24),
+            splitDownButton.trailingAnchor.constraint(equalTo: newTabButton.leadingAnchor, constant: -3),
+            splitDownButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
+            splitDownButton.widthAnchor.constraint(equalToConstant: 28),
+            splitDownButton.heightAnchor.constraint(equalToConstant: 24),
+
+            splitRightButton.trailingAnchor.constraint(equalTo: splitDownButton.leadingAnchor, constant: -3),
+            splitRightButton.centerYAnchor.constraint(equalTo: splitDownButton.centerYAnchor),
+            splitRightButton.widthAnchor.constraint(equalToConstant: 28),
+            splitRightButton.heightAnchor.constraint(equalToConstant: 24),
+
+            workspaceLabel.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 10),
+            workspaceLabel.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
+            workspaceLabel.heightAnchor.constraint(equalToConstant: 24),
+            workspaceLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -12),
         ])
 
         titlebarChrome = chrome
         sidebarButton = button
-        newTabButton = newTaskButton
+        self.workspaceLabel = workspaceLabel
+        self.newTabButton = newTabButton
         newTabButtonWidthConstraint = newTabWidth
         updateSidebarButtonState()
         updateNewTabButtonVisibility()
+        updateWorkspaceLabel()
     }
 
     private func updateWindowTitle(for pane: PaneView?) {
@@ -230,11 +263,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarButton?.isActive = sidebarPresentation == .pinned
     }
 
-    /// tab 条自带「+」（多 tab 时显示）；标题栏「+」保留为单 tab 时的入口。
+    /// 「新 Tab」入口固定在标题栏（2026-08-29 定稿）：入口搬家增加用户心智
+    /// 负担，tab 条内不再放重复「+」。
     private func updateNewTabButtonVisibility() {
-        let stripOwnsNewTab = tabs.count > 1
-        newTabButton?.isHidden = stripOwnsNewTab
-        newTabButtonWidthConstraint?.constant = stripOwnsNewTab ? 0 : 28
+        newTabButton?.isHidden = false
+        newTabButtonWidthConstraint?.constant = 28
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -263,12 +296,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         toggleSidebar()
     }
 
-    @objc private func newTaskFromTitlebar() {
+    @objc private func newTabFromTitlebar() {
         activePane?.terminal.performBindingAction("new_tab")
     }
 
-    @objc private func splitFromTitlebar() {
+    @objc private func splitRightFromTitlebar() {
         activePane?.terminal.performBindingAction("new_split:right")
+    }
+
+    @objc private func splitDownFromTitlebar() {
+        activePane?.terminal.performBindingAction("new_split:down")
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -312,22 +349,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabStrip.onRename = { [weak self] index, name in
             self?.renameTab(at: index, to: name)
         }
-        tabStrip.onNewTab = { [weak self] in
-            self?.activePane?.terminal.performBindingAction("new_tab")
-        }
     }
 
     // MARK: - tab 管理
 
-    /// 工作区默认名计数器（窗口内自增，不落盘）。
-    private var workspaceCounter = 0
+    /// 工作区默认名计数器（跨窗口全局，与「终端 N」的 pane 计数同策略）：
+    /// 工作区是语义单元、窗口只是展示容器，默认名必须全局唯一才能在
+    /// 侧栏跳转行里直接当身份用，窗口层不需要另起名字。
+    private static var workspaceCounter = 0
 
     /// core `new_tab`：当前窗口追加一个 tab（工作区 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
         if installPane { install(pane: initialPane) }
         let tab = TerminalTab()
-        workspaceCounter += 1
-        tab.title = "工作区 \(workspaceCounter)"
+        Self.workspaceCounter += 1
+        tab.title = "工作区 \(Self.workspaceCounter)"
         contentHost.addSubview(tab.container)
         NSLayoutConstraint.activate([
             tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -375,6 +411,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             activeTabIndex -= 1
         }
         selectTab(at: activeTabIndex)
+        // tab 里可能有绑定任务的 pane，侧栏活跃态需要跟着退
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
     enum CloseTabMode { case this, other, right }
@@ -445,6 +483,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
         }
         updateNewTabButtonVisibility()
+        updateWorkspaceLabel()
+    }
+
+    /// 标题栏工作区名标签：单工作区（tab 栏隐藏）时显示当前名字，否则隐藏。
+    private func updateWorkspaceLabel() {
+        guard let workspaceLabel else { return }
+        let single = tabs.count <= 1
+        workspaceLabel.isHidden = !single
+        if single { workspaceLabel.text = tabs.first?.title ?? "" }
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -642,6 +689,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 sourceController.updateWindowTitle(for: remaining)
             }
         }
+        // 跨窗口移动后侧栏缓存的 (controller, pane) 映射失效，刷新重建
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
         return true
     }
 
@@ -892,6 +941,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         panes(in: hostTab).first?.focusTerminal()
+        // 关掉的 pane 可能绑着任务，侧栏活跃态需要跟着退
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
     // MARK: - pane 导航
@@ -1053,11 +1104,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         let sidebar = TaskSidebar(topInset: max(titlebarHeight, 28))
         sidebar.onRequestClose = { [weak self] in self?.requestSidebarClose() }
-        sidebar.onRequestNewTask = { [weak self] in
-            guard let self else { return }
-            self.requestSidebarClose()
-            self.activePane?.terminal.performBindingAction("new_tab")
-        }
         sidebar.onHoverChange = { [weak self] hovered in self?.sidebarHoverChanged(hovered) }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.alphaValue = 1
@@ -1160,9 +1206,96 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         AppState.shared.windowControllers.removeAll { $0 === self }
+        // 整窗的绑定 pane 一起消失，其他窗口的侧栏活跃态需要跟着退
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 }
 
 private extension NSRect {
     var center: NSPoint { NSPoint(x: midX, y: midY) }
+}
+
+/// 标题栏工作区名标签：仅单工作区（tab 栏隐藏）时显示，单击重命名。
+/// 双击被标题栏的系统缩放手势占用，不可用；单击在标题栏无原生语义，安全。
+/// 从标签按下后拖动（>3pt）交还窗口拖拽，不误触发重命名。
+private final class TitlebarWorkspaceLabel: NSView {
+    var onRenameRequest: (() -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+    private var tracking: NSTrackingArea?
+    private var hovered = false { didSet { applyFill() } }
+
+    var text: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = ShellStyle.tertiaryText
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        toolTip = "重命名工作区"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func applyFill() {
+        let fill: NSColor = hovered ? ShellStyle.controlFill : .clear
+        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyFill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let start = event.locationInWindow
+        while true {
+            guard let next = window?.nextEvent(
+                matching: [.leftMouseUp, .leftMouseDragged]) else { return }
+            switch next.type {
+            case .leftMouseUp:
+                onRenameRequest?()
+                return
+            case .leftMouseDragged:
+                let dx = next.locationInWindow.x - start.x
+                let dy = next.locationInWindow.y - start.y
+                if dx * dx + dy * dy > 9 {
+                    window?.performDrag(with: event)
+                    return
+                }
+            default:
+                return
+            }
+        }
+    }
 }

@@ -8,43 +8,30 @@ final class TabStripView: NSView {
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
-    var onNewTab: (() -> Void)?
     /// 双击标签重命名工作区（index, 新名字）。
     var onRename: ((Int, String) -> Void)?
 
     private let stack = NSStackView()
-    private let newTabButton: ShellIconButton
 
     override init(frame: NSRect) {
-        newTabButton = ShellIconButton(
-            symbol: "plus", accessibilityLabel: "新建 Tab", target: nil, action: nil)
         super.init(frame: frame)
         wantsLayer = true
         applyBackground()
 
+        // 「新 Tab」入口固定在标题栏，条内不放重复「+」（入口搬家伤心智）。
         stack.orientation = .horizontal
         stack.spacing = 4
         stack.alignment = .centerY
         stack.distribution = .fillEqually
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        newTabButton.target = self
-        newTabButton.action = #selector(newTabTapped)
-        newTabButton.translatesAutoresizingMaskIntoConstraints = false
-
         addSubview(stack)
-        addSubview(newTabButton)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             stack.heightAnchor.constraint(equalToConstant: 26),
             stack.trailingAnchor.constraint(
-                lessThanOrEqualTo: newTabButton.leadingAnchor, constant: -6),
-
-            newTabButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            newTabButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            newTabButton.widthAnchor.constraint(equalToConstant: 26),
-            newTabButton.heightAnchor.constraint(equalToConstant: 26),
+                lessThanOrEqualTo: trailingAnchor, constant: -8),
         ])
     }
 
@@ -79,8 +66,6 @@ final class TabStripView: NSView {
             stack.addArrangedSubview(item)
         }
     }
-
-    @objc private func newTabTapped() { onNewTab?() }
 
     private func applyBackground() {
         layer?.backgroundColor =
