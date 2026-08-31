@@ -1,34 +1,36 @@
 import Foundation
 
-/// 「收工」「注入」注入 PTY 的指令模板（HANDOVER 7.4：UI 主动触发，替代已否决的 hooks 方案）。
+/// 「Handoff」「Restore」注入 PTY 的指令模板（HANDOVER 7.4：UI 主动触发，替代已否决的 hooks 方案）。
 /// 对 claude/codex 通用：指令是纯自然语言 + 文件路径，由 pane 内正在跑的 agent
 /// 用自身会话上下文执行。pane 内没跑 agent 时文本会打进 shell（无害，已知限制）。
 /// 任务文件路径在点击时实时嵌入（LIGHTTY_TASK 环境变量已整体移除）。
+///
+/// 协议语言为英文（2026-08-30 起）：提示词与文档节头是跨会话数据格式，不随
+/// 界面语言变化。旧任务文件的中文节头由 RestoreFlow.summarize 兼容解析。
 enum HandoffPrompt {
-    /// 收工：让 agent 把 handoff 快照原子写入任务文件正文
+    /// Handoff：让 agent 把 handoff 快照原子写入任务文件正文
     static func finish(taskFilePath: String) -> String {
         """
-        请为当前会话生成 handoff 交接文档，并写入任务文件：\(taskFilePath)
-        要求：
-        1. 只重写 frontmatter 结束符（第二个 `---` 行）之后的正文，frontmatter 原样保留，仅把 updated 刷新为当前 UTC 时间（ISO8601，如 2026-08-22T10:00:00Z）。
-        2. 正文按以下结构写（读者是接手的新 agent，为"继续干活"写，不为人类汇报写）：
-           ## 下一步
-           ## 当前状态
-           ## 关键决策与约束（引用不复制：commit/文件路径/URL 指向已有产物）
-           ## 卡点与风险
-           ## 建议命令与技能
-        3. 正文中已有的带日期的人工里程碑段落保留，不要覆盖。
-        4. 脱敏：API key、密码、PII 不写入。
-        5. 原子写：先写同目录临时文件再 mv 覆盖，禁止原地截断写。
+        Please write a handoff document for the current session into the task file: \(taskFilePath)
+        Requirements:
+        1. Rewrite only the body after the frontmatter terminator (the second `---` line). Keep the frontmatter as is, except refresh `updated` to the current UTC time (ISO8601, e.g. 2026-08-22T10:00:00Z).
+        2. Structure the body as follows (the reader is the next agent taking over — write for continuing the work, not for reporting to a human):
+           ## Next steps
+           ## Current state
+           ## Key decisions & constraints (reference, don't copy: point commits / file paths / URLs at existing artifacts)
+           ## Blockers & risks
+           ## Suggested commands & skills
+        3. Keep any existing dated human milestone sections in the body; do not overwrite them.
+        4. Redact: never write API keys, passwords, or PII into the file.
+        5. Atomic write: write a temp file in the same directory then mv it over the target; never truncate in place.
         """
     }
 
-    /// 注入：恢复场景，让 agent 读 handoff 按「下一步」继续
+    /// Restore：恢复场景，让 agent 读 handoff 按「Next steps」继续
     static func resume(taskFilePath: String) -> String {
         """
-        请读取任务交接文档：\(taskFilePath)
-        这是本任务此前会话留下的 handoff。读完后按其中「下一步」一节继续工作；\
-        「关键决策与约束」里引用的文件与链接按需自行查阅。开始前用一两句话复述你理解的任务现状。
+        Please read the task handoff document: \(taskFilePath)
+        It was left by this task's previous sessions. After reading, continue working per its "Next steps" section; consult the files and links referenced in "Key decisions & constraints" as needed. Before starting, restate your understanding of the task's current state in one or two sentences.
         """
     }
 }

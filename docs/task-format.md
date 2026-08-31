@@ -103,12 +103,13 @@ sessions:
 
 正文即任务的 handoff 文档，原则采纳自 mattpocock 的 handoff skill（详见 HANDOVER.md 第 8.3 节）：为接手的 agent 写、引用不复制（commit/路径/URL 指向已有产物）、脱敏（key/密码/PII 不落盘）、面向下一步裁剪。
 
-hook 覆盖式快照按以下结构重写正文；人工里程碑另起日期段追加，不被快照覆盖：
+覆盖式快照按以下结构重写正文；人工里程碑另起日期段追加，不被快照覆盖。
+节头为英文（协议语言，2026-08-30 起；此前的中文节头由摘要解析兼容，旧文件无需迁移）：
 
 ```
-## 下一步          ← 接手 agent 读的第一句话
-## 当前状态
-## 关键决策与约束   ← 引用式：commit/文件路径/文档链接
-## 卡点与风险
-## 建议命令与技能
+## Next steps                    ← 接手 agent 读的第一句话
+## Current state
+## Key decisions & constraints   ← 引用式：commit/文件路径/文档链接
+## Blockers & risks
+## Suggested commands & skills
 ```

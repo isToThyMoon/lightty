@@ -33,15 +33,15 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 列表页
 
     private let listPage = NSView()
-    private let titleLabel = NSTextField(labelWithString: "任务")
+    private let titleLabel = NSTextField(labelWithString: L("Tasks"))
     private let countLabel = NSTextField(labelWithString: "")
     private let searchContainer = TaskSearchContainerView()
     private let searchIcon = TaskSearchIconView()
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
-    private let emptyLabel = NSTextField(labelWithString: "没有匹配的任务")
+    private let emptyLabel = NSTextField(labelWithString: L("No matching tasks"))
     private let newTaskButton = ShellIconButton(
-        symbol: "doc.badge.plus", accessibilityLabel: "新建任务", target: nil, action: nil)
+        symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
@@ -178,8 +178,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         let runningCount = allEntries.filter { $0.running != nil }.count
         countLabel.stringValue = runningCount > 0
-            ? "\(runningCount) 个活跃 · 共 \(allEntries.count) 个"
-            : "\(allEntries.count) 个任务"
+            ? L("%d active · %d total", runningCount, allEntries.count)
+            : L("%d tasks", allEntries.count)
         emptyLabel.isHidden = !filtered.isEmpty
         tableView.reloadData()
         if !filtered.isEmpty {
@@ -218,7 +218,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         searchIcon.contentTintColor = ShellStyle.tertiaryText
         searchIcon.imageScaling = .scaleProportionallyDown
 
-        searchField.placeholderString = "搜索任务"
+        searchField.placeholderString = L("Search tasks")
         searchField.controlSize = .regular
         searchField.isBezeled = false
         searchField.drawsBackground = false
@@ -315,7 +315,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
     @objc private func newTask() {
         NameEditorPopover.present(
-            from: newTaskButton, title: "新建任务", confirmLabel: "创建"
+            from: newTaskButton, title: L("New task"), confirmLabel: L("Create")
         ) { name in
             do {
                 _ = try AppState.shared.taskStore.create(
@@ -352,7 +352,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
         // 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
-        let activity = entry.running != nil ? "活跃" : "休眠"
+        let activity = entry.running != nil ? L("Active") : L("Dormant")
         let subtitle = NSTextField(
             labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
         subtitle.font = .systemFont(ofSize: 10.5)
@@ -361,7 +361,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         // 更多操作（⋯）：与行本体的"跳转/打开"语义分开——管理动作都在这个菜单里。
         let detailButton = ShellIconButton(
-            symbol: "ellipsis", accessibilityLabel: "更多操作", target: self,
+            symbol: "ellipsis", accessibilityLabel: L("More actions"), target: self,
             action: #selector(showRowMenu(_:)))
         detailButton.tag = row
 
@@ -398,12 +398,12 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     private func relativeTime(_ date: Date) -> String {
         let seconds = max(0, -date.timeIntervalSinceNow)
-        if seconds < 60 { return "刚刚" }
-        if seconds < 3_600 { return "\(Int(seconds / 60)) 分钟前" }
-        if seconds < 86_400 { return "\(Int(seconds / 3_600)) 小时前" }
-        if seconds < 604_800 { return "\(Int(seconds / 86_400)) 天前" }
+        if seconds < 60 { return L("just now") }
+        if seconds < 3_600 { return L("%d min ago", Int(seconds / 60)) }
+        if seconds < 86_400 { return L("%d hr ago", Int(seconds / 3_600)) }
+        if seconds < 604_800 { return L("%d days ago", Int(seconds / 86_400)) }
         let formatter = DateFormatter()
-        formatter.dateFormat = "M月d日"
+        formatter.dateFormat = L("MMM d")
         return formatter.string(from: date)
     }
 
@@ -416,11 +416,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         let entry = filtered[sender.tag]
 
         var items: [ShellMenuPopover.Item] = [
-            .action("重命名任务…") { [weak self, weak sender] in
+            .action(L("Rename task…")) { [weak self, weak sender] in
                 guard let anchor = sender ?? self else { return }
                 NameEditorPopover.present(
-                    from: anchor, title: "重命名任务",
-                    initial: entry.task.name, confirmLabel: "重命名"
+                    from: anchor, title: L("Rename task"),
+                    initial: entry.task.name, confirmLabel: L("Rename")
                 ) { name in
                     do {
                         try AppState.shared.renameTask(at: entry.fileURL, to: name)
@@ -434,10 +434,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ]
         // 状态不提供手动修改也不展示：活跃/休眠由 pane 绑定派生；
         // 文件 status 字段已弃用（见 docs/task-format.md）。
-        items.append(.action("打开 handoff 文档") {
+        items.append(.action(L("Open handoff document")) {
             NSWorkspace.shared.open(entry.fileURL)
         })
-        items.append(.action("用其他应用打开…") { [weak self, weak sender] in
+        items.append(.action(L("Open with…")) { [weak self, weak sender] in
             guard let anchor = sender ?? self else { return }
             // 列系统里注册可打开 md 的应用；勾选 = 当前系统默认（想全局换默认
             // 走 Finder 显示简介 →「全部更改」，此处只做单次选择不持久化）。
@@ -465,11 +465,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             }
             ShellMenuPopover.present(from: anchor, items: appItems)
         })
-        items.append(.action("在 Finder 中显示") {
+        items.append(.action(L("Reveal in Finder")) {
             NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
         })
         items.append(.separator)
-        items.append(.action("归档任务") {
+        items.append(.action(L("Archive task")) {
             do {
                 // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的 pane 解绑。
                 try AppState.shared.taskStore.archive(at: entry.fileURL)
@@ -485,7 +485,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 NSLog("task archive failed: \(error)")
             }
         })
-        items.append(.action("删除任务（移到废纸篓）", destructive: true) {
+        items.append(.action(L("Delete task (move to Trash)"), destructive: true) {
             do {
                 // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
                 try FileManager.default.trashItem(

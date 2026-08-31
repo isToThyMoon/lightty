@@ -1,0 +1,78 @@
+/* 菜单栏 */
+"About lightty" = "关于 lightty";
+"Quit lightty" = "退出 lightty";
+"Tasks" = "任务";
+"New Task (New Window)" = "新任务（新窗口）";
+"New Task (New Workspace)" = "新任务（新工作区）";
+"Split Pane Right" = "向右分 pane";
+"Split Pane Down" = "向下分 pane";
+"Close Pane" = "关闭 pane";
+"Task Sidebar" = "任务侧边栏";
+
+/* 通用 */
+"OK" = "确认";
+"Create" = "创建";
+"Rename" = "重命名";
+"Cancel" = "取消";
+"Open" = "打开";
+"Allow" = "允许";
+"Press Return to confirm" = "回车确认";
+
+/* 终端权限弹窗 */
+"Open terminal link?" = "打开终端链接？";
+"Allow terminal to read the clipboard?" = "允许终端读取剪贴板？";
+"Paste from clipboard?" = "粘贴剪贴板内容？";
+"Allow terminal to write to the clipboard?" = "允许终端写入剪贴板？";
+
+/* pane / 工作区 */
+"Terminal %d" = "终端 %d";
+"Workspace" = "工作区";
+"Workspace %d" = "工作区 %d";
+"Rename workspace" = "重命名工作区";
+"Close workspace" = "关闭工作区";
+"New workspace" = "新工作区";
+"New window" = "新窗口";
+"Split right" = "向右分屏";
+"Split down" = "向下分屏";
+"Split in current workspace" = "当前工作区分屏";
+
+/* 侧栏 */
+"Search tasks" = "搜索任务";
+"No matching tasks" = "没有匹配的任务";
+"%d active · %d total" = "%d 个活跃 · 共 %d 个";
+"%d tasks" = "%d 个任务";
+"Active" = "活跃";
+"Dormant" = "休眠";
+"More actions" = "更多操作";
+"just now" = "刚刚";
+"%d min ago" = "%d 分钟前";
+"%d hr ago" = "%d 小时前";
+"%d days ago" = "%d 天前";
+"MMM d" = "M月d日";
+
+/* 任务操作 */
+"New task" = "新建任务";
+"Rename task…" = "重命名任务…";
+"Rename task" = "重命名任务";
+"Open handoff document" = "打开 handoff 文档";
+"Open with…" = "用其他应用打开…";
+"Reveal in Finder" = "在 Finder 中显示";
+"Archive task" = "归档任务";
+"Delete task (move to Trash)" = "删除任务（移到废纸篓）";
+
+/* 恢复气泡 */
+"Task: %@" = "任务：%@";
+"No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section." = "还没有 handoff 摘要——点「Handoff」后 agent 会写入 Next steps / Current state / Blockers & risks，此处按节抽取显示。";
+"After restoring, start claude/codex and click “Restore” in the pane header to hand over." = "恢复后启动 claude/codex，点 header「Restore」让它接手";
+"Already open" = "已打开";
+"Open in" = "打开到";
+"Open another" = "再开一个";
+"Jump · %@" = "跳转 · %@";
+
+/* 灵动岛 */
+"Name this terminal" = "命名这个终端";
+"Search, or type a new task name and press Return" = "搜索，或输入新任务名后回车";
+"Bind task" = "绑定任务";
+"New task “%@”" = "新建任务「%@」";
+"Return" = "回车";
+"Unbind" = "解除绑定";

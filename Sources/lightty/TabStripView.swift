@@ -57,7 +57,7 @@ final class TabStripView: NSView {
             item.onRenameRequest = { [weak self, weak item] in
                 guard let self, let item else { return }
                 NameEditorPopover.present(
-                    from: item, title: "重命名工作区", initial: title, confirmLabel: "重命名"
+                    from: item, title: L("Rename workspace"), initial: title, confirmLabel: L("Rename")
                 ) { [weak self] name in
                     self?.onRename?(index, name)
                 }
@@ -93,7 +93,7 @@ private final class TabItemView: NSView {
     init(title: String, isActive: Bool) {
         self.isActive = isActive
         closeButton = ShellIconButton(
-            symbol: "xmark", accessibilityLabel: "关闭 Tab", target: nil, action: nil)
+            symbol: "xmark", accessibilityLabel: L("Close workspace"), target: nil, action: nil)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.controlCornerRadius

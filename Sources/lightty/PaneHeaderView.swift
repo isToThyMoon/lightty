@@ -41,10 +41,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private let dotView = NSView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let taskHintLabel = NSTextField(labelWithString: "")
+    // 动词直接用 handoff 术语本身（UI 中 handoff 一律不翻译）：
+    // Handoff = 让 agent 写交接文档交出这一棒；Restore = 让 agent 读文档接续。
     private let finishButton = ShellTextButton(
-        "收工", palette: .terminal, target: nil, action: nil)
+        "Handoff", palette: .terminal, target: nil, action: nil)
     private let injectButton = ShellTextButton(
-        "注入", palette: .terminal, target: nil, action: nil)
+        "Restore", palette: .terminal, target: nil, action: nil)
     private var capsuleTracking: NSTrackingArea?
     private var capsuleHovered = false {
         didSet { applyCapsuleFill() }

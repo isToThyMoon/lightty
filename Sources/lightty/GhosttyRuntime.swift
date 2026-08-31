@@ -761,10 +761,10 @@ final class GhosttyRuntime {
             if !trustedSchemes.contains(url.scheme?.lowercased() ?? "") {
                 DispatchQueue.main.async {
                     let alert = NSAlert()
-                    alert.messageText = "打开终端链接？"
+                    alert.messageText = L("Open terminal link?")
                     alert.informativeText = value
                     alert.alertStyle = .warning
-                    alert.addButton(withTitle: "打开")
+                    alert.addButton(withTitle: L("Open"))
                     alert.addButton(withTitle: "取消")
                     let completion: (NSApplication.ModalResponse) -> Void = { response in
                         if response == .alertFirstButtonReturn { NSWorkspace.shared.open(url) }
@@ -897,8 +897,8 @@ final class GhosttyRuntime {
             guard let view, let surface = view.surface else { return }
             let alert = NSAlert()
             alert.messageText = request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ
-                ? "允许终端读取剪贴板？"
-                : "粘贴剪贴板内容？"
+                ? L("Allow terminal to read the clipboard?")
+                : L("Paste from clipboard?")
             alert.informativeText = String(contents.prefix(500))
             alert.alertStyle = .warning
             alert.addButton(withTitle: "允许")
@@ -945,7 +945,7 @@ final class GhosttyRuntime {
                 return
             }
             let alert = NSAlert()
-            alert.messageText = "允许终端写入剪贴板？"
+            alert.messageText = L("Allow terminal to write to the clipboard?")
             alert.informativeText = String(text.prefix(500))
             alert.alertStyle = .warning
             alert.addButton(withTitle: "允许")

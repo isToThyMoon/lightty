@@ -25,9 +25,13 @@ enum RestoreFlow {
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
     }
 
-    /// 摘要 = 正文「下一步」「当前状态」两节（进展/卡点/下一步的最短可读集）
+    /// 摘要 = 正文 Next steps / Current state / Blockers 三节（分诊最短可读集）。
+    /// 中文节头是 2026-08-30 协议迁英文前的旧格式，为既有任务文件保留解析。
     static func summarize(_ body: String) -> String {
-        let interesting = ["## 下一步", "## 当前状态", "## 卡点与风险"]
+        let interesting = [
+            "## Next steps", "## Current state", "## Blockers & risks",
+            "## 下一步", "## 当前状态", "## 卡点与风险",
+        ]
         var lines: [String] = []
         var keeping = false
         for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -39,7 +43,7 @@ enum RestoreFlow {
         }
         let result = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return result.isEmpty
-            ? "还没有 handoff 摘要——收工后 agent 会写入「下一步 / 当前状态 / 卡点与风险」，此处按节抽取显示。"
+            ? L("No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section.")
             : result
     }
 }
@@ -64,7 +68,7 @@ private final class RestorePopoverController: NSViewController {
     override func loadView() {
         let root = NSView()
 
-        let title = NSTextField(labelWithString: "任务：\(task.name)")
+        let title = NSTextField(labelWithString: L("Task: %@", task.name))
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = ShellStyle.primaryText
 
@@ -75,7 +79,7 @@ private final class RestorePopoverController: NSViewController {
         summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let hint = NSTextField(
-            labelWithString: "恢复后启动 claude/codex，点 header「注入」让它接手")
+            labelWithString: L("After restoring, start claude/codex and click “Restore” in the pane header to hand over."))
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = ShellStyle.tertiaryText
 
@@ -88,7 +92,7 @@ private final class RestorePopoverController: NSViewController {
             $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
         }
         if !bound.isEmpty {
-            let opened = Self.sectionLabel("已打开")
+            let opened = Self.sectionLabel(L("Already open"))
             rows.append(opened)
             sectionLabels.append(opened)
             // 工作区默认名全局计数、跨窗口唯一，标签无需窗口前缀；
@@ -99,7 +103,7 @@ private final class RestorePopoverController: NSViewController {
                 let label = workspace.map { "\($0) › \(entry.pane.header.title)" }
                     ?? entry.pane.header.title
                 let row = RestoreRowButton(
-                    "跳转 · \(label)", target: self, action: #selector(jumpToPane(_:)))
+                    L("Jump · %@", label), target: self, action: #selector(jumpToPane(_:)))
                 row.tag = index
                 jumpTargets = bound
                 rows.append(row)
@@ -107,15 +111,15 @@ private final class RestorePopoverController: NSViewController {
             }
         }
 
-        let destinations = Self.sectionLabel(bound.isEmpty ? "打开到" : "再开一个")
+        let destinations = Self.sectionLabel(bound.isEmpty ? L("Open in") : L("Open another"))
         rows.append(destinations)
         sectionLabels.append(destinations)
         let paneButton = RestoreRowButton(
-            "当前工作区分屏", target: self, action: #selector(restoreInPane))
+            L("Split in current workspace"), target: self, action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
-            "新工作区", target: self, action: #selector(restoreInTab))
+            L("New workspace"), target: self, action: #selector(restoreInTab))
         let windowButton = RestoreRowButton(
-            "新窗口", target: self, action: #selector(restoreInWindow))
+            L("New window"), target: self, action: #selector(restoreInWindow))
         rows.append(contentsOf: [paneButton, tabButton, windowButton])
         buttonRows.append(contentsOf: [paneButton, tabButton, windowButton])
 

@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "lightty",
+    defaultLocalization: "en",
     platforms: [.macOS(.v13)],
     targets: [
         // 预构建的 libghostty；由 scripts/sync-ghosttykit.sh 从 vendor 产物同步而来
@@ -17,6 +18,7 @@ let package = Package(
         .executableTarget(
             name: "lightty",
             dependencies: ["GhosttyKit", "LighttyCore"],
+            resources: [.process("Resources")],
             linkerSettings: [
                 // 静态库自身不携带链接信息，必须显式补齐（清单来自对归档 nm -u 的实测）
                 .linkedLibrary("c++"),

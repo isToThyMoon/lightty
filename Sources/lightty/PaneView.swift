@@ -37,7 +37,7 @@ final class PaneView: NSView {
         terminal = TerminalSurfaceView(configuration: surfaceConfiguration)
         Self.paneCounter += 1
         super.init(frame: .zero)
-        header.title = "终端 \(Self.paneCounter)"
+        header.title = L("Terminal %d", Self.paneCounter)
         header.dot = .unnamed
         header.injectEnabled = false
         header.dragIdentifier = dragIdentifier
@@ -302,7 +302,7 @@ final class PaneView: NSView {
     /// 新建任务并绑定（收工的未绑定路径也走这里）。
     private func presentCreateTaskEditor() {
         NameEditorPopover.present(
-            from: header, title: "新建任务", confirmLabel: "创建"
+            from: header, title: L("New task"), confirmLabel: L("Create")
         ) { [weak self] name in
             guard let self else { return }
             do {

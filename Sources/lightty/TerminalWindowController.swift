@@ -10,7 +10,7 @@ final class TerminalTab {
     /// pane 树根（container 的唯一 subview）：单 pane 或嵌套 NSSplitView。
     fileprivate(set) var rootView: NSView?
     /// 工作区名：会话态，双击 tab 标签改，不从 pane/任务派生、不落盘。
-    var title = "工作区"
+    var title = L("Workspace")
 
     init() {
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -170,7 +170,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         titlebar.addSubview(chrome)
 
         let button = ShellIconButton(
-            symbol: "sidebar.left", accessibilityLabel: "任务侧边栏", target: self,
+            symbol: "sidebar.left", accessibilityLabel: L("Task Sidebar"), target: self,
             action: #selector(toggleSidebarFromTitlebar))
         button.onHoverChange = { [weak self] hovered in
             self?.sidebarButtonHoverChanged(hovered)
@@ -178,13 +178,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         // 右侧按钮组（图标区分语义）：向右分屏 | 向下分屏 | 新 tab
         let newTabButton = ShellIconButton(
-            symbol: "plus.rectangle.on.rectangle", accessibilityLabel: "新工作区", target: self,
+            symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New workspace"), target: self,
             action: #selector(newTabFromTitlebar))
         let splitRightButton = ShellIconButton(
-            symbol: "rectangle.split.2x1", accessibilityLabel: "向右分屏", target: self,
+            symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"), target: self,
             action: #selector(splitRightFromTitlebar))
         let splitDownButton = ShellIconButton(
-            symbol: "rectangle.split.1x2", accessibilityLabel: "向下分屏", target: self,
+            symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"), target: self,
             action: #selector(splitDownFromTitlebar))
 
         // 单工作区时 tab 栏隐藏，用户无从感知/重命名当前工作区——标题栏放一个
@@ -195,7 +195,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             let index = self.activeTabIndex
             guard self.tabs.indices.contains(index) else { return }
             NameEditorPopover.present(
-                from: anchor, title: "重命名工作区",
+                from: anchor, title: L("Rename workspace"),
                 initial: self.tabs[index].title
             ) { [weak self] name in
                 self?.renameTab(at: index, to: name)
@@ -363,7 +363,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if installPane { install(pane: initialPane) }
         let tab = TerminalTab()
         Self.workspaceCounter += 1
-        tab.title = "工作区 \(Self.workspaceCounter)"
+        tab.title = L("Workspace %d", Self.workspaceCounter)
         contentHost.addSubview(tab.container)
         NSLayoutConstraint.activate([
             tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -1244,7 +1244,7 @@ private final class TitlebarWorkspaceLabel: NSView {
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
-        toolTip = "重命名工作区"
+        toolTip = L("Rename workspace")
     }
 
     required init?(coder: NSCoder) { fatalError() }

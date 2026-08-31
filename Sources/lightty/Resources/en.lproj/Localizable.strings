@@ -1,0 +1,78 @@
+/* 菜单栏 */
+"About lightty" = "About lightty";
+"Quit lightty" = "Quit lightty";
+"Tasks" = "Tasks";
+"New Task (New Window)" = "New Task (New Window)";
+"New Task (New Workspace)" = "New Task (New Workspace)";
+"Split Pane Right" = "Split Pane Right";
+"Split Pane Down" = "Split Pane Down";
+"Close Pane" = "Close Pane";
+"Task Sidebar" = "Task Sidebar";
+
+/* 通用 */
+"OK" = "OK";
+"Create" = "Create";
+"Rename" = "Rename";
+"Cancel" = "Cancel";
+"Open" = "Open";
+"Allow" = "Allow";
+"Press Return to confirm" = "Press Return to confirm";
+
+/* 终端权限弹窗 */
+"Open terminal link?" = "Open terminal link?";
+"Allow terminal to read the clipboard?" = "Allow terminal to read the clipboard?";
+"Paste from clipboard?" = "Paste from clipboard?";
+"Allow terminal to write to the clipboard?" = "Allow terminal to write to the clipboard?";
+
+/* pane / 工作区 */
+"Terminal %d" = "Terminal %d";
+"Workspace" = "Workspace";
+"Workspace %d" = "Workspace %d";
+"Rename workspace" = "Rename workspace";
+"Close workspace" = "Close workspace";
+"New workspace" = "New workspace";
+"New window" = "New window";
+"Split right" = "Split right";
+"Split down" = "Split down";
+"Split in current workspace" = "Split in current workspace";
+
+/* 侧栏 */
+"Search tasks" = "Search tasks";
+"No matching tasks" = "No matching tasks";
+"%d active · %d total" = "%d active · %d total";
+"%d tasks" = "%d tasks";
+"Active" = "Active";
+"Dormant" = "Dormant";
+"More actions" = "More actions";
+"just now" = "just now";
+"%d min ago" = "%d min ago";
+"%d hr ago" = "%d hr ago";
+"%d days ago" = "%d days ago";
+"MMM d" = "MMM d";
+
+/* 任务操作 */
+"New task" = "New task";
+"Rename task…" = "Rename task…";
+"Rename task" = "Rename task";
+"Open handoff document" = "Open handoff document";
+"Open with…" = "Open with…";
+"Reveal in Finder" = "Reveal in Finder";
+"Archive task" = "Archive task";
+"Delete task (move to Trash)" = "Delete task (move to Trash)";
+
+/* 恢复气泡 */
+"Task: %@" = "Task: %@";
+"No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section." = "No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section.";
+"After restoring, start claude/codex and click “Restore” in the pane header to hand over." = "After restoring, start claude/codex and click “Restore” in the pane header to hand over.";
+"Already open" = "Already open";
+"Open in" = "Open in";
+"Open another" = "Open another";
+"Jump · %@" = "Jump · %@";
+
+/* 灵动岛 */
+"Name this terminal" = "Name this terminal";
+"Search, or type a new task name and press Return" = "Search, or type a new task name and press Return";
+"Bind task" = "Bind task";
+"New task “%@”" = "New task “%@”";
+"Return" = "Return";
+"Unbind" = "Unbind";

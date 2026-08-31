@@ -23,30 +23,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: "关于 lightty", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L("About lightty"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         // 菜单只提供鼠标入口。包括退出在内的键盘动作都必须先进
         // surface，再由 libghostty 按全局 config keybind 决定是否回调壳层。
-        appMenu.addItem(withTitle: "退出 lightty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L("Quit lightty"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
 
         let taskMenuItem = NSMenuItem()
         mainMenu.addItem(taskMenuItem)
-        let taskMenu = NSMenu(title: "任务")
+        let taskMenu = NSMenu(title: L("Tasks"))
         taskMenuItem.submenu = taskMenu
 
         // 终端类动作不设菜单快捷键：按键直达 surface，由 core 按用户 config 的
         // keybind（含默认 cmd+N/T/D/W、cmd+[]、cmd+alt+方向等）匹配后经 action_cb 回来。
         // 菜单项仅供鼠标点选。
-        taskMenu.addItem(makeItem("新任务（新窗口）", #selector(newTaskWindow)))
-        taskMenu.addItem(makeItem("新任务（新工作区）", #selector(newTaskTab)))
+        taskMenu.addItem(makeItem(L("New Task (New Window)"), #selector(newTaskWindow)))
+        taskMenu.addItem(makeItem(L("New Task (New Workspace)"), #selector(newTaskTab)))
         taskMenu.addItem(.separator())
-        taskMenu.addItem(makeItem("向右分 pane", #selector(splitRight)))
-        taskMenu.addItem(makeItem("向下分 pane", #selector(splitDown)))
-        taskMenu.addItem(makeItem("关闭 pane", #selector(closePane)))
+        taskMenu.addItem(makeItem(L("Split Pane Right"), #selector(splitRight)))
+        taskMenu.addItem(makeItem(L("Split Pane Down"), #selector(splitDown)))
+        taskMenu.addItem(makeItem(L("Close Pane"), #selector(closePane)))
         taskMenu.addItem(.separator())
         // 任务侧栏由标题栏按钮的 hover / click 驱动。不得占用 cmd+K：它属于
         // Ghostty 默认 keybind `super+k=clear_screen`，必须直达 surface/core。
-        taskMenu.addItem(makeItem("任务侧边栏", #selector(toggleSidebar)))
+        taskMenu.addItem(makeItem(L("Task Sidebar"), #selector(toggleSidebar)))
 
         NSApp.mainMenu = mainMenu
     }

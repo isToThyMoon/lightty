@@ -117,7 +117,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskRenameButton.focusRingType = .none
         taskRenameButton.setButtonType(.momentaryChange)
         taskRenameButton.image = NSImage(
-            systemSymbolName: "pencil", accessibilityDescription: "重命名任务")
+            systemSymbolName: "pencil", accessibilityDescription: L("Rename task"))
         taskRenameButton.symbolConfiguration = NSImage.SymbolConfiguration(
             pointSize: 10, weight: .medium)
         taskRenameButton.target = self
@@ -246,7 +246,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         listSeparator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         nameField.textColor = foreground
         nameField.placeholderAttributedString = NSAttributedString(
-            string: "命名这个终端",
+            string: L("Name this terminal"),
             attributes: [
                 .font: nameField.font ?? NSFont.systemFont(ofSize: 11),
                 .foregroundColor: foreground.withAlphaComponent(0.3),
@@ -254,7 +254,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskEditor.textColor = foreground
         searchField.textColor = foreground
         searchField.placeholderAttributedString = NSAttributedString(
-            string: "搜索，或输入新任务名后回车",
+            string: L("Search, or type a new task name and press Return"),
             attributes: [
                 .font: searchField.font ?? NSFont.systemFont(ofSize: 11),
                 .foregroundColor: foreground.withAlphaComponent(0.3),
@@ -297,7 +297,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             title.append(doc)
         }
         title.append(NSAttributedString(
-            string: "  \(boundTaskName ?? "绑定任务")", attributes: attributes))
+            string: "  \(boundTaskName ?? L("Bind task"))", attributes: attributes))
         taskButton.attributedTitle = title
     }
 
@@ -349,7 +349,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         for (index, choice) in filtered.enumerated() {
             let row = TaskRowView(
                 title: choice.name,
-                detail: choice.running ? "活跃" : nil,
+                detail: choice.running ? L("Active") : nil,
                 checked: choice.current,
                 destructive: false,
                 foreground: foreground)
@@ -363,8 +363,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
         if filtered.isEmpty, !query.isEmpty {
             let row = TaskRowView(
-                title: "新建任务「\(query)」",
-                detail: "回车", checked: false, destructive: false,
+                title: L("New task “%@”", query),
+                detail: L("Return"), checked: false, destructive: false,
                 foreground: foreground)
             row.onTap = { [weak self] in self?.createFromQuery() }
             let rowIndex = rowViews.count
@@ -376,7 +376,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         // 已绑定：底部解绑行
         if boundTaskName != nil {
             let row = TaskRowView(
-                title: "解除绑定", detail: nil, checked: false, destructive: true,
+                title: L("Unbind"), detail: nil, checked: false, destructive: true,
                 foreground: foreground)
             row.onTap = { [weak self] in
                 self?.onUnbindTask?()
