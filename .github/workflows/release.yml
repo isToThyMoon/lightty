@@ -1,0 +1,118 @@
+# 推 v* tag 触发：编内核（按 commit 缓存）→ 打包 universal .app → 签名/公证
+# （secrets 齐备时）→ 建 GitHub Release 并上传 DMG。
+#
+# 需要的 repo secrets（缺则跳过对应步骤，产出 ad-hoc 签名的 DMG）：
+#   MACOS_CERT_P12        Developer ID Application 证书导出的 .p12，base64 编码
+#   MACOS_CERT_PASSWORD   .p12 密码
+#   NOTARY_APPLE_ID       Apple ID（公证用）
+#   NOTARY_TEAM_ID        团队 ID（10 位）
+#   NOTARY_PASSWORD       该 Apple ID 的 app-specific password
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      GHOSTTY_REPO: isToThyMoon/ghostty
+      GHOSTTY_REF: lightty-patches
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 打包脚本用 rev-list --count 生成 build number
+
+      - name: Checkout ghostty kernel (lightty-patches)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GHOSTTY_REPO }}
+          ref: ${{ env.GHOSTTY_REF }}
+          path: vendor/ghostty
+
+      - name: Resolve kernel commit (cache key)
+        id: kernel
+        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache GhosttyKit
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/ghostty/macos/GhosttyKit.xcframework
+            vendor/ghostty/zig-out/share/ghostty
+          key: ghosttykit-${{ steps.kernel.outputs.sha }}
+
+      - name: Install zig
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build kernel
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/ghostty
+          zig build -Demit-macos-app=false -Dsentry=false -Doptimize=ReleaseFast
+
+      - name: Sync GhosttyKit into SwiftPM layout
+        run: scripts/sync-ghosttykit.sh
+
+      - name: Import Developer ID certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          rm cert.p12
+
+      - name: Package app + DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
+          MAKE_DMG=1 scripts/package-app.sh "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Notarize + staple
+        if: env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          DMG="dist/lightty-$VERSION.dmg"
+          xcrun notarytool submit "$DMG" --wait \
+            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+          xcrun stapler staple "$DMG"
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## 下载
+
+          | 平台 | 下载 |
+          |---|---|
+          | macOS 13+（Apple Silicon / Intel 通用） | [lightty-$VERSION.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg) |
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            --title "v$VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "dist/lightty-$VERSION.dmg"
