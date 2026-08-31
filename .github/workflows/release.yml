@@ -50,10 +50,14 @@ jobs:
         id: kernel-cache
         uses: actions/cache@v4
         with:
+          # 必须覆盖打包脚本消费的全部内核产物（xcframework + 资源三件套），
+          # 缺一个就会在缓存命中的 run 里打包失败（terminfo 缺失事故，v2 起修复）
           path: |
             vendor/ghostty/macos/GhosttyKit.xcframework
             vendor/ghostty/zig-out/share/ghostty
-          key: ghosttykit-${{ steps.kernel.outputs.sha }}
+            vendor/ghostty/zig-out/share/terminfo
+            vendor/ghostty/zig-out/share/locale
+          key: ghosttykit-v2-${{ steps.kernel.outputs.sha }}
 
       - name: Install zig
         if: steps.kernel-cache.outputs.cache-hit != 'true'
