@@ -9,9 +9,13 @@
 #   NOTARY_PASSWORD       该 Apple ID 的 app-specific password
 name: release
 
+# main 分支也触发：GitHub 缓存按 ref 隔离，tag 之间互不可见，只有 main 上的
+# 缓存全局可读——内核缓存必须由 main 的 run 播种，tag 发版才能命中。
+# main 上发布类步骤被 ref_type == tag 门禁跳过，只做构建打包（兼当 CI 冒烟）。
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 # 默认 GITHUB_TOKEN 是只读的；建 Release / 传资产需要 contents 写权限
