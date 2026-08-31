@@ -40,6 +40,12 @@ cp "$BIN" "$APP/Contents/MacOS/lightty"
 # SwiftPM 资源包（本地化 strings 等）：Bundle.module 会在主 bundle 的
 # Resources 里按名查找
 cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
+# Sparkle 动态框架：开发态靠 @loader_path 同目录找到，bundle 里进 Frameworks/
+# 并给可执行补 rpath
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$(dirname "$BIN")/Sparkle.framework" "$APP/Contents/Frameworks/"
+/usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP/Contents/MacOS/lightty"
 # libghostty 运行时资源。内核约定（termio/Exec.zig）：TERMINFO 指向
 # "资源目录父目录/terminfo"，所以 terminfo 必须放在 ghostty/ 的旁边，
 # 与官方 app bundle 布局一致——缺了它 TERM=xterm-ghostty 查无能力描述，
@@ -69,6 +75,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+    <key>SUFeedURL</key><string>https://github.com/isToThyMoon/lightty/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>f072X9FONA/coPDuRgaSX9r/wPLjcSwxr6wFmTeWKy4=</string>
 </dict>
 </plist>
 PLIST
@@ -84,7 +92,8 @@ for required in \
     "Contents/Resources/ghostty/themes" \
     "Contents/Resources/terminfo/78/xterm-ghostty" \
     "Contents/Resources/locale" \
-    "Contents/Resources/lightty_lightty.bundle"; do
+    "Contents/Resources/lightty_lightty.bundle" \
+    "Contents/Frameworks/Sparkle.framework"; do
     [ -e "$APP/$required" ] || { echo "✗ bundle 缺内核契约路径: $required"; exit 1; }
 done
 echo "▸ kernel resource contract OK"
@@ -97,9 +106,13 @@ if [ -z "$IDENTITY" ]; then
 fi
 if [ -n "$IDENTITY" ]; then
     echo "▸ codesign: $IDENTITY (hardened runtime)"
+    # 先签内嵌框架（--deep 覆盖 Sparkle 的 XPC/Autoupdate），再签 app 本体
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp --deep \
+        "$APP/Contents/Frameworks/Sparkle.framework"
     codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP"
 else
     echo "▸ codesign: ad-hoc（未找到 Developer ID，仅本机可用）"
+    codesign --force --sign - --deep "$APP/Contents/Frameworks/Sparkle.framework"
     codesign --force --sign - "$APP"
 fi
 codesign --verify --strict "$APP" && echo "  signature OK"

@@ -1,6 +1,7 @@
 /* 菜单栏 */
 "About lightty" = "About lightty";
 "Quit lightty" = "Quit lightty";
+"Check for Updates…" = "Check for Updates…";
 "Tasks" = "Tasks";
 "New Task (New Window)" = "New Task (New Window)";
 "New Task (New Workspace)" = "New Task (New Workspace)";

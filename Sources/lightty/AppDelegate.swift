@@ -1,9 +1,18 @@
 import AppKit
+import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// 应用内更新（Sparkle）。只在打包形态下启动：SUFeedURL 由打包脚本写进
+    /// Info.plist，swift build 的裸可执行没有它，此时保持 nil、菜单项不出现。
+    private var updaterController: SPUStandardUpdaterController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
+        if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
+            updaterController = SPUStandardUpdaterController(
+                startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        }
         buildMenu()
         AppState.shared.newWindow()
         NSApp.activate(ignoringOtherApps: true)
@@ -24,6 +33,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
         appMenu.addItem(withTitle: L("About lightty"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        if let updaterController {
+            let check = NSMenuItem(
+                title: L("Check for Updates…"),
+                action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                keyEquivalent: "")
+            check.target = updaterController
+            appMenu.addItem(check)
+        }
         appMenu.addItem(.separator())
         // 菜单只提供鼠标入口。包括退出在内的键盘动作都必须先进
         // surface，再由 libghostty 按全局 config keybind 决定是否回调壳层。

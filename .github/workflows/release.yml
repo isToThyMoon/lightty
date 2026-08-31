@@ -91,6 +91,34 @@ jobs:
           MAKE_DMG=1 scripts/package-app.sh "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      - name: Sign update + generate appcast
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          SIGN_TOOL="$(find .build/artifacts -path '*Sparkle/bin/sign_update' | head -1)"
+          # --ed-key-file -：私钥经 stdin 传入，不落盘
+          SIGNATURE="$(echo "$SPARKLE_ED_PRIVATE_KEY" | "$SIGN_TOOL" --ed-key-file - "dist/lightty-$VERSION.dmg")"
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg"
+          cat > dist/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>lightty</title>
+              <item>
+                <title>v$VERSION</title>
+                <sparkle:version>$BUILD_NUMBER</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <link>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}</link>
+                <pubDate>$(date -u +"%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <enclosure url="$DMG_URL" $SIGNATURE type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
       - name: Notarize + staple
         if: env.HAS_NOTARY == 'true'
         env:
@@ -129,4 +157,4 @@ jobs:
             --title "v$VERSION" \
             --notes-file notes.md \
             --generate-notes \
-            "dist/lightty-$VERSION.dmg"
+            "dist/lightty-$VERSION.dmg" "dist/appcast.xml"

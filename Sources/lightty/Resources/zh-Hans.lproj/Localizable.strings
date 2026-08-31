@@ -1,6 +1,7 @@
 /* 菜单栏 */
 "About lightty" = "关于 lightty";
 "Quit lightty" = "退出 lightty";
+"Check for Updates…" = "检查更新…";
 "Tasks" = "任务";
 "New Task (New Window)" = "新任务（新窗口）";
 "New Task (New Workspace)" = "新任务（新工作区）";
