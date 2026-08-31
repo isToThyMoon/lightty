@@ -59,10 +59,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// prompt 清空，prompt 随宽度自然 reflow 不再闪烁。
     private func animateSidebarLayout(
         _ targets: [(NSLayoutConstraint, CGFloat)],
-        duration: TimeInterval = ShellStyle.animationDuration,
+        duration: TimeInterval = ShellStyle.sidebarAnimationDuration,
         completion: (() -> Void)? = nil
     ) {
-        sidebarLayoutAnimationTimer?.invalidate()
+        stopSidebarAnimationDriver()
         guard let themeFrame = window?.contentView?.superview else {
             targets.forEach { $0.0.constant = $0.1 }
             completion?()
@@ -72,22 +72,61 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         terminals.forEach { $0.setPromptClearOnResize(false) }
         let starts = targets.map { $0.0.constant }
         let begin = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self, weak themeFrame] timer in
+        sidebarAnimationStep = { [weak self, weak themeFrame] in
             let progress = min(1, (CACurrentMediaTime() - begin) / duration)
-            let eased = 1 - pow(1 - progress, 3) // easeOutCubic
+            // easeInOutCubic：起步收尾都柔和（实测优于 easeOutExpo——
+            // expo 的瞬时起步在真实 reflow 的终端上反而显得急）
+            let eased = progress < 0.5
+                ? 4 * progress * progress * progress
+                : 1 - pow(-2 * progress + 2, 3) / 2
             for (index, target) in targets.enumerated() {
                 target.0.constant = starts[index] + (target.1 - starts[index]) * CGFloat(eased)
             }
             themeFrame?.layoutSubtreeIfNeeded()
             if progress >= 1 {
-                timer.invalidate()
-                self?.sidebarLayoutAnimationTimer = nil
+                self?.stopSidebarAnimationDriver()
                 terminals.forEach { $0.setPromptClearOnResize(true) }
                 completion?()
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        sidebarLayoutAnimationTimer = timer
+        startSidebarAnimationDriver()
+    }
+
+    /// 帧驱动器：优先 CADisplayLink（与 vsync 对齐，消除 Timer 抖动，
+    /// macOS 14+），旧系统回退 120Hz Timer。progress 按真实时间计算，
+    /// 掉帧只会跳帧不会拖慢。
+    private var sidebarAnimationStep: (() -> Void)?
+    private var sidebarCADisplayLink: Any?
+
+    private func startSidebarAnimationDriver() {
+        if #available(macOS 14.0, *), let view = window?.contentView {
+            let link = view.displayLink(target: self, selector: #selector(sidebarDisplayTick))
+            // ProMotion 屏默认只给 60Hz，高帧率必须显式申请
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 60, maximum: 120, preferred: 120)
+            link.add(to: .main, forMode: .common)
+            sidebarCADisplayLink = link
+        } else {
+            let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+                self?.sidebarAnimationStep?()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            sidebarLayoutAnimationTimer = timer
+        }
+    }
+
+    @objc private func sidebarDisplayTick() {
+        sidebarAnimationStep?()
+    }
+
+    private func stopSidebarAnimationDriver() {
+        if #available(macOS 14.0, *) {
+            (sidebarCADisplayLink as? CADisplayLink)?.invalidate()
+        }
+        sidebarCADisplayLink = nil
+        sidebarLayoutAnimationTimer?.invalidate()
+        sidebarLayoutAnimationTimer = nil
+        sidebarAnimationStep = nil
     }
 
     private weak var titlebarChrome: NSView?
@@ -1105,6 +1144,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebar.onRequestClose = { [weak self] in self?.requestSidebarClose() }
         sidebar.onHoverChange = { [weak self] hovered in self?.sidebarHoverChanged(hovered) }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
+        // 不做 alpha 编排：侧栏是实体 chrome 面板，半透明会漏出其后的
+        // 透明窗口底层（钉住模式下）；丝滑靠 vsync 驱动 + 曲线本身。
         sidebar.alphaValue = 1
         if let dismissView {
             themeFrame.addSubview(sidebar, positioned: .above, relativeTo: dismissView)
@@ -1134,7 +1175,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             targets.append((rootLeadingConstraint,
                             sidebarPresentation == .pinned ? TaskSidebar.width : 0))
         }
-        animateSidebarLayout(targets) { [weak self, weak sidebar] in
+        animateSidebarLayout(targets) { [weak self] in
             guard let self else { return }
             self.sidebarIsAnimating = false
             // hover preview 不偷走 terminal 键盘焦点；只有点击钉住才进搜索框。

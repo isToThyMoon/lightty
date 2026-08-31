@@ -26,6 +26,8 @@ enum ShellStyle {
     static let rowCornerRadius: CGFloat = 9
     static let controlCornerRadius: CGFloat = 8
     static let animationDuration: TimeInterval = 0.22
+    /// 侧栏开合专用：ease-in-out cubic（实测手感优于 easeOutExpo）
+    static let sidebarAnimationDuration: TimeInterval = 0.28
 
     // MARK: Palette（明暗动态色：浅色为 Codex 参考，深色为配套暖灰紫）
 
