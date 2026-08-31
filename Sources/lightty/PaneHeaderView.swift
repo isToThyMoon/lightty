@@ -10,7 +10,7 @@ import GhosttyKit
 /// ⚠️ 必须 clipsToBounds：layer 化后自绘内容会落在超出 bounds 的 ContentLayer 上，
 /// 半透明底色会整张盖住终端（docs/libghostty-embedding.md 透明排查实录）。
 final class PaneHeaderView: NSView, NSDraggingSource {
-    static let height: CGFloat = 24
+    static let height: CGFloat = ShellStyle.chromeRowHeight
 
     enum Dot: Equatable {
         case unnamed        // 灰：未绑定任务
@@ -39,6 +39,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     private let capsule = NSView()
     private let dotView = NSView()
+    /// hover 时替换圆点位置出现的关闭键（Safari tab 式：同插槽零位移，
+    /// 不改变胶囊布局——胶囊与灵动岛首行逐像素对齐是 morph 的硬约束）。
+    private let closeButton = NSButton()
+    var onCloseRequested: (() -> Void)?
     private let nameLabel = NSTextField(labelWithString: "")
     private let taskHintLabel = NSTextField(labelWithString: "")
     // 动词直接用 handoff 术语本身（UI 中 handoff 一律不翻译）：
@@ -49,7 +53,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         "Restore", palette: .terminal, target: nil, action: nil)
     private var capsuleTracking: NSTrackingArea?
     private var capsuleHovered = false {
-        didSet { applyCapsuleFill() }
+        didSet {
+            applyCapsuleFill()
+            dotView.isHidden = capsuleHovered
+            closeButton.isHidden = !capsuleHovered
+        }
     }
 
     var title: String {
@@ -73,6 +81,48 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     var injectEnabled: Bool {
         get { injectButton.isEnabled }
         set { injectButton.isEnabled = newValue }
+    }
+
+    /// Handoff 的"软置灰"：未绑定任务时呈禁用观感，但保留点击——点击原地
+    /// 提示"先绑定任务"，而不是无声吞掉。观感由按钮状态机维护，不会被
+    /// hover/点击刷新冲掉。
+    var finishLooksEnabled: Bool {
+        get { !finishButton.looksDisabled }
+        set { finishButton.looksDisabled = !newValue }
+    }
+
+    /// 未绑定提示气泡的锚点（原地反馈用）
+    var finishAnchor: NSView { finishButton }
+
+    /// 轻量注意力环：胶囊外圈细描边缓慢呼吸，生命周期与提示气泡绑定——
+    /// 气泡在环就在（用户读完文字抬眼仍能看到），气泡关环淡出。
+    private var attentionRing: NSView?
+
+    func beginCapsuleAttention() {
+        endCapsuleAttention()
+        let ring = NSView(frame: capsule.frame.insetBy(dx: -4, dy: -4))
+        ring.wantsLayer = true
+        ring.layer?.cornerRadius = 10
+        ring.layer?.borderWidth = 1.5
+        ring.layer?.borderColor = terminalForeground.withAlphaComponent(0.5).cgColor
+        addSubview(ring)
+        attentionRing = ring
+        let breathe = CABasicAnimation(keyPath: "opacity")
+        breathe.fromValue = 0.3
+        breathe.toValue = 0.9
+        breathe.duration = 0.9
+        breathe.autoreverses = true
+        breathe.repeatCount = .infinity
+        ring.layer?.add(breathe, forKey: "breathe")
+    }
+
+    func endCapsuleAttention() {
+        guard let ring = attentionRing else { return }
+        attentionRing = nil
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            ring.animator().alphaValue = 0
+        }, completionHandler: { ring.removeFromSuperview() })
     }
 
     /// 绑定任务名；nil = 未绑定。宽度富余时以「 · 任务名」并入胶囊。
@@ -112,6 +162,17 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         taskHintLabel.setContentCompressionResistancePriority(
             .defaultLow, for: .horizontal)
 
+        closeButton.image = NSImage(
+            systemSymbolName: "xmark", accessibilityDescription: L("Close pane"))?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+        closeButton.isBordered = false
+        closeButton.imagePosition = .imageOnly
+        closeButton.focusRingType = .none
+        closeButton.isHidden = true
+        closeButton.target = self
+        closeButton.action = #selector(closeTapped)
+        closeButton.toolTip = L("Close pane")
+
         applyTerminalColors()
 
         finishButton.target = self
@@ -120,7 +181,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         injectButton.action = #selector(injectTapped)
 
         addSubview(capsule)
-        for v in [dotView, nameLabel, taskHintLabel] {
+        for v in [dotView, closeButton, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             capsule.addSubview(v)
         }
@@ -142,6 +203,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             dotView.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
             dotView.widthAnchor.constraint(equalToConstant: 7),
             dotView.heightAnchor.constraint(equalToConstant: 7),
+
+            // 与圆点同心、命中区放大到 16pt；不参与水平链，布局零位移
+            closeButton.centerXAnchor.constraint(equalTo: dotView.centerXAnchor),
+            closeButton.centerYAnchor.constraint(equalTo: dotView.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 16),
+            closeButton.heightAnchor.constraint(equalToConstant: 16),
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
@@ -220,6 +287,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
         taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
+        closeButton.contentTintColor = terminalForeground.withAlphaComponent(0.7)
         applyCapsuleFill()
         finishButton.terminalForeground = terminalForeground
         injectButton.terminalForeground = terminalForeground
@@ -250,6 +318,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         guard let hit = super.hitTest(point) else { return nil }
         if hit === finishButton || hit.isDescendant(of: finishButton)
             || hit === injectButton || hit.isDescendant(of: injectButton) {
+            return hit
+        }
+        // hover 态的 ✕（隐藏时 hitTest 天然不会命中它）
+        if !closeButton.isHidden,
+            hit === closeButton || hit.isDescendant(of: closeButton) {
             return hit
         }
         return self
@@ -347,5 +420,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     }
 
     @objc private func finishTapped() { onFinish?() }
+    @objc private func closeTapped() { onCloseRequested?() }
     @objc private func injectTapped() { onInject?() }
 }

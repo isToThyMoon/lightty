@@ -54,6 +54,47 @@ enum ShellMenuPopover {
     }
 }
 
+/// 极简文字提示气泡：锚定触发控件原地反馈（如置灰按钮的点击说明），
+/// transient，点任意处消失。
+enum ShellHintPopover {
+    private static var popover: NSPopover?
+
+    static func present(from anchor: NSView, text: String, onClose: (() -> Void)? = nil) {
+        popover?.close()
+        // 单行 label：固有宽度撑起气泡（wrapping label 无首选宽度时
+        // 会被解算成单字符宽的细条）
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = ShellStyle.secondaryText
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let controller = NSViewController()
+        let root = NSView()
+        root.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
+            label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -8),
+        ])
+        controller.view = root
+        controller.preferredContentSize = root.fittingSize
+        let pop = NSPopover()
+        pop.contentViewController = controller
+        pop.behavior = .transient
+        if let onClose {
+            var observer: NSObjectProtocol?
+            observer = NotificationCenter.default.addObserver(
+                forName: NSPopover.didCloseNotification, object: pop, queue: .main
+            ) { _ in
+                onClose()
+                if let observer { NotificationCenter.default.removeObserver(observer) }
+            }
+        }
+        popover = pop
+        pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+    }
+}
+
 private final class MenuController: NSViewController {
     var onDone: (((() -> Void)?) -> Void)?
 

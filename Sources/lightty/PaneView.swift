@@ -40,6 +40,7 @@ final class PaneView: NSView {
         header.title = L("Terminal %d", Self.paneCounter)
         header.dot = .unnamed
         header.injectEnabled = false
+        header.finishLooksEnabled = false
         header.dragIdentifier = dragIdentifier
         header.onSelect = { [weak self] in self?.focusTerminal() }
         header.dragPreviewProvider = { [weak self] in self?.makeDragPreview() }
@@ -76,6 +77,8 @@ final class PaneView: NSView {
         header.onFinish = { [weak self] in self?.finish() }
         header.onInject = { [weak self] in self?.inject() }
         header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
+        // ✕ 走内核关闭流程（与 cmd+W 同路），最终回到 close_surface_cb
+        header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
             self.onClose?(self)
@@ -90,6 +93,7 @@ final class PaneView: NSView {
         header.setTaskName(name)
         header.dot = .active
         header.injectEnabled = true
+        header.finishLooksEnabled = true
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -101,6 +105,7 @@ final class PaneView: NSView {
         header.setTaskName(nil)
         header.dot = .unnamed
         header.injectEnabled = false
+        header.finishLooksEnabled = false
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -299,25 +304,6 @@ final class PaneView: NSView {
     }
 
 
-    /// 新建任务并绑定（收工的未绑定路径也走这里）。
-    private func presentCreateTaskEditor() {
-        NameEditorPopover.present(
-            from: header, title: L("New task"), confirmLabel: L("Create")
-        ) { [weak self] name in
-            guard let self else { return }
-            do {
-                let created = try AppState.shared.taskStore.create(
-                    name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
-                    tool: nil)
-                self.bind(to: created.fileURL, name: name)
-                self.focusTerminal()
-            } catch {
-                NSSound.beep()
-                NSLog("task create failed: \(error)")
-            }
-        }
-    }
 
     // MARK: - pane 名（会话态标签，不落盘）
 
@@ -331,8 +317,13 @@ final class PaneView: NSView {
     private func finish() {
         switch binding {
         case .unnamed:
-            // 未绑定任务：先建任务（收工产物需要落点）
-            presentCreateTaskEditor()
+            // 未绑定：原地文字提示（就近反馈——跳去打开别处的选择器
+            // 会造成 A 点击 B 响应的空间跳跃）。
+            ShellHintPopover.present(
+                from: header.finishAnchor,
+                text: L("Bind a task first — click the pane name capsule to pick one"),
+                onClose: { [weak self] in self?.header.endCapsuleAttention() })
+            header.beginCapsuleAttention()
         case .bound(let url):
             terminal.sendText(HandoffPrompt.finish(taskFilePath: url.path) + "\r")
         }

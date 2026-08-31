@@ -167,6 +167,13 @@ final class TerminalSurfaceView: NSView {
         onCloseRequest?()
     }
 
+    /// 用户主动关闭（header ✕）：交给内核的 close 流程（与 cmd+W 的
+    /// close_surface keybind 同路），最终经 close_surface_cb 回到壳层。
+    func requestCloseFromUser() {
+        guard let surface else { return }
+        ghostty_surface_request_close(surface)
+    }
+
     /// 壳层明确请求向 PTY 注入文本的边界（「收工」/「注入」）。
     /// 这不参与键盘事件或快捷键配置。
     func sendText(_ text: String) {
