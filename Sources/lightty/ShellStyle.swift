@@ -11,6 +11,18 @@ enum ShellStyle {
 
     static let sidebarWidth: CGFloat = 300
     static let sidebarHorizontalInset: CGFloat = 10
+    /// 统一行高系统：所有 chrome 行（tab 栏、pane header、侧栏标题带、搜索框）
+    /// 共用 28pt——与 macOS 标题栏同高，这是系统给定的模数基准。行间距统一 12。
+    static let chromeRowHeight: CGFloat = 28
+    static let chromeGap: CGFloat = 12
+
+    // 搜索浮层（⇧⇧）：尺寸/定位相对窗口，Notion 式左右居中、偏上
+    static let paletteWidthRatio: CGFloat = 0.62
+    static let paletteMaxWidth: CGFloat = 760
+    static let paletteHeightRatio: CGFloat = 0.56
+    static let paletteMaxHeight: CGFloat = 600
+    static let paletteTopRatio: CGFloat = 0.10
+    static let paletteRowGap: CGFloat = 6
     static let rowCornerRadius: CGFloat = 9
     static let controlCornerRadius: CGFloat = 8
     static let animationDuration: TimeInterval = 0.22
@@ -22,6 +34,8 @@ enum ShellStyle {
     /// 侧栏底色；抽屉覆盖 terminal，必须完全不透明。
     static let sidebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
     static let controlFill = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x323037)
+    /// 抬升面：浮在 chrome 之上的卡片（搜索浮层预览等），浅色纯白、深色亮一档
+    static let raisedSurface = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x2E2C33)
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
     static let pressedFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x44414A)
@@ -144,6 +158,9 @@ final class ShellTextButton: NSButton {
     /// terminal palette 的前景色来源；core 报告 COLOR_CHANGE（主题切换/OSC）后
     /// 由 pane header 注入当前值，未设置时回退启动期全局 config。
     var terminalForeground: NSColor? { didSet { updateAppearance() } }
+    /// 软置灰：呈禁用观感但保留点击（用于"点击给出引导提示"的按钮）。
+    /// 与 isEnabled 不同——后者会吞掉点击。
+    var looksDisabled = false { didSet { updateAppearance() } }
 
     override var isEnabled: Bool { didSet { updateAppearance() } }
 
@@ -211,9 +228,11 @@ final class ShellTextButton: NSButton {
             enabledText = foreground.withAlphaComponent(0.72)
             disabledText = foreground.withAlphaComponent(0.32)
         }
-        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
+        let dimmed = !isEnabled || looksDisabled
+        layer?.backgroundColor = (dimmed ? .clear : fill)
+            .shellResolvedCGColor(for: effectiveAppearance)
         alphaValue = isEnabled ? 1 : 0.62
-        let color = isEnabled ? enabledText : disabledText
+        let color = dimmed ? disabledText : enabledText
         attributedTitle = NSAttributedString(
             string: label,
             attributes: [.font: font ?? NSFont.systemFont(ofSize: 11), .foregroundColor: color])

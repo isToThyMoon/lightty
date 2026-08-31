@@ -6,9 +6,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Info.plist，swift build 的裸可执行没有它，此时保持 nil、菜单项不出现。
     private var updaterController: SPUStandardUpdaterController?
 
+    private var shiftTapMonitor: Any?
+    private var lastShiftTap: TimeInterval = 0
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
+        installShiftTapMonitor()
         if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
             updaterController = SPUStandardUpdaterController(
                 startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
@@ -16,6 +20,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         AppState.shared.newWindow()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// ⇧⇧ 双击呼出全文搜索浮层。选修饰键双击是因为终端键位（cmd+K/P 等）
+    /// 全部直达 surface 归 core keybind 管，壳层不抢；裸 shift 敲击不产生
+    /// 任何终端输入，安全。监听不吞事件（原样放行）。
+    private func installShiftTapMonitor() {
+        shiftTapMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.flagsChanged, .keyDown]
+        ) { [weak self] event in
+            self?.handleShiftTap(event)
+            return event
+        }
+    }
+
+    private func handleShiftTap(_ event: NSEvent) {
+        if event.type == .keyDown {
+            lastShiftTap = 0
+            return
+        }
+        guard event.keyCode == 56 || event.keyCode == 60 else {  // 左/右 shift
+            lastShiftTap = 0
+            return
+        }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .shift {  // 纯 shift 按下
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastShiftTap < 0.35 {
+                lastShiftTap = 0
+                AppState.shared.keyWindowController?.toggleSearchPalette()
+            } else {
+                lastShiftTap = now
+            }
+        } else if !flags.isEmpty {  // shift 与其他修饰键组合，不算
+            lastShiftTap = 0
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

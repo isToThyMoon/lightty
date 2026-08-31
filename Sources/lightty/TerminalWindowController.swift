@@ -1014,7 +1014,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 targets.append((rootLeadingConstraint, TaskSidebar.width))
             }
             if !targets.isEmpty { animateSidebarLayout(targets) }
-            sidebarView?.focusSearch()
         case .pinned:
             requestSidebarClose()
         }
@@ -1139,7 +1138,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self else { return }
             self.sidebarIsAnimating = false
             // hover preview 不偷走 terminal 键盘焦点；只有点击钉住才进搜索框。
-            if self.sidebarPresentation == .pinned { sidebar?.focusSearch() }
         }
         installTitlebarAccessory(on: window)
     }
@@ -1202,6 +1200,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         animateSidebarLayout([(rootLeadingConstraint, inset)])
+    }
+
+    // MARK: - 全文搜索浮层（⇧⇧）
+
+    private var searchPalette: SearchPaletteView?
+
+    func toggleSearchPalette() {
+        if searchPalette != nil { dismissSearchPalette() } else { showSearchPalette() }
+    }
+
+    private func showSearchPalette() {
+        // 挂 themeFrame：浮层覆盖整窗（侧栏在 themeFrame 层级，挂 contentView
+        // 会被它盖住且定位不含标题栏区）
+        guard let themeFrame = window?.contentView?.superview else { return }
+        let palette = SearchPaletteView(controller: self)
+        palette.onDismiss = { [weak self] in self?.dismissSearchPalette() }
+        // 铺满用 autoresizing 而非约束：对 themeFrame 的约束会反向驱动窗口尺寸
+        palette.frame = themeFrame.bounds
+        palette.autoresizingMask = [.width, .height]
+        themeFrame.addSubview(palette)
+        searchPalette = palette
+        palette.focusSearch()
+    }
+
+    private func dismissSearchPalette() {
+        searchPalette?.removeFromSuperview()
+        searchPalette = nil
+        activePane?.focusTerminal()
     }
 
     func windowWillClose(_ notification: Notification) {

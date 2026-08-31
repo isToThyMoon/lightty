@@ -31,6 +31,7 @@
 "Workspace %d" = "工作区 %d";
 "Rename workspace" = "重命名工作区";
 "Close workspace" = "关闭工作区";
+"Close pane" = "关闭 pane";
 "New workspace" = "新工作区";
 "New window" = "新窗口";
 "Split right" = "向右分屏";
@@ -39,7 +40,10 @@
 
 /* 侧栏 */
 "Search tasks" = "搜索任务";
+"Search task names and handoff content" = "搜索任务名与 handoff 正文";
+"↩ Jump / open in current workspace · esc Close" = "↩ 跳转 / 在当前工作区打开 · esc 关闭";
 "No matching tasks" = "没有匹配的任务";
+"No tasks yet" = "还没有任务";
 "%d active · %d total" = "%d 个活跃 · 共 %d 个";
 "%d tasks" = "%d 个任务";
 "Active" = "活跃";
@@ -74,6 +78,7 @@
 "Name this terminal" = "命名这个终端";
 "Search, or type a new task name and press Return" = "搜索，或输入新任务名后回车";
 "Bind task" = "绑定任务";
+"Bind a task first — click the pane name capsule to pick one" = "先绑定任务——点击 pane 名胶囊选择";
 "New task “%@”" = "新建任务「%@」";
 "Return" = "回车";
 "Unbind" = "解除绑定";

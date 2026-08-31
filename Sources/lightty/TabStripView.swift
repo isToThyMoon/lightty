@@ -4,7 +4,7 @@ import AppKit
 /// tab 是 lightty 的窗口内概念（一个 pane 树容器），不是 macOS 原生 tab（那是
 /// 多个 NSWindow 结组，tab bar 横跨全窗宽，与"一窗一侧栏"语义冲突，已弃用）。
 final class TabStripView: NSView {
-    static let height: CGFloat = 34
+    static let height: CGFloat = ShellStyle.chromeRowHeight
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
@@ -29,7 +29,7 @@ final class TabStripView: NSView {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.heightAnchor.constraint(equalToConstant: 26),
+            stack.heightAnchor.constraint(equalToConstant: 22),
             stack.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -8),
         ])

@@ -31,6 +31,7 @@
 "Workspace %d" = "Workspace %d";
 "Rename workspace" = "Rename workspace";
 "Close workspace" = "Close workspace";
+"Close pane" = "Close pane";
 "New workspace" = "New workspace";
 "New window" = "New window";
 "Split right" = "Split right";
@@ -39,7 +40,10 @@
 
 /* 侧栏 */
 "Search tasks" = "Search tasks";
+"Search task names and handoff content" = "Search task names and handoff content";
+"↩ Jump / open in current workspace · esc Close" = "↩ Jump / open in current workspace · esc Close";
 "No matching tasks" = "No matching tasks";
+"No tasks yet" = "No tasks yet";
 "%d active · %d total" = "%d active · %d total";
 "%d tasks" = "%d tasks";
 "Active" = "Active";
@@ -74,6 +78,7 @@
 "Name this terminal" = "Name this terminal";
 "Search, or type a new task name and press Return" = "Search, or type a new task name and press Return";
 "Bind task" = "Bind task";
+"Bind a task first — click the pane name capsule to pick one" = "Bind a task first — click the pane name capsule to pick one";
 "New task “%@”" = "New task “%@”";
 "Return" = "Return";
 "Unbind" = "Unbind";

@@ -1,26 +1,12 @@
 import AppKit
 import LighttyCore
 
-/// 搜索图标只负责绘制，点击穿透给下方容器，保证整块搜索区域都能聚焦。
-private final class TaskSearchIconView: NSImageView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-private final class TaskSearchContainerView: NSView {
-    weak var searchField: NSSearchField?
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(searchField)
-    }
-}
-
 /// 标题栏入口控制的任务抽屉；不注册任何键盘快捷键。
 ///
 /// 视觉与交互借鉴 Codex 桌面端：低对比表面、圆角选中态、大点击区域、明确的
 /// 列表→详情层级。hover 是覆盖 terminal 的临时预览；click 钉住后切换为真正
 /// 占位的 docked 侧栏。钉住后点击 terminal 不收起，避免抢占 Ghostty 鼠标交互。
-final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
-                         NSTextViewDelegate, NSSearchFieldDelegate {
+final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static let width = ShellStyle.sidebarWidth
 
     private struct Entry {
@@ -33,13 +19,15 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 列表页
 
     private let listPage = NSView()
+    // 首行 = 节标签行：功能性小节标签（Finder「个人收藏」/ VS Code「EXPLORER」
+    // 的角色，非品牌）+ 右侧 搜索/建档 图标按钮。品牌归 Dock 图标和 About。
+    // 搜索走全文浮层（⇧⇧ 或点按钮），侧栏不再有常驻输入框。
     private let titleLabel = NSTextField(labelWithString: L("Tasks"))
-    private let countLabel = NSTextField(labelWithString: "")
-    private let searchContainer = TaskSearchContainerView()
-    private let searchIcon = TaskSearchIconView()
-    private let searchField = NSSearchField()
+    private let searchButton = ShellIconButton(
+        symbol: "magnifyingglass", accessibilityLabel: L("Search tasks"),
+        target: nil, action: nil)
     private let tableView = NSTableView()
-    private let emptyLabel = NSTextField(labelWithString: L("No matching tasks"))
+    private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
     private let newTaskButton = ShellIconButton(
         symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
     private var allEntries: [Entry] = []
@@ -110,10 +98,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         let appearance = effectiveAppearance
         layer?.backgroundColor =
             ShellStyle.sidebarBackground.shellResolvedCGColor(for: appearance)
-        searchContainer.layer?.backgroundColor =
-            ShellStyle.controlFill.shellResolvedCGColor(for: appearance)
-        searchContainer.layer?.borderColor =
-            ShellStyle.divider.shellResolvedCGColor(for: appearance)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -135,11 +119,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
-    /// 呼出时把焦点交给搜索框。
-    func focusSearch() {
-        window?.makeFirstResponder(searchField)
-    }
-
     override func cancelOperation(_ sender: Any?) {
         onRequestClose?()
     }
@@ -160,7 +139,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 if ($0.running != nil) != ($1.running != nil) { return $0.running != nil }
                 return $0.task.updated > $1.task.updated
             }
-        applyFilter(searchField.stringValue)
+        applyFilter("")
     }
 
     private func applyFilter(_ query: String) {
@@ -176,10 +155,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 .map { $0.0 }
         }
 
-        let runningCount = allEntries.filter { $0.running != nil }.count
-        countLabel.stringValue = runningCount > 0
-            ? L("%d active · %d total", runningCount, allEntries.count)
-            : L("%d tasks", allEntries.count)
         emptyLabel.isHidden = !filtered.isEmpty
         tableView.reloadData()
         if !filtered.isEmpty {
@@ -195,45 +170,14 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: - 列表页
 
     private func buildListPage() {
-        titleLabel.stringValue = "Lightty"
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        titleLabel.textColor = ShellStyle.primaryText
-
-        countLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        countLabel.textColor = ShellStyle.tertiaryText
-
         newTaskButton.target = self
         newTaskButton.action = #selector(newTask)
 
-        searchContainer.wantsLayer = true
-        searchContainer.layer?.backgroundColor = ShellStyle.controlFill.cgColor
-        searchContainer.layer?.cornerRadius = 9
-        searchContainer.layer?.borderColor = ShellStyle.divider.cgColor
-        searchContainer.layer?.borderWidth = 0.5
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        titleLabel.textColor = ShellStyle.tertiaryText
 
-        searchIcon.image = NSImage(
-            systemSymbolName: "magnifyingglass",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
-        searchIcon.contentTintColor = ShellStyle.tertiaryText
-        searchIcon.imageScaling = .scaleProportionallyDown
-
-        searchField.placeholderString = L("Search tasks")
-        searchField.controlSize = .regular
-        searchField.isBezeled = false
-        searchField.drawsBackground = false
-        searchField.focusRingType = .none
-        searchField.font = .systemFont(ofSize: 12)
-        searchField.textColor = ShellStyle.primaryText
-        searchField.delegate = self
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
-        // Borderless NSSearchFieldCell 在聚焦态会让原生 searchButtonRect 与
-        // searchTextRect 发生重叠。图标由相邻 NSImageView 绘制，cell 只管文字
-        // 与原生 cancel button，避免 placeholder 与放大镜共享起点。
-        (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
-        (searchField.cell as? NSSearchFieldCell)?.usesSingleLineMode = true
-        searchContainer.searchField = searchField
+        searchButton.target = self
+        searchButton.action = #selector(openSearchPalette)
 
         let column = NSTableColumn(identifier: .init("task"))
         tableView.addTableColumn(column)
@@ -260,51 +204,33 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
 
-        for v in [titleLabel, countLabel, newTaskButton, searchContainer, scroll, emptyLabel] {
+        for v in [titleLabel, searchButton, newTaskButton, scroll, emptyLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listPage.addSubview(v)
         }
-        for view in [searchIcon, searchField] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            searchContainer.addSubview(view)
-        }
 
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: listPage.topAnchor, constant: 20),
-            titleLabel.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 16),
+            // 首行 = 品牌行（行高模数 chromeRowHeight = 28，顶距 8）：
+            // Lightty 文字落内容左轴 20，右侧 搜索 + 建档 图标按钮；
+            // 横向统一 10 的边缘线。
+            titleLabel.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 20),
+            titleLabel.centerYAnchor.constraint(equalTo: newTaskButton.centerYAnchor),
 
-            countLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            countLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-
-            newTaskButton.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -12),
-            newTaskButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            newTaskButton.topAnchor.constraint(equalTo: listPage.topAnchor, constant: 8),
+            newTaskButton.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -10),
             newTaskButton.widthAnchor.constraint(equalToConstant: 28),
             newTaskButton.heightAnchor.constraint(equalToConstant: 28),
 
-            searchContainer.topAnchor.constraint(equalTo: countLabel.bottomAnchor, constant: 16),
-            searchContainer.leadingAnchor.constraint(
-                equalTo: listPage.leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
-            searchContainer.trailingAnchor.constraint(
-                equalTo: listPage.trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
-            searchContainer.heightAnchor.constraint(equalToConstant: 34),
+            searchButton.trailingAnchor.constraint(equalTo: newTaskButton.leadingAnchor, constant: -4),
+            // +1 光学微调：放大镜镜柄在右下，字形视觉重心偏上，几何同心时显高
+            searchButton.centerYAnchor.constraint(
+                equalTo: newTaskButton.centerYAnchor, constant: 1),
+            searchButton.widthAnchor.constraint(equalToConstant: 28),
+            searchButton.heightAnchor.constraint(equalToConstant: 28),
 
-            searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
-            // 文字已真居中；-1 是对齐文字视觉中心的光学微调（实测定值）。
-            searchIcon.centerYAnchor.constraint(
-                equalTo: searchContainer.centerYAnchor, constant: -1),
-            searchIcon.widthAnchor.constraint(equalToConstant: 13),
-            searchIcon.heightAnchor.constraint(equalToConstant: 13),
-
-            searchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 6),
-            searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -7),
-            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
-            // 高度贴合 12pt 单行文字：NSTextFieldCell 在超高 frame 里顶对齐，
-            // 多余高度全垫在下方，centerY 就假居中了（22 → 18 修文字偏上）。
-            searchField.heightAnchor.constraint(equalToConstant: 18),
-
-            scroll.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 12),
-            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 8),
-            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -8),
+            scroll.topAnchor.constraint(equalTo: newTaskButton.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 10),
+            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -10),
             scroll.bottomAnchor.constraint(equalTo: listPage.bottomAnchor, constant: -8),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
@@ -329,7 +255,9 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             }
         }
     }
-    @objc private func searchChanged() { applyFilter(searchField.stringValue) }
+    @objc private func openSearchPalette() {
+        (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
+    }
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
@@ -371,7 +299,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             cell.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 12),
+            // 行内衬 10：圆点落在内容左轴 20（滚动区缘 10 + 10）
+            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
             dot.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
@@ -533,28 +462,5 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate,
             from: anchor, in: controller)
     }
 
-    // 搜索框：回车 = 跳转/恢复，上下键移动选择，Esc 收起抽屉
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
-            jumpOrRestore()
-            return true
-        case #selector(NSResponder.moveDown(_:)):
-            guard !filtered.isEmpty else { return true }
-            tableView.selectRowIndexes(
-                [min(max(tableView.selectedRow, -1) + 1, filtered.count - 1)],
-                byExtendingSelection: false)
-            return true
-        case #selector(NSResponder.moveUp(_:)):
-            guard !filtered.isEmpty else { return true }
-            tableView.selectRowIndexes([max(tableView.selectedRow - 1, 0)], byExtendingSelection: false)
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            onRequestClose?()
-            return true
-        default:
-            return false
-        }
-    }
 
 }
