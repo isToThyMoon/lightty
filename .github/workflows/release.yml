@@ -14,6 +14,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# 默认 GITHUB_TOKEN 是只读的；建 Release / 传资产需要 contents 写权限
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: macos-15
