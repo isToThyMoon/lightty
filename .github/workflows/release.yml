@@ -105,11 +105,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## 下载
+          ## 下载 / Download
 
           | 平台 | 下载 |
           |---|---|
           | macOS 13+（Apple Silicon / Intel 通用） | [lightty-$VERSION.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg) |
+
+          ## 安装 / Install
+
+          应用已签名但未公证。首次打开若提示「无法验证开发者」：
+          **系统设置 → 隐私与安全性 → 拉到底部 → 「仍要打开」**；
+          或在终端执行 \`xattr -cr /Applications/lightty.app\` 后正常打开。
+
+          The app is signed but not notarized. If Gatekeeper blocks the first
+          launch: **System Settings → Privacy & Security → scroll down →
+          "Open Anyway"**, or run \`xattr -cr /Applications/lightty.app\`.
           EOF
           gh release create "$GITHUB_REF_NAME" \
             --title "v$VERSION" \
