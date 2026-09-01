@@ -310,6 +310,8 @@ final class PaneView: NSView {
     private func rename(to name: String) {
         header.title = name
         onMetadataChange?(self)
+        // 工作区列的 pane 行显示 pane 名，改名后需要活地图刷新
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
     // MARK: - 收工 / 注入（指令在点击时实时嵌入当前任务文件路径）

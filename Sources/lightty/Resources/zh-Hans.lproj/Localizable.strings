@@ -30,6 +30,7 @@
 "Workspace" = "工作区";
 "Workspace %d" = "工作区 %d";
 "Rename workspace" = "重命名工作区";
+"Workspaces" = "工作区";
 "Close workspace" = "关闭工作区";
 "Close pane" = "关闭 pane";
 "New workspace" = "新工作区";

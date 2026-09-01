@@ -21,12 +21,6 @@ final class TerminalTab {
 /// core new_tab 在当前窗口追加 tab；new_split 改当前 tab 的 pane tree，
 /// 并继承当前任务；方向一致插相邻位、方向不同原位包反向 split。
 final class TerminalWindowController: NSWindowController, NSWindowDelegate {
-    private enum SidebarPresentation {
-        case hidden
-        case preview
-        case pinned
-    }
-
     private let rootContainer = NSView()
     /// 主体区（tab 条 + tab 内容），随侧栏钉住向右推移。
     private let mainArea = NSView()
@@ -41,15 +35,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     var tabCount: Int { tabs.count }
     /// pinned 侧栏是 docked layout：主体区从侧栏右缘开始；preview 保持 overlay。
     private var rootLeadingConstraint: NSLayoutConstraint?
-    private var sidebarView: TaskSidebar?
     private weak var sidebarButton: ShellIconButton?
-    private weak var sidebarDismissView: SidebarDismissView?
-    private var sidebarLeadingConstraint: NSLayoutConstraint?
-    private var sidebarIsAnimating = false
-    private var sidebarPresentation: SidebarPresentation = .hidden
-    private var sidebarButtonHovered = false
-    private var sidebarHovered = false
-    private var sidebarHoverDismissWorkItem: DispatchWorkItem?
+    private var workspaceSidebar: WorkspaceSidebarView?
+    private var workspaceSidebarLeadingConstraint: NSLayoutConstraint?
+    private var taskPanel: TaskSidebar?
+    private var taskPanelLeadingConstraint: NSLayoutConstraint?
+    private var edgeExpandButton: EdgeToggleControl?
+    private var edgeExpandStrip: EdgeRevealStrip?
     private var sidebarLayoutAnimationTimer: Timer?
 
     /// 逐帧驱动约束 + 逐帧 layout：terminal surface 每帧按当前宽度真实 resize/重排
@@ -157,6 +149,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let window else { return }
             self.installTitlebarAccessory(on: window)
             self.updateWindowTitle(for: self.activePane)
+            self.openWorkspaceSidebar(animated: false)
         }
     }
 
@@ -211,9 +204,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let button = ShellIconButton(
             symbol: "sidebar.left", accessibilityLabel: L("Task Sidebar"), target: self,
             action: #selector(toggleSidebarFromTitlebar))
-        button.onHoverChange = { [weak self] hovered in
-            self?.sidebarButtonHoverChanged(hovered)
-        }
 
         // 右侧按钮组（图标区分语义）：向右分屏 | 向下分屏 | 新 tab
         let newTabButton = ShellIconButton(
@@ -299,7 +289,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateSidebarButtonState() {
-        sidebarButton?.isActive = sidebarPresentation == .pinned
+        sidebarButton?.isActive = taskPanel != nil
     }
 
     /// 「新 Tab」入口固定在标题栏（2026-08-29 定稿）：入口搬家增加用户心智
@@ -357,6 +347,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         mainArea.translatesAutoresizingMaskIntoConstraints = false
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         contentHost.translatesAutoresizingMaskIntoConstraints = false
+        // 侧栏区 chrome 底毯：主区让位后左侧露出的窗口透明底（桌面壁纸）
+        // 由它兜住——task 悬浮卡片要浮在 chrome 面上，不是浮在"洞"上。
+        // trailing 锚在主区左缘，随让位动画自动伸缩，无需参与动画编排。
+        let underlay = ShellBackdropView(fill: ShellStyle.sidebarBackground)
+        underlay.translatesAutoresizingMaskIntoConstraints = false
+        rootContainer.addSubview(underlay)
         rootContainer.addSubview(mainArea)
         mainArea.addSubview(tabStrip)
         mainArea.addSubview(contentHost)
@@ -367,6 +363,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let stripHeight = tabStrip.heightAnchor.constraint(equalToConstant: 0)
         tabStripHeightConstraint = stripHeight
         NSLayoutConstraint.activate([
+            underlay.leadingAnchor.constraint(equalTo: rootContainer.leadingAnchor),
+            underlay.topAnchor.constraint(equalTo: rootContainer.topAnchor),
+            underlay.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
+            underlay.trailingAnchor.constraint(equalTo: mainArea.leadingAnchor),
+
             leading,
             mainArea.topAnchor.constraint(equalTo: rootContainer.topAnchor),
             mainArea.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
@@ -514,8 +515,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tab(hosting: pane)?.title
     }
 
+    /// 工作区列（双栏侧栏左栏）的数据快照：全部工作区 + 各自 pane 叶子序。
+    func workspaceOverview() -> [(index: Int, title: String, isActive: Bool, panes: [PaneView])] {
+        tabs.enumerated().map { index, tab in
+            (index, tab.title, index == activeTabIndex, panes(in: tab))
+        }
+    }
+
     private func refreshTabStrip() {
-        let visible = tabs.count > 1
+        // 横向 tab 栏已停用（工作区导航归侧栏工作区列）；代码保留待彻底拆除。
+        let visible = false && tabs.count > 1
         tabStripHeightConstraint?.constant = visible ? TabStripView.height : 0
         tabStrip.isHidden = !visible
         if visible {
@@ -523,6 +532,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         updateNewTabButtonVisibility()
         updateWorkspaceLabel()
+        workspaceSidebar?.reload()
     }
 
     /// 标题栏工作区名标签：单工作区（tab 栏隐藏）时显示当前名字，否则隐藏。
@@ -670,6 +680,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         install(pane: pane)
         insert(pane, nextTo: active, direction: direction)
         pane.focusTerminal()
+        refreshTabStrip()
     }
 
     /// 恢复流程「当前 tab 新 pane」：把外部构造好的 pane（已绑定任务）
@@ -685,6 +696,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         lastFocusedPane = pane
         pane.focusTerminal()
         updateWindowTitle(for: pane)
+        refreshTabStrip()
     }
 
     /// 对齐 Ghostty `splitDidDrop`：先从原树移除 source，再按目标四边插入；
@@ -1024,223 +1036,212 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         best?.pane.focusTerminal()
     }
 
-    // MARK: - 任务侧边栏：hover 预览 / click 钉住
-    // 与独立浅色标题栏拼成同一套应用 chrome（红绿灯/按钮浮于其上始终可点）。
-    // hover 是临时 overlay，不改变 terminal；click 钉住后变成 docked layout，
-    // terminal 从侧栏右缘开始并真实缩窄，空白点击不收起。
-    // cmd+K 保留给 Ghostty clear_screen，不再属于侧栏。
+    // MARK: - 侧栏系统：任务浮空卡片 + 工作区侧栏（均为占位布局）
+    // 概念模型：工作区↔pane 是严格层级（docked 侧栏承载其两级树）；
+    // task↔pane 是绑定关系——task 卡片开在窗口最左缘、四周留边距、
+    // 圆角投影（Ulysses 式"布局占位、视觉悬浮"），把工作区栏与终端整体推移。
+    //
+    // 标题栏侧栏按钮状态机：
+    //   task 开           → 关 task
+    //   task 关、工作区开  → 开 task
+    //   两者皆关          → 全开
+    // 工作区侧栏另有专属边缘开关：右边线中点透明关闭钮（边线可左拖关闭）；
+    // 两者皆关时窗口左边线中点透明展开钮（只开工作区）。
 
     func toggleSidebar() {
-        guard let window else { return }
-        switch sidebarPresentation {
-        case .hidden:
-            sidebarPresentation = .pinned
-            showSidebar(in: window, withOutsideDismiss: false)
-        case .preview:
-            sidebarPresentation = .pinned
-            cancelSidebarHoverDismiss()
-            sidebarDismissView?.removeFromSuperview()
-            sidebarDismissView = nil
-            sidebarIsAnimating = false
-            updateSidebarButtonState()
-            // hover 的滑入动画可能仍在途中；这里的新动画会顶掉它的 timer，
-            // 所以 sidebar leading 必须一并作为目标推到 0，否则冻结在中途值（缝隙）。
-            var targets: [(NSLayoutConstraint, CGFloat)] = []
-            if let sidebarLeadingConstraint, sidebarLeadingConstraint.constant != 0 {
-                targets.append((sidebarLeadingConstraint, 0))
-            }
-            if let rootLeadingConstraint, rootLeadingConstraint.constant != TaskSidebar.width {
-                targets.append((rootLeadingConstraint, TaskSidebar.width))
-            }
-            if !targets.isEmpty { animateSidebarLayout(targets) }
-        case .pinned:
-            requestSidebarClose()
-        }
-    }
-
-    private func sidebarButtonHoverChanged(_ hovered: Bool) {
-        sidebarButtonHovered = hovered
-        if hovered {
-            cancelSidebarHoverDismiss()
-            guard sidebarPresentation == .hidden, let window else { return }
-            sidebarPresentation = .preview
-            showSidebar(in: window, withOutsideDismiss: true)
+        if taskPanel != nil {
+            closeTaskPanel()
+        } else if workspaceSidebar != nil {
+            openTaskPanel()
         } else {
-            scheduleSidebarHoverDismissIfNeeded()
+            openWorkspaceSidebar(animated: false, deferLayout: true)
+            openTaskPanel()
         }
     }
 
-    private func sidebarHoverChanged(_ hovered: Bool) {
-        sidebarHovered = hovered
-        if hovered {
-            cancelSidebarHoverDismiss()
-        } else {
-            scheduleSidebarHoverDismissIfNeeded()
-        }
+    /// task 卡片占位宽（卡片 + 左右边距）
+    private var taskPanelReserve: CGFloat {
+        ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2
     }
 
-    private func scheduleSidebarHoverDismissIfNeeded() {
-        cancelSidebarHoverDismiss()
-        guard sidebarPresentation == .preview,
-              !sidebarButtonHovered, !sidebarHovered else { return }
-        let work = DispatchWorkItem { [weak self] in self?.dismissSidebarPreviewIfNeeded() }
-        sidebarHoverDismissWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
+    /// 工作区侧栏的落位 x：task 卡片开着时被推到其右侧
+    private var workspaceSidebarOpenX: CGFloat {
+        taskPanel != nil ? taskPanelReserve : 0
     }
 
-    private func cancelSidebarHoverDismiss() {
-        sidebarHoverDismissWorkItem?.cancel()
-        sidebarHoverDismissWorkItem = nil
+    /// 终端主区左缘的总让位
+    private var mainAreaInset: CGFloat {
+        (taskPanel != nil ? taskPanelReserve : 0)
+            + (workspaceSidebar != nil ? ShellStyle.workspaceColumnWidth : 0)
     }
 
-    private func dismissSidebarPreviewIfNeeded() {
-        guard sidebarPresentation == .preview,
-              !sidebarButtonHovered, !sidebarHovered else { return }
-        if sidebarIsAnimating {
-            scheduleSidebarHoverDismissIfNeeded()
-            return
-        }
-        requestSidebarClose()
-    }
+    // —— 工作区侧栏（docked）——
 
-    private func showSidebar(in window: NSWindow, withOutsideDismiss: Bool) {
-        guard !sidebarIsAnimating, sidebarView == nil,
-              let contentView = window.contentView else {
-            // 被拒绝（如关闭动画进行中）时回滚语义状态，避免 presentation
-            // 与实际视图失同步导致下一次点击被吞。
-            if sidebarView == nil { sidebarPresentation = .hidden }
-            updateSidebarButtonState()
-            return
-        }
-        guard let themeFrame = contentView.superview else { return }
-        // 顶到窗口最上缘、垫在标题栏容器之下（三键与侧边栏按钮浮于其上可点）。
-        // 不靠私有类名匹配：从关闭按钮向上溯源到 themeFrame 的直接子视图才可靠。
+    func openWorkspaceSidebar(animated: Bool = true, deferLayout: Bool = false) {
+        guard workspaceSidebar == nil, let window,
+              let contentView = window.contentView,
+              let themeFrame = contentView.superview else { return }
         var titlebarContainer: NSView? = window.standardWindowButton(.closeButton)
         while let v = titlebarContainer, v.superview !== themeFrame {
             titlebarContainer = v.superview
         }
         let titlebarHeight = window.frame.height - contentView.frame.height
-
-        var dismissView: SidebarDismissView?
-        if withOutsideDismiss {
-            let view = SidebarDismissView()
-            view.onDismiss = { [weak self] in self?.dismissSidebarPreviewFromOutside() }
-            view.translatesAutoresizingMaskIntoConstraints = false
-            if let titlebarContainer {
-                themeFrame.addSubview(view, positioned: .below, relativeTo: titlebarContainer)
-            } else {
-                themeFrame.addSubview(view)
-            }
-            NSLayoutConstraint.activate([
-                view.topAnchor.constraint(equalTo: contentView.topAnchor),
-                view.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
-                view.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: themeFrame.trailingAnchor),
-            ])
-            dismissView = view
-        }
-
-        let sidebar = TaskSidebar(topInset: max(titlebarHeight, 28))
-        sidebar.onRequestClose = { [weak self] in self?.requestSidebarClose() }
-        sidebar.onHoverChange = { [weak self] hovered in self?.sidebarHoverChanged(hovered) }
+        let sidebar = WorkspaceSidebarView(topInset: max(titlebarHeight, 28))
+        sidebar.onCloseRequested = { [weak self] in self?.closeWorkspaceSidebar() }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
-        // 不做 alpha 编排：侧栏是实体 chrome 面板，半透明会漏出其后的
-        // 透明窗口底层（钉住模式下）；丝滑靠 vsync 驱动 + 曲线本身。
-        sidebar.alphaValue = 1
-        if let dismissView {
-            themeFrame.addSubview(sidebar, positioned: .above, relativeTo: dismissView)
+        // 必须垫在 task 卡片之下：侧栏滑入/滑出时从卡片下方穿行
+        if let taskPanel {
+            themeFrame.addSubview(sidebar, positioned: .below, relativeTo: taskPanel)
         } else if let titlebarContainer {
             themeFrame.addSubview(sidebar, positioned: .below, relativeTo: titlebarContainer)
         } else {
             themeFrame.addSubview(sidebar)
         }
+        let width = ShellStyle.workspaceColumnWidth
         let leading = sidebar.leadingAnchor.constraint(
-            equalTo: themeFrame.leadingAnchor, constant: -TaskSidebar.width)
+            equalTo: themeFrame.leadingAnchor, constant: -width)
         NSLayoutConstraint.activate([
             sidebar.topAnchor.constraint(equalTo: themeFrame.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
             leading,
-            sidebar.widthAnchor.constraint(equalToConstant: TaskSidebar.width),
+            sidebar.widthAnchor.constraint(equalToConstant: width),
         ])
-
-        sidebarView = sidebar
-        sidebarDismissView = dismissView
-        sidebarLeadingConstraint = leading
-        sidebarIsAnimating = true
-        themeFrame.layoutSubtreeIfNeeded()
-        updateSidebarButtonState()
-
-        var targets: [(NSLayoutConstraint, CGFloat)] = [(leading, 0)]
-        if let rootLeadingConstraint {
-            targets.append((rootLeadingConstraint,
-                            sidebarPresentation == .pinned ? TaskSidebar.width : 0))
-        }
-        animateSidebarLayout(targets) { [weak self] in
-            guard let self else { return }
-            self.sidebarIsAnimating = false
-            // hover preview 不偷走 terminal 键盘焦点；只有点击钉住才进搜索框。
+        // closeControl 提升到 themeFrame 直属：骑跨侧栏 bounds 右缘，
+        // 两半都在 themeFrame 的 hitTest 范围内，点击和光标区不再被裁断。
+        let cc = sidebar.closeControl
+        cc.translatesAutoresizingMaskIntoConstraints = false
+        themeFrame.addSubview(cc)
+        NSLayoutConstraint.activate([
+            cc.centerXAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            cc.centerYAnchor.constraint(equalTo: sidebar.centerYAnchor),
+        ])
+        workspaceSidebar = sidebar
+        workspaceSidebarLeadingConstraint = leading
+        updateEdgeExpandButton()
+        guard !deferLayout else { return }  // 调用方（全开）统一编排动画
+        if animated {
+            themeFrame.layoutSubtreeIfNeeded()
+            var targets: [(NSLayoutConstraint, CGFloat)] = [(leading, workspaceSidebarOpenX)]
+            if let rootLeadingConstraint { targets.append((rootLeadingConstraint, mainAreaInset)) }
+            animateSidebarLayout(targets)
+        } else {
+            leading.constant = workspaceSidebarOpenX
+            rootLeadingConstraint?.constant = mainAreaInset
+            themeFrame.layoutSubtreeIfNeeded()
         }
         installTitlebarAccessory(on: window)
     }
 
-    private func dismissSidebarPreviewFromOutside() {
-        guard sidebarPresentation == .preview else { return }
-        requestSidebarClose()
-    }
-
-    private func requestSidebarClose() {
-        guard let window, let sidebar = sidebarView else {
-            sidebarPresentation = .hidden
-            setDockedTerminalInset(0, animated: false)
-            updateSidebarButtonState()
-            return
-        }
-        guard !sidebar.isDirty else { NSSound.beep(); return }
-        guard !sidebarIsAnimating else {
-            scheduleSidebarHoverDismissIfNeeded()
-            return
-        }
-        sidebarPresentation = .hidden
-        cancelSidebarHoverDismiss()
-        closeSidebar(sidebar, in: window)
-    }
-
-    private func closeSidebar(_ sidebar: TaskSidebar, in window: NSWindow) {
-        guard let themeFrame = window.contentView?.superview else { return }
-        sidebarIsAnimating = true
-        let dismissView = sidebarDismissView
-        sidebarView = nil // 先切语义状态，标题栏 context 同步向左归位
-        updateSidebarButtonState()
-
+    func closeWorkspaceSidebar() {
+        guard let sidebar = workspaceSidebar else { return }
+        workspaceSidebar = nil
         var targets: [(NSLayoutConstraint, CGFloat)] = []
-        if let sidebarLeadingConstraint {
-            targets.append((sidebarLeadingConstraint, -TaskSidebar.width))
+        if let workspaceSidebarLeadingConstraint {
+            targets.append((workspaceSidebarLeadingConstraint, -ShellStyle.workspaceColumnWidth))
         }
         if let rootLeadingConstraint {
-            targets.append((rootLeadingConstraint, 0))
+            targets.append((rootLeadingConstraint, mainAreaInset))
         }
-        _ = themeFrame
         animateSidebarLayout(targets) { [weak self] in
+            sidebar.closeControl.removeFromSuperview()
             sidebar.removeFromSuperview()
-            dismissView?.removeFromSuperview()
-            self?.sidebarLeadingConstraint = nil
-            self?.sidebarDismissView = nil
-            self?.sidebarIsAnimating = false
-            self?.sidebarHovered = false
+            self?.workspaceSidebarLeadingConstraint = nil
+            self?.updateEdgeExpandButton()
             self?.activePane?.focusTerminal()
-            self?.installTitlebarAccessory(on: window)
         }
     }
 
-    private func setDockedTerminalInset(_ inset: CGFloat, animated: Bool) {
-        guard let rootLeadingConstraint,
-              rootLeadingConstraint.constant != inset else { return }
-        guard animated else {
-            rootLeadingConstraint.constant = inset
-            rootContainer.layoutSubtreeIfNeeded()
-            return
+    // —— 任务浮空卡片（布局占位、视觉悬浮）——
+
+    private func openTaskPanel() {
+        guard taskPanel == nil, let window,
+              let contentView = window.contentView,
+              let themeFrame = contentView.superview else { return }
+        let panel = TaskSidebar()
+        panel.onRequestClose = { [weak self] in self?.closeTaskPanel() }
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        themeFrame.addSubview(panel)  // 顶层：工作区侧栏滑动时从其下穿行
+        let leading = panel.leadingAnchor.constraint(
+            equalTo: themeFrame.leadingAnchor, constant: -taskPanelReserve)
+        NSLayoutConstraint.activate([
+            panel.topAnchor.constraint(
+                equalTo: contentView.topAnchor, constant: ShellStyle.panelInset),
+            panel.bottomAnchor.constraint(
+                equalTo: themeFrame.bottomAnchor, constant: -ShellStyle.panelInset),
+            leading,
+            panel.widthAnchor.constraint(equalToConstant: ShellStyle.taskPanelWidth),
+        ])
+        taskPanel = panel
+        taskPanelLeadingConstraint = leading
+        updateEdgeExpandButton()
+        updateSidebarButtonState()
+        themeFrame.layoutSubtreeIfNeeded()
+        // 三块协同推移：卡片滑入 + 工作区栏右移让位 + 终端让位
+        var targets: [(NSLayoutConstraint, CGFloat)] = [(leading, ShellStyle.panelInset)]
+        if let workspaceSidebarLeadingConstraint {
+            targets.append((workspaceSidebarLeadingConstraint, workspaceSidebarOpenX))
         }
-        animateSidebarLayout([(rootLeadingConstraint, inset)])
+        if let rootLeadingConstraint {
+            targets.append((rootLeadingConstraint, mainAreaInset))
+        }
+        animateSidebarLayout(targets)
+    }
+
+    private func closeTaskPanel() {
+        guard let panel = taskPanel else { return }
+        taskPanel = nil
+        updateSidebarButtonState()
+        let leading = taskPanelLeadingConstraint
+        taskPanelLeadingConstraint = nil
+        var targets: [(NSLayoutConstraint, CGFloat)] = []
+        if let leading { targets.append((leading, -taskPanelReserve)) }
+        if let workspaceSidebarLeadingConstraint {
+            targets.append((workspaceSidebarLeadingConstraint, workspaceSidebarOpenX))
+        }
+        if let rootLeadingConstraint {
+            targets.append((rootLeadingConstraint, mainAreaInset))
+        }
+        animateSidebarLayout(targets) { [weak self] in
+            panel.removeFromSuperview()
+            self?.updateEdgeExpandButton()
+            self?.activePane?.focusTerminal()
+        }
+    }
+
+    // —— 两者皆关时的左缘展开钮 ——
+
+    /// 工作区侧栏关着时，其展开胶囊吸附在"它将要展开的边界"上：
+    /// task 卡片开 → 卡片区右缘；否则 → 窗口左缘。状态每变重建（吸附位随变）。
+    private func updateEdgeExpandButton() {
+        guard let themeFrame = window?.contentView?.superview else { return }
+        edgeExpandButton?.removeFromSuperview()
+        edgeExpandButton = nil
+        edgeExpandStrip?.removeFromSuperview()
+        edgeExpandStrip = nil
+        guard workspaceSidebar == nil else { return }
+
+        let offset: CGFloat = taskPanel != nil ? taskPanelReserve : 0
+        let button = EdgeToggleControl(pointing: .right)
+        button.onTap = { [weak self] in self?.openWorkspaceSidebar() }
+        // 默认隐形；鼠标靠近边界带才浮现
+        let strip = EdgeRevealStrip()
+        strip.onHoverChange = { [weak button] hovered in button?.reveal(hovered) }
+        for v in [strip, button] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            themeFrame.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            strip.leadingAnchor.constraint(
+                equalTo: themeFrame.leadingAnchor, constant: offset),
+            strip.topAnchor.constraint(equalTo: themeFrame.topAnchor),
+            strip.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
+            strip.widthAnchor.constraint(equalToConstant: 14),
+            button.leadingAnchor.constraint(
+                equalTo: themeFrame.leadingAnchor, constant: offset),
+            button.centerYAnchor.constraint(equalTo: themeFrame.centerYAnchor),
+        ])
+        edgeExpandButton = button
+        edgeExpandStrip = strip
     }
 
     // MARK: - 全文搜索浮层（⇧⇧）

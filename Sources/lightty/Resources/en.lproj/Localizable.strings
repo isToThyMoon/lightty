@@ -30,6 +30,7 @@
 "Workspace" = "Workspace";
 "Workspace %d" = "Workspace %d";
 "Rename workspace" = "Rename workspace";
+"Workspaces" = "Workspaces";
 "Close workspace" = "Close workspace";
 "Close pane" = "Close pane";
 "New workspace" = "New workspace";

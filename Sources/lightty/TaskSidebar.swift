@@ -1,13 +1,10 @@
 import AppKit
 import LighttyCore
 
-/// 标题栏入口控制的任务抽屉；不注册任何键盘快捷键。
-///
-/// 视觉与交互借鉴 Codex 桌面端：低对比表面、圆角选中态、大点击区域、明确的
-/// 列表→详情层级。hover 是覆盖 terminal 的临时预览；click 钉住后切换为真正
-/// 占位的 docked 侧栏。钉住后点击 terminal 不收起，避免抢占 Ghostty 鼠标交互。
+/// 任务浮层卡片（Ulysses 式悬浮面板）：标题栏侧栏按钮控制开合。
+/// 与工作区侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
+/// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
 final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
-    static let width = ShellStyle.sidebarWidth
 
     private struct Entry {
         let fileURL: URL
@@ -33,32 +30,21 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
-    private var hoverTrackingArea: NSTrackingArea?
-
-    /// 详情页已移除（handoff 编辑交给系统编辑器），侧栏不再有需要钉住的编辑态。
-    var isDirty: Bool { false }
 
     var onRequestClose: (() -> Void)?
-    var onHoverChange: ((Bool) -> Void)?
 
-    /// 内容避开顶部标题栏区域的高度（抽屉背景本体延伸到窗口最顶端）
-    private let topInset: CGFloat
-
-    init(topInset: CGFloat) {
-        self.topInset = topInset
+    init() {
         super.init(frame: .zero)
 
         clipsToBounds = false
         wantsLayer = true
         // 不 pin Aqua：壳层 palette 是明暗动态色，随系统外观切换。
 
-        // 不画右缘边线：侧栏与标题栏同色拼成一体 chrome，terminal 自身底色
-        // 已提供足够的视觉分界（Notion 式无边框）。
         buildListPage()
         listPage.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listPage)
         NSLayoutConstraint.activate([
-            listPage.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
+            listPage.topAnchor.constraint(equalTo: topAnchor),
             listPage.bottomAnchor.constraint(equalTo: bottomAnchor),
             listPage.leadingAnchor.constraint(equalTo: leadingAnchor),
             listPage.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -97,7 +83,9 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func applyAppearanceColors() {
         let appearance = effectiveAppearance
         layer?.backgroundColor =
-            ShellStyle.sidebarBackground.shellResolvedCGColor(for: appearance)
+            ShellStyle.raisedSurface.shellResolvedCGColor(for: appearance)
+        layer?.borderColor =
+            ShellStyle.divider.shellResolvedCGColor(for: appearance)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -105,19 +93,20 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         applyAppearanceColors()
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self)
-        addTrackingArea(area)
-        hoverTrackingArea = area
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, let layer else { return }
+        // 悬浮卡片质感（layer 配置延迟到挂窗后：backing layer 重建会吃掉
+        // init 期配置；投影用 NSView.shadow，AppKit 维护不丢）
+        layer.cornerRadius = 12
+        layer.borderWidth = 1
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
+        shadow.shadowBlurRadius = 32
+        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        self.shadow = shadow
+        applyAppearanceColors()
     }
-
-    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
-    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
     override func cancelOperation(_ sender: Any?) {
         onRequestClose?()

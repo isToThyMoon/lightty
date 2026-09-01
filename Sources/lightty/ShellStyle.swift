@@ -9,7 +9,10 @@ import AppKit
 enum ShellStyle {
     // MARK: Geometry
 
-    static let sidebarWidth: CGFloat = 300
+    /// 双面板侧栏体系：工作区侧栏（docked）+ 任务浮层卡片（overlay）
+    static let workspaceColumnWidth: CGFloat = 200
+    static let taskPanelWidth: CGFloat = 270
+    static let panelInset: CGFloat = 10
     static let sidebarHorizontalInset: CGFloat = 10
     /// 统一行高系统：所有 chrome 行（tab 栏、pane header、侧栏标题带、搜索框）
     /// 共用 28pt——与 macOS 标题栏同高，这是系统给定的模数基准。行间距统一 12。
@@ -315,13 +318,4 @@ final class ShellPassthroughView: NSView {
         let view = super.hitTest(point)
         return view === self ? nil : view
     }
-}
-
-/// hover 临时展开侧边栏时，右侧终端区域只负责“点击收起”。点击钉住后不安装此层，
-/// 终端保持可交互，空白点击也不会关闭侧栏。
-final class SidebarDismissView: NSView {
-    var onDismiss: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) { onDismiss?() }
-    override func rightMouseDown(with event: NSEvent) { onDismiss?() }
 }
