@@ -501,6 +501,7 @@ private final class PaneRowView: NSView {
         nameLabel.font = .systemFont(ofSize: 11.5)
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.toolTip = name
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
@@ -527,8 +528,7 @@ private final class PaneRowView: NSView {
         statusLabel.textColor = ShellStyle.secondaryText
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentHuggingPriority(.required, for: .horizontal)
-        statusLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(760), for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         for v in [dotView, closeButton, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -552,9 +552,11 @@ private final class PaneRowView: NSView {
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
+            // 状态固定在行尾且保持完整；pane 名吃掉中间弹性空间，过长时先截断。
+            // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
             statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
             statusLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+                equalTo: closeButton.leadingAnchor, constant: -4),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
             // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
@@ -626,6 +628,9 @@ private final class PaneRowView: NSView {
             statusLabel.toolTip = text
         } else {
             statusLabel.isHidden = true
+            // hidden 不会自动退出 Auto Layout；清空 intrinsic width，
+            // 空闲时把空间还给 pane 名。
+            statusLabel.stringValue = ""
             statusLabel.toolTip = nil
         }
     }

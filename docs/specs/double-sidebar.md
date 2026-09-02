@@ -86,8 +86,9 @@ disclosure chevron 折叠；折叠只影响导航显示，不改变工作区/pan
   「工作区」+ 分屏/新建三键沿用壳层图标按钮体系。
 - **pane 树**：工作区行下嵌套 pane 行（缩进一级），数据源 = 该工作区的
   pane 树叶子序；workspace UUID 作为折叠键，折叠状态仅保存在侧栏实例中。
-  pane 行第一行显示 pane 名 + 状态 badge，第二行从 pane 内容左轴顶左显示
-  任务名 + cwd；cwd 走
+  pane 行第一行显示 pane 名 + 行尾完整状态文字；pane 名占弹性空间并在过长时尾部
+  截断，状态文字为 hover 关闭按钮预留固定槽位、不随按钮出现而横跳。第二行从 pane
+  内容左轴顶左显示任务名 + cwd；cwd 走
   Ghostty PWD action（OSC 7/9/1337），从头截断并保留完整路径 tooltip。
   pane 行圆点/任务名复用 pane header 胶囊的既有派生，关闭走
   requestCloseFromUser 同一通路；工作区行的「N panes」副标题因树已可见而移除。
