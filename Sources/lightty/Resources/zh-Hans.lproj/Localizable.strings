@@ -71,7 +71,7 @@
 
 /* 灵动岛 */
 "Name this terminal" = "命名这个终端";
-"Search, or type a new task name and press Return" = "搜索，或输入新任务名后回车";
+"Search, or type a new task name and press Return" = "搜索或新建任务";
 "Bind task" = "绑定任务";
 "New task “%@”" = "新建任务「%@」";
 "Return" = "回车";

@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class PaneIdentityPanelTests: XCTestCase {
+    func testSearchPlaceholderFitsWithinIsland() throws {
+        _ = NSApplication.shared
+
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
+        panel.layoutSubtreeIfNeeded()
+
+        let searchField = try XCTUnwrap(
+            panel.descendants.compactMap { $0 as? NSTextField }.first {
+                $0.placeholderAttributedString?.string
+                    == L("Search, or type a new task name and press Return")
+            })
+        let placeholder = try XCTUnwrap(searchField.placeholderAttributedString)
+
+        XCTAssertLessThanOrEqual(
+            placeholder.size().width,
+            searchField.bounds.width,
+            "The default placeholder copy must fit instead of being clipped at the island edge")
+    }
+
     func testLongTaskListUsesAViewportInsideTheIsland() throws {
         _ = NSApplication.shared
 

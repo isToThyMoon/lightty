@@ -147,6 +147,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.focusRingType = .none
         searchField.delegate = self
         (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
+        (searchField.cell as? NSTextFieldCell)?.lineBreakMode = .byTruncatingTail
 
         taskScrollView.drawsBackground = false
         taskScrollView.borderType = .noBorder

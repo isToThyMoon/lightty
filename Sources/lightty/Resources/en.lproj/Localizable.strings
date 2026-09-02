@@ -71,7 +71,7 @@
 
 /* 灵动岛 */
 "Name this terminal" = "Name this terminal";
-"Search, or type a new task name and press Return" = "Search, or type a new task name and press Return";
+"Search, or type a new task name and press Return" = "Search or create a task";
 "Bind task" = "Bind task";
 "New task “%@”" = "New task “%@”";
 "Return" = "Return";
