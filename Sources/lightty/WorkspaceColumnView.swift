@@ -179,20 +179,23 @@ final class WorkspaceColumnView: NSView {
         collapsedWorkspaceIDs.formIntersection(overview.map(\.id))
         for entry in overview {
             let index = entry.index
+            let workspaceID = entry.id
+            let wasActive = entry.isActive
             let isCollapsed = collapsedWorkspaceIDs.contains(entry.id)
             let row = WorkspaceRowView(
                 title: entry.title,
                 isActive: entry.isActive,
                 isCollapsed: isCollapsed)
-            row.onSelect = { [weak self] in self?.controller?.selectTab(at: index) }
-            row.onToggleCollapse = { [weak self] in
+            row.onSelect = { [weak self] in
                 guard let self else { return }
-                if self.collapsedWorkspaceIDs.contains(entry.id) {
-                    self.collapsedWorkspaceIDs.remove(entry.id)
+                if wasActive {
+                    self.toggleWorkspaceCollapse(workspaceID)
                 } else {
-                    self.collapsedWorkspaceIDs.insert(entry.id)
+                    self.controller?.selectTab(at: index)
                 }
-                self.reload()
+            }
+            row.onToggleCollapse = { [weak self] in
+                self?.toggleWorkspaceCollapse(workspaceID)
             }
             row.onRename = { [weak self, weak row] in
                 guard let self, let anchor = row, let controller = self.controller else { return }
@@ -231,6 +234,15 @@ final class WorkspaceColumnView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
+    private func toggleWorkspaceCollapse(_ workspaceID: UUID) {
+        if collapsedWorkspaceIDs.contains(workspaceID) {
+            collapsedWorkspaceIDs.remove(workspaceID)
+        } else {
+            collapsedWorkspaceIDs.insert(workspaceID)
+        }
+        reload()
+    }
+
     private func makePaneRow(
         for pane: PaneView,
         indented: Bool,
@@ -267,7 +279,8 @@ private final class ColumnFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// 工作区行（容器级）：当前高亮、单击切换、双击改名、hover ⋯ 菜单。
+/// 工作区行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
+/// disclosure 始终直接切换折叠。双击改名，hover 显示 ⋯ 菜单。
 private final class WorkspaceRowView: NSView {
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?

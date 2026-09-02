@@ -26,7 +26,8 @@ disclosure chevron 折叠；折叠只影响导航显示，不改变工作区/pan
 ## User Stories
 
 1. 作为用户，我想在侧栏纵向看到当前窗口的全部工作区，这样工作区多时也能一眼分辨。
-2. 作为用户，我想单击工作区行切换工作区，这样导航和管理在同一处。
+2. 作为用户，我想单击未激活的工作区行先切换过去，再次单击已激活行时折叠或展开
+   其 panes，这样导航和层级管理共用整行的大命中区。
 3. 作为用户，我想看到当前工作区行高亮，这样随时知道自己在哪。
 4. 作为用户，我想在工作区行看到「N panes」副标题，这样不切换就能了解每个工作区的规模。
 5. 作为用户，我想双击工作区行重命名（沿用 NameEditorPopover），这样命名习惯与旧 tab 双击一致。
@@ -74,6 +75,8 @@ disclosure chevron 折叠；折叠只影响导航显示，不改变工作区/pan
 - **工作区行数据源**：TerminalWindowController 的 tabs/activeTabIndex
   （per-window），复用既有 addTab/selectTab/closeTab/renameTab/workspaceName
   入口，不新造状态；刷新走既有中心点（原 refreshTabStrip 调用位）。
+  整行单击按当前态分流：未激活 → `selectTab`，已激活 → 切换该工作区折叠态；
+  disclosure 不受激活态限制，始终直接切换折叠态。
 - **宽度 token**：ShellStyle 增加工作区列/任务列宽度常量，替换现有单一 sidebarWidth。
 - **样式**：行样式对齐任务行（hover/选中 fill、圆点/副标题排版），节标签行
   「工作区」+ 分屏/新建三键沿用壳层图标按钮体系。
