@@ -417,6 +417,27 @@ private final class WorkspaceRowView: NSView {
     }
 }
 
+enum WorkspacePaneStatusPresentation {
+    /// 侧栏只表达三个值得打断扫读节奏的阶段：处理中、等待用户、已完成。
+    /// tool hook 很密，若逐个展示工具名并切换颜色，文字宽度与圆点会不停闪动。
+    static func activity(for status: PaneStatus?) -> PaneActivity? {
+        switch status?.state {
+        case .tool: return .thinking
+        default: return status?.state
+        }
+    }
+
+    static func text(for status: PaneStatus?) -> String? {
+        guard let status else { return nil }
+        switch status.state {
+        case .idle: return nil
+        case .thinking, .tool: return L("Thinking")
+        case .attention: return L("Needs you")
+        case .done: return L("Finished")
+        }
+    }
+}
+
 /// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 轻量状态文字；
 /// 第二行 = 绑定任务 + cwd（路径从头截断，优先保留末级目录）。
 /// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
@@ -441,7 +462,9 @@ private final class PaneRowView: NSView {
     private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var terminalWorkingDirectory: String?
-    private var activity: PaneActivity? { status?.state }
+    private var activity: PaneActivity? {
+        WorkspacePaneStatusPresentation.activity(for: status)
+    }
     private var isActive: Bool
     private var hovered = false {
         didSet {
@@ -576,16 +599,28 @@ private final class PaneRowView: NSView {
 
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
     func applyStatus(_ status: PaneStatus?) {
-        // tool 名进 badge，cwd 是第二行在无 OSC PWD 时的兜底。
+        // cwd 是第二行在无 OSC PWD 时的兜底；tool 名不进侧栏，避免高频跳字。
         guard self.status?.state != status?.state
                 || self.status?.tool != status?.tool
                 || self.status?.cwd != status?.cwd
         else { return }
+
+        let previousActivity = activity
+        let previousText = WorkspacePaneStatusPresentation.text(for: self.status)
+        let previousCWD = self.status?.cwd
         self.status = status
-        applyDotColor()
-        applyStatusLabel()
-        applyMetadataLine()
-        applyFill()
+
+        // thinking ↔ tool 在侧栏属于同一个展示阶段，不碰 AppKit 属性就不会重绘闪动。
+        if previousActivity != activity {
+            applyDotColor()
+            applyFill()
+        }
+        if previousText != WorkspacePaneStatusPresentation.text(for: status) {
+            applyStatusLabel()
+        }
+        if previousCWD != status?.cwd {
+            applyMetadataLine()
+        }
     }
 
     /// 活动状态与 pane 名同在第一行；空闲时隐藏，不用任务名补位。
@@ -594,7 +629,7 @@ private final class PaneRowView: NSView {
     /// 圆点负责快速扫色，次级文字负责解释语义；不再铺 badge 底色与当前行
     /// 高亮争抢视觉重心。任务名是稳定信息，固定保留在第二行。
     private func applyStatusLabel() {
-        if let text = Self.statusText(status) {
+        if let text = WorkspacePaneStatusPresentation.text(for: status) {
             statusLabel.isHidden = false
             statusLabel.stringValue = text
             statusLabel.toolTip = text
@@ -618,18 +653,6 @@ private final class PaneRowView: NSView {
         directoryLabel.isHidden = displayDirectory == nil
         directoryLabel.stringValue = displayDirectory ?? ""
         directoryLabel.toolTip = rawDirectory
-    }
-
-    private static func statusText(_ status: PaneStatus?) -> String? {
-        guard let status else { return nil }
-        switch status.state {
-        case .idle: return nil
-        case .thinking: return L("Thinking")
-        // 工具名比"忙着"有信息量得多——能看出它在编辑还是在跑命令
-        case .tool: return status.tool.map { L("Running %@", $0) } ?? L("Working")
-        case .attention: return L("Needs you")
-        case .done: return L("Finished")
-        }
     }
 
     private func applyDotColor() {
