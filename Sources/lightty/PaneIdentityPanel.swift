@@ -523,6 +523,17 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         nameField.currentEditor()?.selectAll(nil)
     }
 
+    /// PaneView 的展开/收起动画只通过这个入口控制可消失内容。
+    func setExpandedContentAlpha(_ alpha: CGFloat, animated: Bool) {
+        if animated {
+            extras.animator().alphaValue = alpha
+            listContainer.animator().alphaValue = alpha
+        } else {
+            extras.alphaValue = alpha
+            listContainer.alphaValue = alpha
+        }
+    }
+
     @objc private func beginTaskRename() {
         guard let boundTaskName else { return }
         if listOpen { closeTaskList() }

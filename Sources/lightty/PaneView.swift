@@ -267,7 +267,8 @@ final class PaneView: NSView {
             y: start.maxY - PaneIdentityPanel.maxHeight,
             width: PaneIdentityPanel.panelWidth,
             height: PaneIdentityPanel.maxHeight)
-        panel.extras.alphaValue = 0 // 第一行不参与淡入：标题原地不动，只有扩展区渐显
+        // 第一行不参与淡入：标题原地不动，所有扩展内容统一渐显。
+        panel.setExpandedContentAlpha(0, animated: false)
         panel.island.frame = NSRect(
             x: start.minX - panel.frame.minX, y: start.minY - panel.frame.minY,
             width: start.width, height: start.height)
@@ -282,7 +283,7 @@ final class PaneView: NSView {
             context.allowsImplicitAnimation = true
             panel.island.animator().frame = islandRect(
                 in: panel, height: PaneIdentityPanel.baseHeight)
-            panel.extras.animator().alphaValue = 1
+            panel.setExpandedContentAlpha(1, animated: true)
         } completionHandler: { [weak panel] in
             panel?.focusNameField()
         }
@@ -320,7 +321,7 @@ final class PaneView: NSView {
             context.allowsImplicitAnimation = true
             // 内容静止，只缩回岛体背景层 + 扩展区渐隐
             panel.island.animator().frame = islandEnd
-            panel.extras.animator().alphaValue = 0
+            panel.setExpandedContentAlpha(0, animated: true)
         } completionHandler: { [weak self, weak panel] in
             // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
             self?.header.setCapsuleHidden(false)

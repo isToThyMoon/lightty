@@ -4,6 +4,47 @@ import XCTest
 
 @MainActor
 final class PaneIdentityPanelTests: XCTestCase {
+    func testCollapseFadeIncludesOpenTaskList() throws {
+        _ = NSApplication.shared
+
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+        panel.taskProvider = {
+            [PaneIdentityPanel.TaskChoice(
+                name: "Task",
+                fileURL: URL(fileURLWithPath: "/tmp/task.md"),
+                running: false,
+                current: false)]
+        }
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
+        panel.layoutSubtreeIfNeeded()
+
+        let taskButton = try XCTUnwrap(
+            panel.descendants.compactMap { $0 as? NSButton }.first {
+                $0.action == NSSelectorFromString("taskTapped")
+            })
+        taskButton.performClick(nil)
+        panel.layoutSubtreeIfNeeded()
+
+        let searchField = try XCTUnwrap(
+            panel.descendants.compactMap { $0 as? NSTextField }.first {
+                $0.placeholderAttributedString?.string
+                    == L("Search, or type a new task name and press Return")
+            })
+        let taskListContainer = try XCTUnwrap(searchField.superview)
+
+        panel.setExpandedContentAlpha(0, animated: false)
+
+        XCTAssertEqual(
+            taskListContainer.alphaValue,
+            0,
+            "The open task list must fade with the island's other expanded content")
+    }
+
     func testSearchPlaceholderFitsWithinIsland() throws {
         _ = NSApplication.shared
 
