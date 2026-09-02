@@ -19,6 +19,13 @@ let package = Package(
         // 任务数据层：纯逻辑，无 AppKit 依赖
         .target(name: "LighttyCore"),
         .testTarget(name: "LighttyCoreTests", dependencies: ["LighttyCore"]),
+        // 壳层测试：目前只覆盖 HookInstaller——它是全仓库唯一改写用户自有文件的
+        // 代码，没有回归保护不可接受。该类型刻意不依赖 AppKit，可直接对 fixture 测。
+        .testTarget(name: "LighttyTests", dependencies: ["lightty"]),
+        // agent hook helper：把 hook 事件翻译成 pane 状态文件。
+        // 只链 Foundation + LighttyCore——PreToolUse 每次工具调用都触发，
+        // 进程启动开销会直接变成用户 agent 的延迟税，绝不能引入 AppKit / GhosttyKit。
+        .executableTarget(name: "lightty-hook", dependencies: ["LighttyCore"]),
         .executableTarget(
             name: "lightty",
             dependencies: [

@@ -330,7 +330,8 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
             let row = PaletteRowView(
                 name: result.task.name,
                 tag: result.running.isEmpty ? L("Dormant") : L("Active"),
-                tagColor: result.running.isEmpty ? ShellStyle.tertiaryText : .systemGreen,
+                tagColor: result.running.isEmpty
+                    ? ShellStyle.tertiaryText : ShellStyle.boundAccent,
                 snippet: result.snippet)
             // 单击 = 选中并更新预览（提交动作在预览区/回车），与 Notion 的
             // 选择→预览→行动一致；hover 同样跟随（指针悬到哪预览到哪）
@@ -383,7 +384,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         previewTitle.stringValue = result.task.name
         let active = !result.running.isEmpty
         previewTag.stringValue = active ? L("Active") : L("Dormant")
-        previewTag.textColor = active ? .systemGreen : ShellStyle.tertiaryText
+        previewTag.textColor = active ? ShellStyle.boundAccent : ShellStyle.tertiaryText
         previewBody.string = result.task.body.isEmpty
             ? RestoreFlow.summarize(result.task.body)
             : result.task.body

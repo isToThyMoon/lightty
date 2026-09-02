@@ -1,4 +1,5 @@
 import AppKit
+import LighttyCore
 
 /// 双栏侧栏的左栏：工作区 › pane 两级树（cmux 形态的窗口活地图）。
 /// spec: docs/specs/double-sidebar.md。全展开无折叠（单工作区 pane ≤6）。
@@ -13,6 +14,10 @@ final class WorkspaceColumnView: NSView {
     private let scroll = NSScrollView()
     private let rowsStack = NSStackView()
     private var reloadScheduled = false
+    /// pane 行按 pane id 索引，供状态原地更新用。
+    /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
+    /// （一次工具调用就有 PreToolUse + PostToolUse 两发），拆建必闪。
+    private var paneRows: [UUID: PaneRowView] = [:]
 
     private var controller: TerminalWindowController? {
         window?.windowController as? TerminalWindowController
@@ -84,7 +89,24 @@ final class WorkspaceColumnView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { reload() }
+        if window != nil {
+            reload()
+            // 向 presenter 报到而不是自己订阅通知：一次广播要分发到 header、
+            // 灵动岛、侧栏三处，合流在 presenter 里做才只做一次防抖。
+            PaneStatusPresenter.shared.register(column: self)
+        }
+    }
+
+    /// 单 pane 原地更新：通知带着变化的 pane，整列扫一遍是白做的
+    func applyStatus(for paneID: UUID) {
+        paneRows[paneID]?.applyStatus(PaneStatusStore.shared.status(for: paneID))
+    }
+
+    /// 状态原地更新：只改圆点颜色与行底，不动视图树。
+    func applyStatuses() {
+        for (paneID, row) in paneRows {
+            row.applyStatus(PaneStatusStore.shared.status(for: paneID))
+        }
     }
 
     @objc private func scheduleReload() {
@@ -104,6 +126,7 @@ final class WorkspaceColumnView: NSView {
     func reload() {
         guard let controller else { return }
         rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        paneRows.removeAll()
         let overview = controller.workspaceOverview()
         // 单工作区：工作区层级没有信息量，直接平铺 pane 行（缩进减一级）
         let single = overview.count == 1
@@ -146,11 +169,14 @@ final class WorkspaceColumnView: NSView {
                 add(makePaneRow(for: pane, indented: true))
             }
         }
+        // 重建后立刻补一次状态：新行默认是静息态，不补会闪一下再变回来
+        applyStatuses()
         window?.invalidateCursorRects(for: self)
     }
 
     private func makePaneRow(for pane: PaneView, indented: Bool) -> PaneRowView {
         let paneRow = PaneRowView(
+            paneID: pane.dragIdentifier,
             name: pane.header.title,
             taskName: pane.header.titleOfBoundTask,
             bound: pane.header.titleOfBoundTask != nil,
@@ -162,6 +188,7 @@ final class WorkspaceColumnView: NSView {
         paneRow.onClose = { [weak pane] in
             pane?.terminal.requestCloseFromUser()
         }
+        paneRows[pane.dragIdentifier] = paneRow
         return paneRow
     }
 
@@ -302,9 +329,19 @@ private final class PaneRowView: NSView {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
 
+    /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
+    /// 存 id 而不是 pane 引用：行只需要向 store 取状态，不需要够到 pane 本体，
+    /// 少一条会让关掉的 pane 多活一会儿的强/弱引用。
+    let paneID: UUID
+
     private let dotView = NSView()
     private let closeButton = NSButton()
     private var tracking: NSTrackingArea?
+    private let bound: Bool
+    private let taskName: String?
+    private let taskLabel = NSTextField(labelWithString: "")
+    private var status: PaneStatus?
+    private var activity: PaneActivity? { status?.state }
     private var hovered = false {
         didSet {
             applyFill()
@@ -312,15 +349,16 @@ private final class PaneRowView: NSView {
         }
     }
 
-    init(name: String, taskName: String?, bound: Bool, indented: Bool) {
+    init(paneID: UUID, name: String, taskName: String?, bound: Bool, indented: Bool) {
+        self.paneID = paneID
+        self.bound = bound
+        self.taskName = taskName
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
 
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3
-        dotView.layer?.backgroundColor =
-            (bound ? NSColor.systemGreen : .systemGray).cgColor
 
         closeButton.image = NSImage(
             systemSymbolName: "xmark", accessibilityDescription: L("Close pane"))?
@@ -339,9 +377,7 @@ private final class PaneRowView: NSView {
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        let taskLabel = NSTextField(labelWithString: taskName.map { "· \($0)" } ?? "")
         taskLabel.font = .systemFont(ofSize: 10.5)
-        taskLabel.textColor = ShellStyle.tertiaryText
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -372,6 +408,8 @@ private final class PaneRowView: NSView {
             taskLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
         ])
+        applyDotColor()
+        applySecondaryLabel()
         applyFill()
     }
 
@@ -379,18 +417,76 @@ private final class PaneRowView: NSView {
 
     @objc private func closeTapped() { onClose?() }
 
+    /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
+    func applyStatus(_ status: PaneStatus?) {
+        // tool 名也要进副标题，所以不能只比 state
+        guard self.status?.state != status?.state || self.status?.tool != status?.tool
+        else { return }
+        self.status = status
+        applyDotColor()
+        applySecondaryLabel()
+        applyFill()
+    }
+
+    /// 副标题槽位：有活跃状态时让位给状态文字，否则显示任务名。
+    ///
+    /// **颜色不能单独承担语义**——用户没有图例就是在猜"蓝色是什么意思"。
+    /// 文字说明状态、颜色与圆点同色，两者互相解释；扫读时看色块，
+    /// 停下来时看文字。任务名是稳定信息、别处也看得到，让位给时效信息不亏。
+    private func applySecondaryLabel() {
+        if let text = Self.statusText(status) {
+            taskLabel.stringValue = text
+            taskLabel.textColor = ShellStyle.statusColor(for: status!.state)
+        } else {
+            taskLabel.stringValue = taskName.map { "· \($0)" } ?? ""
+            taskLabel.textColor = ShellStyle.tertiaryText
+        }
+    }
+
+    private static func statusText(_ status: PaneStatus?) -> String? {
+        guard let status else { return nil }
+        switch status.state {
+        case .idle: return nil
+        case .thinking: return L("Thinking")
+        // 工具名比"忙着"有信息量得多——能看出它在编辑还是在跑命令
+        case .tool: return status.tool.map { L("Running %@", $0) } ?? L("Working")
+        case .attention: return L("Needs you")
+        case .done: return L("Finished")
+        }
+    }
+
+    private func applyDotColor() {
+        dotView.layer?.backgroundColor = ShellStyle
+            .dotColor(bound: bound, activity: activity)
+            .shellResolvedCGColor(for: effectiveAppearance)
+    }
+
     private func applyFill() {
-        let fill: NSColor = hovered ? ShellStyle.controlFill : .clear
-        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
+        // hover 优先：指针反馈不能被状态底色吃掉。
+        // `done` 给一层极淡的同色底——侧栏是"哪个 pane 完事了"的扫读面，
+        // 一个 6pt 的点在满屏行里不够抓眼，整行透一点色才扫得出来。
+        if hovered {
+            layer?.backgroundColor = ShellStyle.controlFill
+                .shellResolvedCGColor(for: effectiveAppearance)
+        } else if activity == .done {
+            layer?.backgroundColor = ShellStyle.statusDone
+                .shellResolvedCGColor(for: effectiveAppearance)
+                .copy(alpha: 0.12)
+        } else {
+            layer?.backgroundColor = NSColor.clear
+                .shellResolvedCGColor(for: effectiveAppearance)
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        applyDotColor()
         applyFill()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        applyDotColor()
         applyFill()
     }
 

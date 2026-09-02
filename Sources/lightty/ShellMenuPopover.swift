@@ -82,12 +82,16 @@ enum ShellHintPopover {
         pop.contentViewController = controller
         pop.behavior = .transient
         if let onClose {
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
+            // 一次性观察者要在自己的回调里注销自己。直接捕获局部 var 会被并发检查
+            // 判为「捕获后又被赋值」，这里用引用盒承载 token：闭包捕获的是盒子，
+            // 盒子里的值什么时候写进去与捕获无关。
+            final class TokenBox { var token: NSObjectProtocol? }
+            let box = TokenBox()
+            box.token = NotificationCenter.default.addObserver(
                 forName: NSPopover.didCloseNotification, object: pop, queue: .main
             ) { _ in
                 onClose()
-                if let observer { NotificationCenter.default.removeObserver(observer) }
+                if let token = box.token { NotificationCenter.default.removeObserver(token) }
             }
         }
         popover = pop

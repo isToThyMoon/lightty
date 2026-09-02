@@ -14,6 +14,13 @@ struct TerminalSurfaceConfiguration {
     var fontSize: Float32 = 0
     var workingDirectory: String?
     var context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW
+    /// 注入给该 pane shell 的环境变量（当前只用于 LIGHTTY_PANE_ID）。
+    ///
+    /// 走 per-surface 注入而不是改进程环境：一是每个 pane 需要不同的值，进程级
+    /// 变量做不到；二是 main.swift 刻意净化过继承来的会话标记，壳层不该再往
+    /// 全局环境里塞东西。`inheriting` 初始化器不复制本字段——新 pane 必须拿到
+    /// 属于自己的 id，继承反而是错的。
+    var envVars: [String: String] = [:]
 
     init() {}
 
@@ -40,9 +47,27 @@ struct TerminalSurfaceConfiguration {
         config.font_size = fontSize
         config.context = context
 
-        guard let workingDirectory else { return body(&config) }
-        return workingDirectory.withCString { directory in
-            config.working_directory = directory
+        // 传给 core 的 C 字符串统一在这里申请、在 body 返回后统一释放。
+        // libghostty 会把 working_directory 与 env 键值 dupeZ 进自己的 arena
+        // （vendor/ghostty/src/apprt/embedded.zig 的 env_var_count 分支），
+        // 所以它们只需活过 ghostty_surface_new 这一次调用，之后释放是安全的。
+        var owned: [UnsafeMutablePointer<CChar>] = []
+        defer { owned.forEach { free($0) } }
+        func borrow(_ string: String) -> UnsafePointer<CChar>? {
+            guard let copy = strdup(string) else { return nil }
+            owned.append(copy)
+            return UnsafePointer(copy)
+        }
+
+        if let workingDirectory { config.working_directory = borrow(workingDirectory) }
+
+        var pairs = envVars.map {
+            ghostty_env_var_s(key: borrow($0.key), value: borrow($0.value))
+        }
+        return pairs.withUnsafeMutableBufferPointer { buffer in
+            // 空数组时 baseAddress 可能为 nil，core 侧以 count > 0 为门槛，安全。
+            config.env_vars = buffer.baseAddress
+            config.env_var_count = buffer.count
             return body(&config)
         }
     }

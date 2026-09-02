@@ -310,8 +310,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
+    /// 任务行的圆点只表达「有没有 pane 绑着它」，不掺 agent 活动状态：
+    /// 这张表是全量 reload 重建的（`lighttyTasksDidChange`），跟不上状态的频率，
+    /// 显示一个可能已经过期的状态比不显示更糟。实时状态在 pane 头和工作区侧栏。
     private func dotColor(for entry: Entry) -> NSColor {
-        entry.running != nil ? .systemGreen : .systemGray
+        ShellStyle.dotColor(bound: entry.running != nil, activity: nil)
     }
 
     private func relativeTime(_ date: Date) -> String {

@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyKit
+import LighttyCore
 
 /// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）+
 /// 收工/注入按钮。胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
@@ -17,10 +18,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         case active         // 绿：已绑定任务文件
 
         var color: NSColor {
-            switch self {
-            case .unnamed: return .systemGray
-            case .active: return .systemGreen
-            }
+            ShellStyle.dotColor(bound: self == .active, activity: nil)
         }
     }
 
@@ -57,8 +55,16 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             applyCapsuleFill()
             dotView.isHidden = capsuleHovered
             closeButton.isHidden = !capsuleHovered
+            // ✕ 占的就是圆点那个插槽，hover 期间状态色会整个消失。
+            // 解法是让 ✕ 自己染上状态色，而不是抑制这次替换：
+            // ✕ 是 header 里唯一的关 pane 入口，为了显示状态把它藏掉是本末倒置，
+            // 而且用户此刻的注意力本来就在圆点位置，染色足够被看到。
+            // `.attention` 另有胶囊外圈的呼吸环，不在这个插槽里，hover 天然不影响。
+            applyCloseButtonTint()
+            updateAmbientAnimations()  // 圆点藏起来时没必要继续烧一条呼吸动画
         }
     }
+    private var capsuleIsHidden = false
 
     var title: String {
         get { nameLabel.stringValue }
@@ -72,10 +78,15 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     /// 交接瞬间标题原地不动（灵动岛的"岛体扩展、内容不动"）。
     func setCapsuleHidden(_ hidden: Bool) {
         capsule.alphaValue = hidden ? 0 : 1
+        capsuleIsHidden = hidden
+        // 这一句被调用时面板刚挂上窗口（PaneView 的展开顺序：refresh → addSubview →
+        // setCapsuleHidden），正好是把状态色补给灵动岛的时机——PaneView 的
+        // refresh(panel:) 传的是静态绑定色，不知道状态。
+        if hidden { syncIdentityPanelDot() }
     }
 
     var dot: Dot = .unnamed {
-        didSet { dotView.layer?.backgroundColor = dot.color.cgColor }
+        didSet { applyDotColor() }
     }
 
     var injectEnabled: Bool {
@@ -94,12 +105,26 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     /// 未绑定提示气泡的锚点（原地反馈用）
     var finishAnchor: NSView { finishButton }
 
-    /// 轻量注意力环：胶囊外圈细描边缓慢呼吸，生命周期与提示气泡绑定——
-    /// 气泡在环就在（用户读完文字抬眼仍能看到），气泡关环淡出。
-    private var attentionRing: NSView?
+    /// 注意力环的申领方。两条互不知情的路会同时想要这个环：Handoff 未绑定提示
+    /// 气泡（临时，几秒）和 `.attention` 状态（可能持续几分钟）。所以按持有方记账
+    /// 而不是单一开关——否则气泡关闭时会顺手掐掉状态环，反过来状态转出
+    /// `.attention` 也会把还开着的气泡的环收走。
+    enum CapsuleAttentionOwner { case hint, status }
 
-    func beginCapsuleAttention() {
-        endCapsuleAttention()
+    /// 轻量注意力环：胶囊外圈细描边缓慢呼吸。有任一持有方时存在，全部退出才淡出。
+    private var attentionRing: NSView?
+    private var attentionOwners: Set<CapsuleAttentionOwner> = []
+    private static let ringBreatheKey = "breathe"
+
+    /// 默认 `.hint` 保持既有调用点（HandoffPrompt 气泡）零改动。
+    func beginCapsuleAttention(_ owner: CapsuleAttentionOwner = .hint) {
+        let wasIdle = attentionOwners.isEmpty
+        attentionOwners.insert(owner)
+        guard wasIdle else {
+            // 环已在，第二个持有方只是接手，不重启动画——重启会让呼吸相位跳一下
+            syncAttentionRingFrame()
+            return
+        }
         let ring = NSView(frame: capsule.frame.insetBy(dx: -4, dy: -4))
         ring.wantsLayer = true
         ring.layer?.cornerRadius = 10
@@ -107,22 +132,25 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         ring.layer?.borderColor = terminalForeground.withAlphaComponent(0.5).cgColor
         addSubview(ring)
         attentionRing = ring
-        let breathe = CABasicAnimation(keyPath: "opacity")
-        breathe.fromValue = 0.3
-        breathe.toValue = 0.9
-        breathe.duration = 0.9
-        breathe.autoreverses = true
-        breathe.repeatCount = .infinity
-        ring.layer?.add(breathe, forKey: "breathe")
+        updateAmbientAnimations()
     }
 
-    func endCapsuleAttention() {
-        guard let ring = attentionRing else { return }
+    func endCapsuleAttention(_ owner: CapsuleAttentionOwner = .hint) {
+        guard attentionOwners.remove(owner) != nil else { return }
+        guard attentionOwners.isEmpty, let ring = attentionRing else { return }
         attentionRing = nil
+        // 先摘掉无限循环的呼吸，否则它会一直改写 opacity，把这段淡出盖掉
+        ring.layer?.removeAnimation(forKey: Self.ringBreatheKey)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
             ring.animator().alphaValue = 0
         }, completionHandler: { ring.removeFromSuperview() })
+    }
+
+    /// 环是 frame 布局（不在约束链上，避免影响胶囊尺寸），胶囊被重排后要跟上。
+    /// 提示气泡活不过一次布局所以以前没这问题，状态环能挂几分钟，必须跟。
+    private func syncAttentionRingFrame() {
+        attentionRing?.frame = capsule.frame.insetBy(dx: -4, dy: -4)
     }
 
     /// 绑定任务名；nil = 未绑定。宽度富余时以「 · 任务名」并入胶囊。
@@ -152,7 +180,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3.5
-        dotView.layer?.backgroundColor = dot.color.cgColor
+        applyDotColor()
 
         nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingTail
@@ -225,9 +253,43 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             injectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             injectButton.heightAnchor.constraint(equalToConstant: 20),
         ])
+
+        // 状态动画的开关条件（key / 遮挡）都是窗口级事件。object 传 nil 收全部窗口的，
+        // 再统一重算 canAnimate——比为每次换窗口重挂一遍观察者省事，代价只是几次空跑。
+        for name: NSNotification.Name in [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowVisibilityChanged),
+                name: name, object: nil)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func windowVisibilityChanged() { updateAmbientAnimations() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // 新建 pane / 跨窗口拖动落地：presenter 不知道这一刻，自己向 store 取
+        if window != nil { pullStatus() }
+        updateAmbientAnimations()
+    }
+
+    // tab 切换是 container.isHidden，这两个回调会一路发到子树上
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateAmbientAnimations()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateAmbientAnimations()
+    }
 
     // MARK: - 胶囊内容与 hover
 
@@ -258,6 +320,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         if taskHintLabel.stringValue != want {
             taskHintLabel.stringValue = want
         }
+        syncAttentionRingFrame()
     }
 
     private func applyCapsuleFill() {
@@ -287,10 +350,20 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
         taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
-        closeButton.contentTintColor = terminalForeground.withAlphaComponent(0.7)
+        applyCloseButtonTint()
         applyCapsuleFill()
+        attentionRing?.layer?.borderColor = terminalForeground
+            .withAlphaComponent(0.5).cgColor
         finishButton.terminalForeground = terminalForeground
         injectButton.terminalForeground = terminalForeground
+    }
+
+    /// 状态色是 `shellDynamic`，CGColor 只是快照——外观切换必须重解析，
+    /// 否则明暗切换后圆点还是旧那套（ShellStyle 里 shellResolvedCGColor 的注释）。
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyDotColor()
+        applyCloseButtonTint()
     }
 
     /// per-surface CONFIG_CHANGE（条件主题解析结果）：一次拿到整套前景/背景。
@@ -309,6 +382,188 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         default: return
         }
         applyTerminalColors()
+    }
+
+    // MARK: - agent 活动状态
+
+    private static let dotBreatheKey = "statusBreathe"
+    private static let dotPulseKey = "statusPulse"
+
+    private var status: PaneStatus?
+    /// `.done` 落地时如果 pane 不可见，闪烁就白放了——记下来，等可见了补上。
+    private var pendingDonePulse = false
+
+    /// 由 `PaneStatusPresenter` 推入。
+    ///
+    /// pane 自己不订阅通知：状态源是全局的一发广播，每个 pane 挂一个观察者
+    /// 只是把同一次广播摊成 N 次派发，还得在 PaneView 里加订阅代码。
+    func apply(_ status: PaneStatus?) {
+        // 高频入口（PreToolUse/PostToolUse 一次工具调用就来两发），先挡住无变化的
+        let changed = status?.state != self.status?.state
+            || status?.tool != self.status?.tool
+            || status?.detail != self.status?.detail
+        guard changed else { return }
+        let enteredDone = status?.state == .done && self.status?.state != .done
+        self.status = status
+
+        applyDotColor()
+        applyCloseButtonTint()
+        updateStatusTooltip()
+
+        // `.attention` 直接复用现成的呼吸环（唯一一处「非人不可」的状态，
+        // 值得动用胶囊级的提示；其余状态一律只在圆点里表达）
+        if status?.state == .attention {
+            beginCapsuleAttention(.status)
+        } else {
+            endCapsuleAttention(.status)
+        }
+
+        // 转出 done（focus 后 markRead）时把欠着的闪烁一并作废——
+        // 否则它会晚一步落在一个已经不是 done 的圆点上
+        pendingDonePulse = enteredDone || (pendingDonePulse && status?.state == .done)
+        updateAmbientAnimations()
+        syncIdentityPanelDot()
+    }
+
+    /// pane 是新建的、或从别的窗口拖过来的：主动向 store 拉一次当前值。
+    /// 这是拉不是订阅——presenter 不知道 pane 什么时候诞生，而 store 一直知道。
+    private func pullStatus() {
+        guard let dragIdentifier else { return }
+        apply(PaneStatusStore.shared.status(for: dragIdentifier))
+    }
+
+    private var activity: PaneActivity? { status?.state }
+
+    private var effectiveDotColor: NSColor {
+        ShellStyle.dotColor(bound: dot == .active, activity: activity)
+    }
+
+    private func applyDotColor() {
+        dotView.layer?.backgroundColor = effectiveDotColor
+            .shellResolvedCGColor(for: effectiveAppearance)
+    }
+
+    private func applyCloseButtonTint() {
+        // 有状态时 ✕ 借状态色，把被它盖住的圆点信息带出来；无状态时回到中性前景色
+        let color = (activity == nil || activity == .idle)
+            ? terminalForeground.withAlphaComponent(0.7)
+            : effectiveDotColor
+        closeButton.contentTintColor = color
+    }
+
+    /// 工具名/摘要只进 tooltip，不进胶囊。
+    ///
+    /// 胶囊里唯一有弹性的槽位是任务名 hint，`layout()` 的宽度仲裁就是围着它写的。
+    /// 把工具名塞进去要么和任务名抢那一个槽（`PreToolUse` 的频率下等于让文字
+    /// 不停跳变——比呼吸的圆点扎眼得多，正好和「不打扰」相反），要么再加一段
+    /// 仲裁逻辑去挤 pane 名。两条都比这点信息量贵，所以走 tooltip。
+    private func updateStatusTooltip() {
+        guard let status, status.state != .idle else {
+            toolTip = nil
+            return
+        }
+        var line: String
+        switch status.state {
+        case .thinking: line = L("Agent is thinking")
+        case .tool: line = status.tool.map { L("Running %@", $0) } ?? L("Agent is working")
+        case .attention: line = L("Agent needs your input")
+        case .done: line = L("Agent finished")
+        case .idle: return
+        }
+        // detail 来自 hook 写的文件，长度不可信（契约 §4.2 要求读方截断）
+        if let detail = status.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !detail.isEmpty {
+            line += " · " + String(detail.prefix(120))
+        }
+        toolTip = line
+    }
+
+    // MARK: 环境动画的开关
+
+    /// 动画只在「窗口是 key、窗口没被遮挡、pane 所在 tab 可见」时跑。
+    ///
+    /// 后台 pane 空转一条无限循环的 CAAnimation 是实打实的续航 bug：多开几个 agent
+    /// 就是几条永不停的 render server 时钟。而且此刻本来也没人看得见。
+    private var canAnimate: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+        return window.isKeyWindow && window.occlusionState.contains(.visible)
+    }
+
+    private func updateAmbientAnimations() {
+        guard canAnimate else {
+            dotView.layer?.removeAnimation(forKey: Self.dotBreatheKey)
+            attentionRing?.layer?.removeAnimation(forKey: Self.ringBreatheKey)
+            return
+        }
+
+        // 0.3↔0.9 / 0.9s 是这个环原本的参数，原样保留（提示气泡的手感已经调过）
+        if attentionRing?.layer?.animation(forKey: Self.ringBreatheKey) == nil {
+            attentionRing?.layer?.add(
+                breathe(from: 0.3, to: 0.9, duration: 0.9), forKey: Self.ringBreatheKey)
+        }
+
+        // hover 时圆点整个 isHidden，动画留着也没人看，白烧
+        let wantsBreath = !capsuleHovered
+            && (activity == .thinking || activity == .tool)
+        if wantsBreath {
+            // 已经在跑同一个态就别重加：重加会把呼吸相位掐回起点，
+            // 而 PostToolUse/PreToolUse 是成对高频来的，会变成一顿抽搐
+            if dotView.layer?.animation(forKey: Self.dotBreatheKey) == nil {
+                // 0.55 是刻意的下限：低到能看出"在动"，高到不至于像故障闪烁
+                dotView.layer?.add(
+                    breathe(
+                        from: 0.55, to: 1,
+                        duration: activity == .tool
+                            ? ShellStyle.statusToolBreathDuration
+                            : ShellStyle.statusBreathDuration),
+                    forKey: Self.dotBreatheKey)
+            }
+        } else {
+            dotView.layer?.removeAnimation(forKey: Self.dotBreatheKey)
+        }
+
+        if pendingDonePulse && !capsuleHovered {
+            pendingDonePulse = false
+            pulseDot()
+        }
+    }
+
+    private func breathe(
+        from: CGFloat, to: CGFloat, duration: TimeInterval
+    ) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = duration
+        animation.autoreverses = true
+        animation.repeatCount = .infinity
+        animation.timingFunction = ShellStyle.easeInOutCubic
+        return animation
+    }
+
+    /// `done` 的三拍闪烁：一次性，不循环。这是整套状态动效里唯一允许抢注意力的，
+    /// 但也只抢一下——粘滞的品红本身已经足够显眼，闪个不停就成了骚扰。
+    private func pulseDot() {
+        let pulse = CAKeyframeAnimation(keyPath: "opacity")
+        pulse.values = [1, 0.2, 1, 0.2, 1]
+        pulse.keyTimes = [0, 0.25, 0.5, 0.75, 1]
+        pulse.duration = ShellStyle.statusDonePulseDuration
+        pulse.timingFunction = ShellStyle.easeInOutCubic
+        dotView.layer?.add(pulse, forKey: Self.dotPulseKey)
+    }
+
+    /// 灵动岛第一行的圆点与胶囊逐像素同构，颜色也得跟着状态走。
+    ///
+    /// 面板挂在窗口 contentView 上（不在 pane 子树里），header 拿不到直接引用；
+    /// 但「胶囊隐身」正好是「本 header 的面板正开着」的标记，而同一窗口任意时刻
+    /// 至多一个面板展开（面板的 dismiss monitor 会在点到别处时收起），据此定位即可，
+    /// 不必为这一条信息再从 PaneView 牵一根线过来。
+    private func syncIdentityPanelDot() {
+        guard capsuleIsHidden, let host = window?.contentView else { return }
+        for case let panel as PaneIdentityPanel in host.subviews {
+            panel.applyStatusDot(
+                (activity == nil || activity == .idle) ? nil : effectiveDotColor)
+        }
     }
 
     // MARK: - 点击 / 拖拽

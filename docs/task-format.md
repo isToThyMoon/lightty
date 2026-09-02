@@ -74,6 +74,12 @@ sessions:
 若将来任务量大到列表需要不点击即可分诊，再重新赋予语义——届时按真实需求
 定义，而不是先造字段再找用途。
 
+**不要把 agent 的实时状态塞回这个字段。** pane 里 agent 正在做什么（思考中 /
+执行工具 / 需要介入 / 已完成）由 agent hook 驱动，落在
+`~/.lightty/panes/<pane-uuid>/status.json`，是**易失的运行时信号**，不进任务文件。
+两者的性质相反：这里的 `status` 是 agent 临别时手写的一次性判断（会滞后、会撒谎），
+那边是机器从生命周期事件派生的实时事实。详见 `docs/specs/pane-status.md`。
+
 ### 序列化顺序
 
 写文件时已知键按固定顺序输出：`name`、`status`、`cwd`、`tool`（有值时）、`created`、`updated`、未知键原始行（按读取顺序）、`sessions`（非空时）。

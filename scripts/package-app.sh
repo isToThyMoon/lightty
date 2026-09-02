@@ -37,6 +37,11 @@ echo "▸ assemble $APP  (v$VERSION build $BUILD_NUMBER)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/lightty"
+# agent hook helper：注册进 claude/codex 配置的那条命令。用户会把 app 拖来拖去，
+# 所以配置里写的是 ~/.lightty/bin/lightty-hook symlink，指向这里
+HOOK="$(dirname "$BIN")/lightty-hook"
+[ -x "$HOOK" ] || { echo "lightty-hook build output not found"; exit 1; }
+cp "$HOOK" "$APP/Contents/MacOS/lightty-hook"
 # SwiftPM 资源包（本地化 strings 等）：Bundle.module 会在主 bundle 的
 # Resources 里按名查找
 cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
@@ -93,7 +98,8 @@ for required in \
     "Contents/Resources/terminfo/78/xterm-ghostty" \
     "Contents/Resources/locale" \
     "Contents/Resources/lightty_lightty.bundle" \
-    "Contents/Frameworks/Sparkle.framework"; do
+    "Contents/Frameworks/Sparkle.framework" \
+    "Contents/MacOS/lightty-hook"; do
     [ -e "$APP/$required" ] || { echo "✗ bundle 缺内核契约路径: $required"; exit 1; }
 done
 echo "▸ kernel resource contract OK"
@@ -106,13 +112,18 @@ if [ -z "$IDENTITY" ]; then
 fi
 if [ -n "$IDENTITY" ]; then
     echo "▸ codesign: $IDENTITY (hardened runtime)"
-    # 先签内嵌框架（--deep 覆盖 Sparkle 的 XPC/Autoupdate），再签 app 本体
+    # 由内向外签：内嵌框架（--deep 覆盖 Sparkle 的 XPC/Autoupdate）→ hook helper
+    # → app 本体。lightty-hook 是 Contents/MacOS 里的第二个 Mach-O，签 app bundle
+    # 不会顺带签它，必须单独来一发，否则它在用户机上跑不起来（hook 静默失效）
     codesign --force --sign "$IDENTITY" --options runtime --timestamp --deep \
         "$APP/Contents/Frameworks/Sparkle.framework"
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp \
+        "$APP/Contents/MacOS/lightty-hook"
     codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP"
 else
     echo "▸ codesign: ad-hoc（未找到 Developer ID，仅本机可用）"
     codesign --force --sign - --deep "$APP/Contents/Frameworks/Sparkle.framework"
+    codesign --force --sign - "$APP/Contents/MacOS/lightty-hook"
     codesign --force --sign - "$APP"
 fi
 codesign --verify --strict "$APP" && echo "  signature OK"

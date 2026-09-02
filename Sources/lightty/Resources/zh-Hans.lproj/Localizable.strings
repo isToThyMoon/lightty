@@ -83,3 +83,80 @@
 "New task “%@”" = "新建任务「%@」";
 "Return" = "回车";
 "Unbind" = "解除绑定";
+
+/* agent 状态：菜单栏与通知 */
+"Pane status" = "Pane 状态";
+"Window %d" = "窗口 %d";
+"No panes" = "没有 pane";
+"Mark All as Read" = "全部标记为已读";
+"Show in Menu Bar" = "在菜单栏显示";
+"Pane" = "Pane";
+"Menu bar status hidden" = "菜单栏状态项已隐藏";
+"You can show it again from the lightty menu." = "可以从 lightty 菜单里重新打开。";
+"Agent finished" = "Agent 跑完了";
+"Needs your attention" = "需要你处理";
+"%d agents finished" = "%d 个 agent 跑完了";
+"%d panes need your attention" = "%d 个 pane 需要你处理";
+
+/* agent 状态：hook 安装器 */
+"Agent status hooks" = "Agent 状态 hooks";
+"Claude Code" = "Claude Code";
+"Codex" = "Codex";
+"Currently points at %@" = "当前指向 %@";
+"The helper is missing — expected at %@. Reinstall lightty, or build the lightty-hook target if you are running from source." = "找不到 helper——应该在 %@。请重装 lightty；如果是源码运行，请构建 lightty-hook target。";
+"Could not refresh the helper link: %@" = "无法刷新 helper 链接：%@";
+"Already up to date — nothing was changed." = "已是最新——什么都没改。";
+"Could not write %@ (%@)." = "无法写入 %@（%@）。";
+"The hook helper is not available at %@ yet." = "hook helper 还不在 %@。";
+"Install" = "安装";
+"Uninstall" = "卸载";
+"Not found on this Mac" = "这台 Mac 上没有";
+"Hook installed" = "hook 已安装";
+"Partly installed — missing: %@" = "部分安装——缺少：%@";
+
+/* agent 状态：pane 头提示 */
+"Agent is thinking" = "Agent 思考中";
+"Running %@" = "正在执行 %@";
+"Agent is working" = "Agent 工作中";
+"Agent needs your input" = "Agent 需要你输入";
+
+/* agent 状态：安装引导蒙层 */
+"Know when your agents finish" = "Agent 跑完了告诉你";
+"You can reopen this any time from the lightty menu." = "随时可以从 lightty 菜单里重新打开。";
+"Not now" = "暂不";
+"Done" = "完成";
+
+/* agent 状态：安装引导蒙层（补充） */
+"Details" = "详情";
+"Registered command:" = "注册的命令：";
+"Not installed" = "未安装";
+"Config unreadable, lightty will not touch it (%@)" = "配置读不了，lightty 不会去动它（%@）";
+" · Codex will ask you to approve this on its next run" = " · Codex 下次运行时会要你批准一次";
+
+/* agent 状态：插件式注册 */
+"Update" = "更新";
+"Installing…" = "安装中…";
+"Updating…" = "更新中…";
+"Removing…" = "移除中…";
+"Removed." = "已移除。";
+" · An update is available" = " · 有可用更新";
+"Installed. Restart claude/codex in your panes to pick it up." = "已安装。请在 pane 里重开 claude/codex 才会生效。";
+"Updated. Restart claude/codex in your panes to pick it up." = "已更新。请在 pane 里重开 claude/codex 才会生效。";
+"The %@ command was not found on this Mac." = "这台 Mac 上找不到 %@ 命令。";
+"“%@” did not finish within %ds. You can run it yourself to see why." = "「%@」在 %d 秒内没跑完。可以自己跑一遍看看原因。";
+"“%@” failed. Nothing was changed." = "「%@」失败了，什么都没改。";
+"“%@” failed: %@" = "「%@」失败：%@";
+"Could not read %@ to check the current state (%@)." = "读不了 %@，无法判断当前状态（%@）。";
+"Could not read the current state — unrecognised config shape (%@)." = "无法判断当前状态——配置结构不认识（%@）。";
+
+/* agent 状态：引导蒙层文案（插件路线）*/
+"Plugin source:" = "插件来源：";
+"%@ · commands lightty will run" = "%@ · lightty 将执行的命令";
+"lightty ships a small plugin and asks claude/codex to install it with their own CLI. lightty never edits your agent config itself." = "lightty 提供一个小插件，交给 claude/codex 用它们自己的 CLI 安装。lightty 不会去改你的 agent 配置。";
+"The plugin is generated under ~/.lightty and registered by your agent’s own CLI — lightty does not write your agent config. Uninstall removes it the same way. Status files stay under ~/.lightty and are never uploaded." = "插件生成在 ~/.lightty 下，由你的 agent 自己的 CLI 完成注册——写配置的不是 lightty。卸载同理。状态文件只在 ~/.lightty 下，不上传。";
+
+/* agent 状态：侧栏行的状态文字 */
+"Thinking" = "思考中";
+"Working" = "工作中";
+"Needs you" = "需要你";
+"Finished" = "已完成";

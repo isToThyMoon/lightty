@@ -6,7 +6,7 @@ agent 的 hook 事件主动打到 lightty，驱动 pane 级实时状态（思考
 需要你 / 已完成），呈现在 pane 头、工作区侧栏、菜单栏状态项，并在 agent 跑完时
 主动提醒。
 
-> 本期**不做** handoff 注入。注入复用同一条 hook 链路，作为第二期叠加（见 §8）。
+> handoff 注入已随本期一起落地（`SessionStart` 与 `UserPromptSubmit` 读 `task` 指针、经 `additionalContext` 注入，后者按 session+路径去重），见 §8。
 
 ---
 
@@ -38,6 +38,7 @@ agent 的 hook 事件主动打到 lightty，驱动 pane 级实时状态（思考
 | `ghostty_surface_config_s` 有 `env_vars` / `env_var_count` | ✅ `vendor/ghostty/include/ghostty.h` 与实际链接的 xcframework 头一致 |
 | ghostty 把 env 值 `dupeZ` 进自己的 arena | ✅ `vendor/ghostty/src/apprt/embedded.zig`——**C 字符串只需活过 `ghostty_surface_new`，之后可释放** |
 | 不需要改 ghostty 内核 | ✅ 上游已支持 |
+| **注入的 env 能穿过 `/usr/bin/login` 到达 shell** | ✅ **运行时实测**：`ghostty_surface_config_s.env_vars` → 真实 zsh 进程里 `LIGHTTY_PANE_ID` 有值。ghostty 用 `login -flp`（`-p` = preserve environment），`vendor/ghostty/src/termio/Exec.zig`。<br>⚠️ **不要用 `ps eww` 验证**：macOS 不让读经 setuid `login` 派生的进程环境，会假报「变量不存在」。要验证就让 shell 自己把 env 写到文件 |
 | hook 事件 key 是 **PascalCase** `SessionStart` | ✅ snake_case / camelCase 均不触发 |
 | 两家 hook 的 output wire **完全相同** | ✅ `{"hookSpecificOutput":{"hookEventName":…,"additionalContext":…}}` |
 | 环境变量沿 shell → agent → hook 子进程继承 | ✅ |
@@ -46,6 +47,64 @@ agent 的 hook 事件主动打到 lightty，驱动 pane 级实时状态（思考
 | `$LIGHTTY_*` 未设时 hook 静默 exit 0，无噪音 | ✅ |
 | Codex 改 hook **脚本内容**是否重新触发 trust | ⚠️ 待实测 |
 | Claude Code 是否有 `Notification` 事件 | ⚠️ 待实测（Codex 侧 `PermissionRequest` 已确认） |
+
+### 2.1.1 注册方式：插件路线（2026-09-02 实测改用）
+
+早先的做法是把 7 条 hook 直接 merge 进用户的 `~/.claude/settings.json` /
+`~/.codex/hooks.json`。已废弃，改走两家自己的插件系统。以下全部实测确认：
+
+| 事实 | 状态 |
+|---|---|
+| 两家都支持**插件自带 hooks** | ✅ Claude Code `hooks/hooks.json`；Codex 清单里 `"hooks": "./hooks.json"` |
+| **一个 marketplace 目录同时服务两家** | ✅ 元数据位置不冲突（`.claude-plugin/` vs `.agents/plugins/`），同一目录 `claude plugin validate` 零警告通过，`codex plugin marketplace add` 也接受 |
+| 两家都有官方 CLI 可完成注册 | ✅ `claude plugin marketplace add/install/uninstall`；`codex plugin marketplace add` + `codex plugin add/remove` |
+| Codex 的 `plugin add` **必须**用 `plugin@marketplace` 形式 | ✅ 否则报 "requires --marketplace" |
+| 插件带的 hook 在 Claude Code 里**立即生效，无信任门** | ✅ 隔离配置里实测触发（即使该环境未登录、模型调用失败，`UserPromptSubmit` 仍写出了状态） |
+| 插件带的 hook 在 Codex 里**仍受信任门约束** | ✅ 不批准不执行；加 `--dangerously-bypass-hook-trust` 才跑。**信任是按 hook 本身管的，不看来源**——`hooks/list` 的响应结构里 `trustStatus`/`currentHash` 与 `marketplaceName`/`marketplacePath` 同属一个结构体 |
+| 装完后用户配置里**没有任何 hook 定义** | ✅ Claude Code 只多 `extraKnownMarketplaces` + `enabledPlugins` 两个键；Codex 的 `hooks.json` 根本不被创建，`config.toml` 只多 5 行 |
+| Codex 安装时**拷贝**插件进自己的 cache | ✅ 落在 `plugins/cache/<mp>/<plugin>/<version>`——改 marketplace 不会自动更新已装插件，需要 update 路径 |
+| `hooks.managed_dir` 能否用来免配置 | ❌ **不可用**：它属于企业 MDM 策略面（与 `allow_managed_hooks_only`、`allowed_login_methods` 同结构），第三方 app 占用管理员控制面是越界 |
+| 通配事件 key（`"*"` / 事件数组） | ❌ 两家都不支持，每个事件必须独立成键；`matcher` 只在单个事件内过滤 |
+
+**为什么这条路更好**：7 条 hook 定义搬进**我们自己的文件**，用户配置里只留声明式开关；
+而且注册由**它们自己的 CLI** 完成，我们不再需要理解、维护、也不可能写坏它们的配置格式。
+全项目风险最高的那段 merge/backup/purge 机器随之退役。
+
+**Codex 的信任提示不会消失，这是对的**：用户装插件本来就该批准一次，属于用户与 Codex
+之间的正常交互，不是我们要绕开的东西。
+
+### 2.1.2 传输层：datagram socket（2026-09-01 实测改用）
+
+早先状态走 `status.json`（hook 覆写 + `TaskFolderWatcher` 目录监听）。已废弃，改为
+**Unix domain `SOCK_DGRAM` socket**，hook 发包、app 收包、状态只在内存。以下全部实测：
+
+| 事实 | 数据 |
+|---|---|
+| 状态是**用完即弃**的中间态 | 用户定义。app 没运行时消息直接丢弃，无需补账——这条前提推翻了「持久化路径必须存在」的文件论据 |
+| 尾沿防抖会**饿死** | 一轮真实对话 19 事件，app 只看到 **1 个**；事件间隔 150ms 时 20 个只看到 1 个。`PreToolUse/PostToolUse` 夹 200ms 内的工具调用正好落进这个坑，`tool` 状态从未显示过 |
+| 文件是**可变槽位**，不是队列 | 主线程 83% 繁忙时 200 事件只收到 **47**；socket 与追加日志均 200/200。槽位退化的是正确性且静默，队列退化的只是延迟 |
+| hook 进程成本与传输无关 | 全生命周期 ~4.2ms，其中构造 JSON 占 1.6–1.9ms（dyld 加载 Foundation），发送仅 13µs（dgram）～253µs（文件）。**选型不该看建连接开销** |
+| dgram 的失败行为 | 无监听者 `ENOENT` 13µs；崩溃残留 `ECONNREFUSED` 22µs；接收方卡死 `ENOBUFS` 4µs——**永不阻塞**，即使是阻塞 socket。这是「hook 绝不能卡住 agent」这条硬约束的兑现 |
+| 生产端吞吐 | 20 pane 并发 400 次 hook：1097 次/秒，0.9ms/次含 spawn，零丢失 |
+| 消费端吞吐（app 空闲） | 单 pane 灌 200 事件：200/200 |
+| `sun_path` 上限 | 104 字节；`~/.lightty/run/<pid>.sock` 约 40 字节 |
+| 签名 + hardened runtime + 零 entitlement | UDS bind/send 正常，无 TCC 弹窗 |
+
+**被淘汰的方案与硬理由**：
+
+- **XPC**：Apple 头文件明写不可动态向 bootstrap 命名空间加服务；注册需独立 launchd helper 进程
+- **`NSDistributedNotificationCenter`**：系统级广播——登录会话内任何进程可读 `cwd`、工具 `detail`（agent 执行的命令行）、`session_id`，且可伪造。隐私问题，非性能问题
+- **`CFMessagePort`**：队列深度实测仅 2，满后每次发送付超时
+- **FIFO**：`open(O_WRONLY)` 不带 `O_NONBLOCK` **永久挂住**
+- **追加日志**：在压力下与 socket 等价，但「用完即弃」前提下持久化无意义；socket 少一条兜底路径
+
+**多实例**：socket 按 lightty **pid** 命名，路径随 spawn 以 `LIGHTTY_SOCK` 下发给每个 pane 的
+shell。各实例各绑各的，无 EADDRINUSE 探测、无 unlink 孤儿化。崩溃残留按 pid 判活清理。
+
+**`seq` 删除**：它对文件做读-改-写，agent 并行调工具时竞争；datagram 到达顺序就是顺序。
+
+**保留文件的部分**：`task` 指针（lightty 写、hook 读、持久语义）与 `owner.pid`。方向与生命周期
+都和状态不同，不混。
 
 ### 2.2 代码库现状（本轮调研）
 
@@ -68,16 +127,26 @@ agent 的 hook 事件主动打到 lightty，驱动 pane 级实时状态（思考
 | `ShellMenuPopover` 锚定 `NSView` | 状态项菜单用不了它，用原生 `NSMenu` |
 | `L()` 在 `LighttyCore` 里**不可用** | `PaneStatus` 不做本地化 |
 
-### 2.3 ⚠️ 必读的历史教训
+### 2.3 历史核查结论（已完成）
 
-`Sources/lightty/main.swift` 在任何 surface 创建前**主动 unset `CLAUDE_CODE_*`**
-环境变量；`Sources/lightty/HandoffPrompt.swift` 顶部注释记录了一个
-`LIGHTTY_TASK` 环境变量方案曾被「整体移除」。
+**`HANDOVER.md:156` 记录：2026-08-22 用户否决过 hooks 方案。** 三条理由与本期的对应关系：
 
-**S1 开工第一件事是读懂这两处，搞清当年为什么移除。** 如果当年是因为
-「lightty 从终端启动时会继承并污染子进程环境」，那本期的做法（走
-`ghostty_surface_config_s.env_vars` 逐 surface 注入，而不是改进程全局环境）
-正好规避了那个坑——但这个结论必须验证过再写代码，不能假设。
+| 当年的否决理由 | 本期是否仍然成立 |
+|---|---|
+| handoff 生成耗 token | ❌ 不成立。当年 hook 内要调 `claude -p` 读 transcript 生成摘要；本期 hook 只写一个几百字节的 JSON、只读一个已存在的文件，**零模型调用** |
+| hook 时机会重复触发 | ❌ 不成立。当年重复触发会重复**生成并写入** handoff（有损、有成本）；本期状态是 datagram 推送、用完即弃，重复到达只是多刷一次同值；handoff 注入是 `SessionStart` 只读，重复触发无害 |
+| 写全局 settings.json 不干净 | ✅ **已消解**（2026-09-02）。改走插件路线后，7 条 hook 定义在我们自己的文件里，用户配置只多几行声明式开关，而且是**它们自己的 CLI** 写的，不是我们。见 §2.1.1 |
+
+结论：三条否决理由**全部消解**。
+
+**`main.swift` 的环境净化不冲突**：它 unset 的是 lightty **自身进程**从父终端继承来的
+`CLAUDE_CODE_*`（防止 pane 被 Claude Code 当成嵌套子会话）。本期走
+`ghostty_surface_config_s.env_vars` **逐 surface** 注入，不碰进程全局环境——而且每个
+pane 需要不同的值，进程级变量本来也做不到。两者正交。
+
+**`HandoffPrompt.swift:6` 的「LIGHTTY_TASK 已整体移除」**指的是任务路径改为点击时
+实时嵌入提示词，不是说 env var 机制有问题。本期的 `LIGHTTY_PANE_ID` 用途不同
+（pane 身份，不是任务路径），不受该结论约束。
 
 ---
 
@@ -90,9 +159,9 @@ flowchart LR
     agent --> hook["lightty-hook<br/>(子进程)"]
   end
 
-  hook -->|"原子写"| sj["~/.lightty/panes/&lt;uuid&gt;/status.json"]
-  sj -->|TaskFolderWatcher| store["PaneStatusStore"]
-  store -->|"通知"| presenter["PaneStatusPresenter"]
+  hook -->|"sendto，永不阻塞"| sock["~/.lightty/run/&lt;pid&gt;.sock"]
+  sock -->|"内核收包队列"| store["PaneStatusStore（内存）"]
+  store -->|"定向通知（带 pane id）"| presenter["PaneStatusPresenter"]
 
   presenter --> ph["pane 头 dot"]
   presenter --> sb["工作区侧栏行"]
@@ -100,7 +169,7 @@ flowchart LR
   presenter --> un["系统通知"]
 ```
 
-单向数据流：hook 只写，lightty 只读。没有反向通道，没有 daemon，没有 socket。
+单向数据流：hook 只发，lightty 只收。状态只在内存，用完即弃。没有 daemon，没有状态文件。
 
 ---
 
@@ -115,12 +184,15 @@ flowchart LR
   tasks/                      ← 已存在，本期不动
   bin/
     lightty-hook              ← symlink，指向当前 app bundle 内的 helper
+  run/
+    <lightty-pid>.sock        ← 每实例一个 datagram socket，hook 发、app 收
   panes/
     <pane-uuid>/
       owner.pid               ← lightty 进程 pid，用于 GC
-      status.json             ← hook 写，lightty 读
-      task                    ← 第二期：lightty 写，hook 读（本期不建）
+      task                    ← lightty 写，hook 读（handoff 注入，一行绝对路径）
 ```
+
+**状态不落文件**——它是用完即弃的中间态，走 socket 直达内存（§2.1.2）。
 
 **一个 pane 一个目录**，因为每个目录挂**一个 `TaskFolderWatcher`**——闭包捕获
 paneID，天然知道是哪个 pane 变了，不需要重扫。fd 开销可忽略（pane 数量是个位数）。
@@ -129,12 +201,12 @@ paneID，天然知道是哪个 pane 变了，不需要重扫。fd 开销可忽�
 路径。用户把 app 从下载目录拖进 `/Applications` 后路径就断了。lightty 每次启动
 刷新这个 symlink 指向 `Bundle.main` 内的真实 helper，注册的路径永远稳定。
 
-### 4.2 `status.json` schema
+### 4.2 线格式：一事件一 datagram
 
 ```json
 {
   "v": 1,
-  "seq": 42,
+  "pane": "8ADA89EE-835E-4DDD-8E93-FD684BF4EBFB",
   "ts": "2026-09-01T04:12:00Z",
   "state": "tool",
   "agent": "claude",
@@ -148,7 +220,7 @@ paneID，天然知道是哪个 pane 变了，不需要重扫。fd 开销可忽�
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `v` | 是 | schema 版本，当前恒为 `1`。读方遇到未知版本忽略整个文件，不报错 |
-| `seq` | 是 | 单调递增，同一 pane 内。读方丢弃 `seq` 不大于已知值的写入（防乱序） |
+| `pane` | 是 | 路由字段（信封），app 据此定向投递。一个 socket 服务全部 pane |
 | `ts` | 是 | ISO8601 UTC |
 | `state` | 是 | 见 §4.3 |
 | `agent` | 否 | `claude` \| `codex` \| 其他 |
@@ -157,8 +229,8 @@ paneID，天然知道是哪个 pane 变了，不需要重扫。fd 开销可忽�
 | `detail` | 否 | 单行摘要（如文件路径）。**读方必须截断**，不可信任长度 |
 | `cwd` | 否 | agent 工作目录 |
 
-写入走**原子写**：同目录下写 `.status.json.tmp` → `rename(2)`。
-这不是风格偏好——`TaskFolderWatcher` 是目录级监听，**原地改写不会触发事件**。
+UTF-8，单个 datagram ≤ 4KB。datagram 天然保留消息边界，不需要分帧。
+**没有 `seq`**：UDS 上的到达顺序就是顺序。
 
 ### 4.3 状态机
 
@@ -273,6 +345,10 @@ S4/S5 只依赖 §4.4 的 **API 签名**，不依赖 S3 的实现——签名已
 ---
 
 ## 6. 各 Stream 详细任务
+
+> **传输层已于 2026-09-01 改为 socket（§2.1.2）**。下文 S2/S3 里关于 `status.json`、
+> `TaskFolderWatcher`、`seq`、原子写的描述是首轮实现的分工记录，**已被取代**，保留只为
+> 说明当时为什么这样分。现行契约以 §4 为准。
 
 ### S1 — env 注入
 
@@ -461,8 +537,8 @@ lightty 在前台且该 pane 可见时**不**发通知；拒绝通知权限后�
 | 重蹈 `LIGHTTY_TASK` 被移除的覆辙 | 白做一轮 | S1 开工前先搞清历史原因（§2.3） |
 | `withCValue` 里 C 字符串生命周期弄错 | 传给内核野指针，随机崩 | 已确认只需活过 `ghostty_surface_new`；ASan 跑一遍 |
 | 破坏用户既有 `~/.claude/settings.json` | 用户现有 hook 全丢，信任崩塌 | 备份 + 合并而非覆盖 + 解析失败即放弃 |
-| 忘了原子写 | watcher 完全不触发，功能静默失效 | 已在契约里写死；helper 加单测 |
-| watcher 回调没回主线程 | UI 从后台线程更新，随机崩 | 契约里写死；code review 必查 |
+| ~~忘了原子写~~ | ~~watcher 完全不触发~~ | 已随 socket 方案消解（§2.1.2）：不再有文件与 watcher |
+| socket 收包回调没回主线程 | UI 从后台线程更新，随机崩 | 契约里写死；store 有 `assert(Thread.isMainThread)` |
 | 走 `reload()` 更新侧栏 | 高频拆建，闪烁 + 卡顿 | 契约要求行内更新 |
 | 加宽 dot 破坏灵动岛对齐 | 视觉回归，morph 动画错位 | S4 任务里写死「绝不加宽」 |
 | Codex trust 提示把用户吓到 | 以为 lightty 在装奇怪东西 | 安装 UI 事先说明；文档写清楚 |
@@ -472,18 +548,22 @@ lightty 在前台且该 pane 可见时**不**发通知；拒绝通知权限后�
 
 ---
 
-## 8. 第二期预告（本期不做，但别把路堵死）
+## 8. handoff 注入（已落地）
 
 复用同一条链路做 handoff 注入：
 
-- lightty bind task 时写 `~/.lightty/panes/<uuid>/task`（一行绝对路径）
-- helper 在 `SessionStart` 时读它，把 handoff 正文塞进
-  `hookSpecificOutput.additionalContext`
-- 于是 agent 开场就知道任务上下文，**不需要任何指令遵循**，
-  `Restore` 按钮的注入流程可以退役
+- lightty bind / 新建 / 改名任务时写 `~/.lightty/panes/<uuid>/task`（一行绝对路径），
+  解绑时删
+- helper 在 `SessionStart` 读它，把 handoff 正文塞进
+  `hookSpecificOutput.additionalContext`——agent 开场就知道任务上下文，
+  **不需要任何指令遵循**
+- helper 在 `UserPromptSubmit` 也读它：先开 agent 再绑任务是常态，不能只靠开场那一发。
+  去重标记 `handoff.injected` 记 `<session_id>\n<path>`，任一变了才重注
+  （改名换路径 → 重注，agent 需要新的回写地址；同会话重复提问 → 不重注）。
+  两家的 `UserPromptSubmit` 都接受 `additionalContext`，wire 与 `SessionStart` 完全一致
+- 解绑时 lightty 连去重标记一起删：否则同会话解绑再绑回同一任务会被当成已注过
 
-本期要留的口子：helper 已在处理 `SessionStart`，加 `additionalContext` 只是多输出
-一个字段；目录布局已给 `task` 留了位置。
+`Restore` 按钮的注入流程由此退役。
 
 ---
 

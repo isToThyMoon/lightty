@@ -606,6 +606,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard focused, let self, let pane else { return }
             self.lastFocusedPane = pane
             self.updateWindowTitle(for: pane)
+            // 「已完成」是唯一粘滞的状态，它的语义是**未读**——用户看到了就该消。
+            // 焦点落到这个 pane 上就是"看到了"最直接的证据（docs/specs/pane-status.md
+            // §4.3）。不清的话，下次这个 pane 再跑完就不构成状态跳变，提醒会漏发。
+            PaneStatusStore.shared.markRead(pane.dragIdentifier)
         }
     }
 
@@ -1269,6 +1273,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func dismissSearchPalette() {
         searchPalette?.removeFromSuperview()
         searchPalette = nil
+        activePane?.focusTerminal()
+    }
+
+    // MARK: - hook 安装引导
+
+    private var hookSetupOverlay: HookSetupOverlay?
+
+    /// 与搜索浮层同款挂载：themeFrame + autoresizing。挂 contentView 会被侧栏盖住，
+    /// 建约束会反向驱动窗口尺寸。
+    func presentHookSetup() {
+        guard hookSetupOverlay == nil,
+              let themeFrame = window?.contentView?.superview else { return }
+        let overlay = HookSetupOverlay()
+        overlay.onDismiss = { [weak self] in self?.dismissHookSetup() }
+        overlay.frame = themeFrame.bounds
+        overlay.autoresizingMask = [.width, .height]
+        themeFrame.addSubview(overlay)
+        hookSetupOverlay = overlay
+    }
+
+    private func dismissHookSetup() {
+        hookSetupOverlay?.removeFromSuperview()
+        hookSetupOverlay = nil
         activePane?.focusTerminal()
     }
 

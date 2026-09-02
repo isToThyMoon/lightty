@@ -16,7 +16,7 @@ final class PaneView: NSView {
 
     let header = PaneHeaderView()
     let terminal: TerminalSurfaceView
-    let dragIdentifier = UUID()
+    let dragIdentifier: UUID
     private(set) var binding: Binding = .unnamed
     private var terminalSearchBar: TerminalSearchBar?
     private var searchSelected: Int?
@@ -34,7 +34,16 @@ final class PaneView: NSView {
     private static var paneCounter = 0
 
     init(surfaceConfiguration: TerminalSurfaceConfiguration = .init()) {
-        terminal = TerminalSurfaceView(configuration: surfaceConfiguration)
+        let paneID = UUID()
+        dragIdentifier = paneID
+        // pane 身份下发给 shell：agent 的 hook 是 shell 的孙进程，环境变量沿进程树
+        // 继承，hook 据此找到本 pane 的运行时目录（状态回写 + handoff 指针读取）。
+        var configuration = surfaceConfiguration
+        configuration.envVars["LIGHTTY_PANE_ID"] = paneID.uuidString
+        // 状态走 datagram socket 推送，不落文件（状态是用完即弃的中间态）。
+        // 路径按本实例 pid 命名，随 spawn 下发——多实例各收各的。
+        configuration.envVars["LIGHTTY_SOCK"] = PaneRuntimeDirectory.socketPath().path
+        terminal = TerminalSurfaceView(configuration: configuration)
         Self.paneCounter += 1
         super.init(frame: .zero)
         header.title = L("Terminal %d", Self.paneCounter)
@@ -83,6 +92,21 @@ final class PaneView: NSView {
             guard let self else { return }
             self.onClose?(self)
         }
+
+        // 运行时目录 + 状态监听。放在 init 而不是各个关闭路径的对称位置，是因为
+        // pane 的死法有好几种（✕、cmd+W、关 tab、关窗、shell 退出），deinit 是唯一
+        // 能一网打尽的点；跨窗口拖动时 PaneView 本体存活，不会误触发。
+        PaneStatusStore.shared.attach(paneID)
+    }
+
+    deinit {
+        let paneID = dragIdentifier
+        // deinit 不保证在主线程；store 是主线程独占的
+        if Thread.isMainThread {
+            PaneStatusStore.shared.detach(paneID)
+        } else {
+            DispatchQueue.main.async { PaneStatusStore.shared.detach(paneID) }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -94,6 +118,7 @@ final class PaneView: NSView {
         header.dot = .active
         header.injectEnabled = true
         header.finishLooksEnabled = true
+        syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -106,6 +131,7 @@ final class PaneView: NSView {
         header.dot = .unnamed
         header.injectEnabled = false
         header.finishLooksEnabled = false
+        syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
@@ -117,7 +143,27 @@ final class PaneView: NSView {
         guard case .bound = binding else { return }
         binding = .bound(fileURL: newURL)
         header.setTaskName(name)
+        syncTaskPointer()
         refreshIdentityPanel()
+    }
+
+    /// 把当前绑定的任务文件路径写进 pane 运行时目录，供 agent hook 读取并注入上下文
+    /// （docs/specs/pane-status.md §8）。hook 在 SessionStart 与 UserPromptSubmit 都会查，
+    /// 所以先开 agent 再绑/新建/改名也能拿到。解绑时删掉指针，连同 hook 的去重标记：
+    /// 否则同一会话里解绑再绑回同一任务，hook 会以为已经注过而跳过。
+    ///
+    /// 改名走 TaskStore 的移动语义，路径会变——所以 bind/unbind/rename 三处都要同步，
+    /// 否则 hook 会读到一个已经不存在的路径。
+    private func syncTaskPointer() {
+        let paneID = dragIdentifier.uuidString
+        let pointer = PaneRuntimeDirectory.taskPointerFile(for: paneID)
+        guard let url = taskFileURL else {
+            try? FileManager.default.removeItem(at: pointer)
+            try? FileManager.default.removeItem(at: PaneRuntimeDirectory.handoffMarkerFile(for: paneID))
+            return
+        }
+        try? PaneRuntimeDirectory.create(paneID: paneID)
+        try? PaneRuntimeDirectory.atomicWrite(Data((url.path + "\n").utf8), to: pointer)
     }
 
     var taskFileURL: URL? {

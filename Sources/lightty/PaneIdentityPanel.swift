@@ -60,7 +60,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private var foreground = NSColor.white
     private var background = NSColor.black
     private var boundTaskName: String?
-    private var dotColor = NSColor.systemGray
+    private var dotColor = ShellStyle.dormantAccent
+    /// agent 活动状态色。一旦设了就压过 `dotColor`——后者由 PaneView 在
+    /// bind/unbind/rename 时传进来，那条路径不知道状态，会把状态色刷掉。
+    private var statusDotColor: NSColor?
 
     var currentIslandHeight: CGFloat {
         listOpen ? Self.baseHeight + listHeight : Self.baseHeight
@@ -232,16 +235,32 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         applyColors()
     }
 
+    /// 由 `PaneHeaderView` 在状态变化时直接推入（面板挂在窗口 contentView 上，
+    /// 不在 pane 子树里，header 用「胶囊隐身」这个标记定位到展开中的面板）。
+    /// `nil` = 回到绑定态静态配色。
+    func applyStatusDot(_ color: NSColor?) {
+        guard statusDotColor != color else { return }
+        statusDotColor = color
+        applyColors()
+    }
+
     func applyTerminalTheme(background: NSColor, foreground: NSColor) {
         self.background = background
         self.foreground = foreground
         applyColors()
     }
 
+    /// 状态色是 shellDynamic，layer 上的 CGColor 只是快照，明暗切换必须重解析。
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
     private func applyColors() {
         island.layer?.backgroundColor = background.cgColor
         island.layer?.borderColor = foreground.withAlphaComponent(0.14).cgColor
-        dotView.layer?.backgroundColor = dotColor.cgColor
+        dotView.layer?.backgroundColor = (statusDotColor ?? dotColor)
+            .shellResolvedCGColor(for: effectiveAppearance)
         separator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         listSeparator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         nameField.textColor = foreground

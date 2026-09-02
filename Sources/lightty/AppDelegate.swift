@@ -18,8 +18,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         }
         buildMenu()
-        AppState.shared.newWindow()
+        // 重链 shim + 重新生成插件源目录。
+        // hook 注册的是 ~/.lightty/bin/lightty-hook 这个固定路径，真实 helper 在
+        // app bundle 里，用户把 app 挪个位置绝对路径就断了。而两家都在安装时**拷贝**
+        // 插件，所以重新生成不改变已装插件的行为——它保证的是升级 lightty 后
+        // needsUpdate 有个正确的对照物。内容没变则不落盘。
+        HookInstaller.refresh()
+        // agent 状态呈现：菜单栏聚合态 + 跑完/需要介入时的系统通知。
+        // 两者都幂等、都不在这里申请通知权限（首次真要发通知时才问）。
+        StatusBarController.shared.install()
+        PaneNotifier.shared.install()
+        // 把状态推给 pane 头与工作区侧栏。做成外部推送而不是每个 pane 自己订阅，
+        // 是为了让 PaneView 不需要知道状态体系的存在。
+        PaneStatusPresenter.shared.install()
+        // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
+        // LIGHTTY_SOCK，agent 随时可能打第一发；socket 没绑好那一发就发进虚空。
+        PaneStatusStore.shared.start()
+        let first = AppState.shared.newWindow()
         NSApp.activate(ignoringOtherApps: true)
+        // 主动引导：装了 agent 却没装 hook 时才弹，且只弹一次（用户按「暂不」后
+        // 只走菜单）。推到下一个 runloop tick：蒙层挂在 themeFrame 上，同步调用时
+        // 窗口未必已经建好视图树，guard 不满足就会**静默不弹**——那种"看起来没坏
+        // 但功能不见了"的失败最难查。顺带让窗口先完成出现动画。
+        DispatchQueue.main.async {
+            HookSetupOverlay.presentIfNeeded(in: first)
+        }
     }
 
     /// ⇧⇧ 双击呼出全文搜索浮层。选修饰键双击是因为终端键位（cmd+K/P 等）
@@ -57,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
+        // 但干净退出不该给下一次启动留活。
+        PaneStatusStore.shared.stop()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // 面板可能还开着；跟随 Ghostty 习惯：最后一个终端窗口关掉即退出
         true
@@ -80,6 +109,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check.target = updaterController
             appMenu.addItem(check)
         }
+        appMenu.addItem(.separator())
+        appMenu.addItem(makeItem(L("Agent status hooks"), #selector(showHookSetup)))
+        // 菜单栏状态项可以被它自己的菜单关掉，关掉后就没有入口再打开了——
+        // 这里是唯一的复位开关，不能省。
+        let statusBarToggle = NSMenuItem(
+            title: L("Show in Menu Bar"),
+            action: #selector(StatusBarController.toggleEnabled(_:)),
+            keyEquivalent: "")
+        statusBarToggle.target = StatusBarController.shared
+        appMenu.addItem(statusBarToggle)
         appMenu.addItem(.separator())
         // 菜单只提供鼠标入口。包括退出在内的键盘动作都必须先进
         // surface，再由 libghostty 按全局 config keybind 决定是否回调壳层。
@@ -149,4 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
+
+    @objc private func showHookSetup() {
+        guard let controller = AppState.shared.keyWindowController else { return }
+        HookSetupOverlay.present(in: controller)
+    }
 }

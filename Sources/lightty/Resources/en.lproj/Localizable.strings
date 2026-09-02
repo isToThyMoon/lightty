@@ -83,3 +83,80 @@
 "New task “%@”" = "New task “%@”";
 "Return" = "Return";
 "Unbind" = "Unbind";
+
+/* agent 状态：菜单栏与通知 */
+"Pane status" = "Pane status";
+"Window %d" = "Window %d";
+"No panes" = "No panes";
+"Mark All as Read" = "Mark All as Read";
+"Show in Menu Bar" = "Show in Menu Bar";
+"Pane" = "Pane";
+"Menu bar status hidden" = "Menu bar status hidden";
+"You can show it again from the lightty menu." = "You can show it again from the lightty menu.";
+"Agent finished" = "Agent finished";
+"Needs your attention" = "Needs your attention";
+"%d agents finished" = "%d agents finished";
+"%d panes need your attention" = "%d panes need your attention";
+
+/* agent 状态：hook 安装器 */
+"Agent status hooks" = "Agent status hooks";
+"Claude Code" = "Claude Code";
+"Codex" = "Codex";
+"Currently points at %@" = "Currently points at %@";
+"The helper is missing — expected at %@. Reinstall lightty, or build the lightty-hook target if you are running from source." = "The helper is missing — expected at %@. Reinstall lightty, or build the lightty-hook target if you are running from source.";
+"Could not refresh the helper link: %@" = "Could not refresh the helper link: %@";
+"Already up to date — nothing was changed." = "Already up to date — nothing was changed.";
+"Could not write %@ (%@)." = "Could not write %@ (%@).";
+"The hook helper is not available at %@ yet." = "The hook helper is not available at %@ yet.";
+"Install" = "Install";
+"Uninstall" = "Uninstall";
+"Not found on this Mac" = "Not found on this Mac";
+"Hook installed" = "Hook installed";
+"Partly installed — missing: %@" = "Partly installed — missing: %@";
+
+/* agent 状态：pane 头提示 */
+"Agent is thinking" = "Agent is thinking";
+"Running %@" = "Running %@";
+"Agent is working" = "Agent is working";
+"Agent needs your input" = "Agent needs your input";
+
+/* agent 状态：安装引导蒙层 */
+"Know when your agents finish" = "Know when your agents finish";
+"You can reopen this any time from the lightty menu." = "You can reopen this any time from the lightty menu.";
+"Not now" = "Not now";
+"Done" = "Done";
+
+/* agent 状态：安装引导蒙层（补充） */
+"Details" = "Details";
+"Registered command:" = "Registered command:";
+"Not installed" = "Not installed";
+"Config unreadable, lightty will not touch it (%@)" = "Config unreadable, lightty will not touch it (%@)";
+" · Codex will ask you to approve this on its next run" = " · Codex will ask you to approve this on its next run";
+
+/* agent 状态：插件式注册 */
+"Update" = "Update";
+"Installing…" = "Installing…";
+"Updating…" = "Updating…";
+"Removing…" = "Removing…";
+"Removed." = "Removed.";
+" · An update is available" = " · An update is available";
+"Installed. Restart claude/codex in your panes to pick it up." = "Installed. Restart claude/codex in your panes to pick it up.";
+"Updated. Restart claude/codex in your panes to pick it up." = "Updated. Restart claude/codex in your panes to pick it up.";
+"The %@ command was not found on this Mac." = "The %@ command was not found on this Mac.";
+"“%@” did not finish within %ds. You can run it yourself to see why." = "“%@” did not finish within %ds. You can run it yourself to see why.";
+"“%@” failed. Nothing was changed." = "“%@” failed. Nothing was changed.";
+"“%@” failed: %@" = "“%@” failed: %@";
+"Could not read %@ to check the current state (%@)." = "Could not read %@ to check the current state (%@).";
+"Could not read the current state — unrecognised config shape (%@)." = "Could not read the current state — unrecognised config shape (%@).";
+
+/* agent 状态：引导蒙层文案（插件路线）*/
+"Plugin source:" = "Plugin source:";
+"%@ · commands lightty will run" = "%@ · commands lightty will run";
+"lightty ships a small plugin and asks claude/codex to install it with their own CLI. lightty never edits your agent config itself." = "lightty ships a small plugin and asks claude/codex to install it with their own CLI. lightty never edits your agent config itself.";
+"The plugin is generated under ~/.lightty and registered by your agent’s own CLI — lightty does not write your agent config. Uninstall removes it the same way. Status files stay under ~/.lightty and are never uploaded." = "The plugin is generated under ~/.lightty and registered by your agent’s own CLI — lightty does not write your agent config. Uninstall removes it the same way. Status files stay under ~/.lightty and are never uploaded.";
+
+/* agent 状态：侧栏行的状态文字 */
+"Thinking" = "Thinking";
+"Working" = "Working";
+"Needs you" = "Needs you";
+"Finished" = "Finished";

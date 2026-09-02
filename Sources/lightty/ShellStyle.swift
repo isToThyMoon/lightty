@@ -1,4 +1,5 @@
 import AppKit
+import LighttyCore
 
 /// lightty 应用壳层的视觉语言。
 ///
@@ -32,6 +33,23 @@ enum ShellStyle {
     /// 侧栏开合专用：ease-in-out cubic（实测手感优于 easeOutExpo）
     static let sidebarAnimationDuration: TimeInterval = 0.28
 
+    // MARK: Motion
+
+    /// easeInOutCubic 的 CA 版本：与侧栏动画手写的那条缓动曲线同一条，
+    /// 只是这里交给 Core Animation 求值（呼吸动画不需要逐帧重排，没必要上 display link）。
+    static var easeInOutCubic: CAMediaTimingFunction {
+        CAMediaTimingFunction(controlPoints: 0.65, 0, 0.35, 1)
+    }
+
+    /// 「思考中」呼吸的半程时长。刻意慢：这个动画会在 agent 工作的整段时间里
+    /// 一直跑，比人眼的「注意」阈值慢一档才不会一直勾着余光。
+    static let statusBreathDuration: TimeInterval = 1.5
+    /// 「执行工具」呼吸半程：比思考快一点点，表达「更活跃」，但仍在余光阈值以下。
+    static let statusToolBreathDuration: TimeInterval = 1.0
+    /// `done` 落地时的三拍闪烁——全套状态动效里唯一一处主动抢注意力的，
+    /// 而且是一次性的（不循环），看见即止。
+    static let statusDonePulseDuration: TimeInterval = 0.9
+
     // MARK: Palette（明暗动态色：浅色为 Codex 参考，深色为配套暖灰紫）
 
     /// 与侧栏同色，拼成一体的应用 chrome；保持完全不透明，不继承 terminal opacity。
@@ -52,6 +70,55 @@ enum ShellStyle {
     static let actionFill = NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
     static let actionHoverFill = NSColor.shellDynamic(light: 0x242321, dark: 0xF8F6FA)
     static let actionText = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
+
+    // MARK: 状态色（pane 活动状态 / 任务绑定态）
+
+    // 圆点配色以前在 5 个地方各写各的（pane 头、工作区侧栏行、任务侧栏、搜索浮层、
+    // 灵动岛），加状态色时必须先收敛成一处，否则每加一个态就要改五遍、必漏。
+
+    /// 已绑定任务 / 任务处于活跃状态的强调色。沿用系统绿——收敛不改观感。
+    static let boundAccent = NSColor.systemGreen
+    /// 未绑定 / 休眠。沿用系统灰。
+    static let dormantAccent = NSColor.systemGray
+
+    // 下面五个是 agent 活动状态色。选色的约束有两条：
+    // 1. 要同时压在壳层暖灰底和任意 terminal 底色上都读得出来，所以明暗两套都给足彩度；
+    // 2. thinking / tool 同属「还在跑」，刻意用同一蓝族只差一档亮度——它们的区别
+    //    对用户不重要；真正要一眼分开的是「还在跑 / 要你 / 跑完了」这三类。
+    //    腾出来的色相留给后两者，让它们离得足够远。
+
+    /// 无活跃 turn。比 `dormantAccent` 暖一点，表示「hook 接上了，只是没在跑」。
+    static let statusIdle = NSColor.shellDynamic(light: 0x8E8A87, dark: 0x817C86)
+    /// 思考中：冷静的蓝，能长时间挂在眼角。
+    static let statusThinking = NSColor.shellDynamic(light: 0x4E6EF2, dark: 0x7E9BFF)
+    /// 执行工具：同蓝族偏青一档，「更活跃」但不换语义。
+    static let statusTool = NSColor.shellDynamic(light: 0x1E8FD0, dark: 0x55BAF0)
+    /// 需要你介入：琥珀，通用的「卡住等人」色。
+    static let statusAttention = NSColor.shellDynamic(light: 0xC97A08, dark: 0xF2A93B)
+    /// 跑完未读：品红。刻意跳出整套暖灰/绿/蓝——它的唯一职责就是被看见，
+    /// 尤其不能跟「已绑定」的绿撞色，否则从绿变绿等于没变。
+    static let statusDone = NSColor.shellDynamic(light: 0xC9227E, dark: 0xFF71B8)
+
+    static func statusColor(for activity: PaneActivity) -> NSColor {
+        switch activity {
+        case .idle: return statusIdle
+        case .thinking: return statusThinking
+        case .tool: return statusTool
+        case .attention: return statusAttention
+        case .done: return statusDone
+        }
+    }
+
+    /// 所有圆点的唯一取色入口。
+    ///
+    /// `nil` 与 `.idle` 都回落到绑定态配色，而不是 `statusIdle`：没有 agent 在跑时
+    /// 整个应用必须和这个功能上线前长得一模一样，「装了 hook」不该改变静息观感。
+    static func dotColor(bound: Bool, activity: PaneActivity?) -> NSColor {
+        guard let activity, activity != .idle else {
+            return bound ? boundAccent : dormantAccent
+        }
+        return statusColor(for: activity)
+    }
 }
 
 extension NSColor {
@@ -156,7 +223,10 @@ final class ShellTextButton: NSButton {
 
     private let emphasis: Emphasis
     private let palette: Palette
-    private let label: String
+    /// 改文字必须走这里，**不要设 `title`**：上色是通过 `attributedTitle` 做的，
+    /// 而设 `title` 会把 attributedTitle 连同前景色一起清掉，按钮退回系统默认黑字
+    /// （深底上就读不出来了）。
+    var label: String { didSet { updateAppearance() } }
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { updateAppearance() } }
 
