@@ -10,6 +10,19 @@
 "Close Pane" = "Close Pane";
 "Workspace Sidebar" = "Workspace Sidebar";
 "Use Lightty Theme" = "Use Lightty Theme";
+"Download Maple Mono NF CN…" = "Download Maple Mono NF CN…";
+"Preview Font Download…" = "Preview Font Download…";
+"Previewing Font Download" = "Previewing Font Download";
+"Preview mode makes no network request and changes no font files." = "Preview mode makes no network request and changes no font files.";
+"Font download preview complete" = "Font download preview complete";
+"The preview completed without network or filesystem changes." = "The preview completed without network or filesystem changes.";
+"Downloading font…" = "Downloading font…";
+"Installing Maple Mono NF CN" = "Installing Maple Mono NF CN";
+"The verified font will be installed in ~/Library/Fonts and will be available to other apps." = "The verified font will be installed in ~/Library/Fonts and will be available to other apps.";
+"Verifying and installing…" = "Verifying and installing…";
+"Font installed" = "Font installed";
+"Maple Mono NF CN is now available to Lightty and other apps." = "Maple Mono NF CN is now available to Lightty and other apps.";
+"Could not install font" = "Could not install font";
 
 /* 通用 */
 "OK" = "OK";

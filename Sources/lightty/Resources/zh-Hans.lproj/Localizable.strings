@@ -10,6 +10,19 @@
 "Close Pane" = "关闭 pane";
 "Workspace Sidebar" = "工作区侧栏";
 "Use Lightty Theme" = "使用 Lightty 内置主题";
+"Download Maple Mono NF CN…" = "下载 Maple Mono NF CN…";
+"Preview Font Download…" = "预览字体下载…";
+"Previewing Font Download" = "预览字体下载";
+"Preview mode makes no network request and changes no font files." = "预览模式不会发起网络请求，也不会修改字体文件。";
+"Font download preview complete" = "字体下载预览完成";
+"The preview completed without network or filesystem changes." = "预览已完成，没有产生网络请求或文件系统修改。";
+"Downloading font…" = "正在下载字体…";
+"Installing Maple Mono NF CN" = "正在安装 Maple Mono NF CN";
+"The verified font will be installed in ~/Library/Fonts and will be available to other apps." = "校验通过后会安装到 ~/Library/Fonts，其他应用也可以使用。";
+"Verifying and installing…" = "正在校验并安装…";
+"Font installed" = "字体已安装";
+"Maple Mono NF CN is now available to Lightty and other apps." = "Maple Mono NF CN 现在可供 Lightty 和其他应用使用。";
+"Could not install font" = "无法安装字体";
 
 /* 通用 */
 "OK" = "确认";

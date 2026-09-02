@@ -8,6 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var shiftTapMonitor: Any?
     private var lastShiftTap: TimeInterval = 0
+    private weak var fontDownloadMenuItem: NSMenuItem?
+    private var fontDownloadAlert: NSAlert?
+    private var fontDownloadDidFinish = false
+    private let fontDownloadPreview = TerminalFontDownloadPreview()
+    private var isFontDownloadPreviewMode = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         GhosttyRuntime.shared = GhosttyRuntime()
@@ -99,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
+        appMenu.delegate = self
         appMenuItem.submenu = appMenu
         appMenu.addItem(withTitle: L("About lightty"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         if let updaterController {
@@ -118,6 +124,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         themeToggle.target = self
         themeToggle.state = TerminalThemePreference.usesBuiltInTheme() ? .on : .off
         appMenu.addItem(themeToggle)
+        let fontDownload = NSMenuItem(
+            title: L("Download Maple Mono NF CN…"),
+            action: #selector(downloadLighttyFont(_:)),
+            keyEquivalent: "")
+        fontDownload.target = self
+        appMenu.addItem(fontDownload)
+        fontDownloadMenuItem = fontDownload
+        updateFontMenuItems()
         // 菜单栏状态项可以被它自己的菜单关掉，关掉后就没有入口再打开了——
         // 这里是唯一的复位开关，不能省。
         let statusBarToggle = NSMenuItem(
@@ -203,8 +217,143 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GhosttyRuntime.shared.reloadGlobalConfig()
     }
 
+    @objc private func downloadLighttyFont(_ sender: NSMenuItem) {
+        TerminalFontManager.shared.refreshAvailability()
+        updateFontMenuItems()
+        guard isFontDownloadPreviewMode
+                || !TerminalFontManager.shared.isLighttyFontAvailable
+        else { return }
+        guard let controller = AppState.shared.keyWindowController else { return }
+        presentFontDownload(in: controller, preview: isFontDownloadPreviewMode)
+    }
+
+    private func updateFontMenuItems() {
+        let manager = TerminalFontManager.shared
+        fontDownloadMenuItem?.title = isFontDownloadPreviewMode
+            ? L("Preview Font Download…")
+            : L("Download Maple Mono NF CN…")
+        fontDownloadMenuItem?.isHidden = manager.isLighttyFontAvailable
+            && !isFontDownloadPreviewMode
+        fontDownloadMenuItem?.isEnabled = !manager.isDownloading && !fontDownloadPreview.isRunning
+    }
+
+    private func presentFontDownload(
+        in controller: TerminalWindowController,
+        preview: Bool
+    ) {
+        guard let window = controller.window,
+              window.attachedSheet == nil,
+              !TerminalFontManager.shared.isDownloading,
+              !fontDownloadPreview.isRunning
+        else { return }
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
+        let label = NSTextField(labelWithString: L("Downloading font…"))
+        label.frame = NSRect(x: 0, y: 26, width: 320, height: 18)
+        let progress = NSProgressIndicator(frame: NSRect(x: 0, y: 4, width: 320, height: 14))
+        progress.minValue = 0
+        progress.maxValue = 1
+        progress.isIndeterminate = false
+        accessory.addSubview(label)
+        accessory.addSubview(progress)
+
+        let alert = NSAlert()
+        alert.messageText = preview
+            ? L("Previewing Font Download")
+            : L("Installing Maple Mono NF CN")
+        alert.informativeText = preview
+            ? L("Preview mode makes no network request and changes no font files.")
+            : L("The verified font will be installed in ~/Library/Fonts and will be available to other apps.")
+        alert.accessoryView = accessory
+        alert.addButton(withTitle: L("Cancel"))
+        fontDownloadAlert = alert
+        fontDownloadDidFinish = false
+        updateFontMenuItems()
+
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            guard let self, !self.fontDownloadDidFinish else { return }
+            if preview { self.fontDownloadPreview.cancel() }
+            else { TerminalFontManager.shared.cancelDownload() }
+        }
+
+        let phaseHandler: (TerminalFontDownloadPhase) -> Void = { phase in
+            switch phase {
+            case .downloading(let fraction):
+                progress.isIndeterminate = false
+                progress.stopAnimation(nil)
+                progress.doubleValue = fraction
+            case .installing:
+                label.stringValue = L("Verifying and installing…")
+                progress.isIndeterminate = true
+                progress.startAnimation(nil)
+                // 下载阶段可以安全取消；进入校验/原子替换后只剩很短的一段，
+                // 中途打断反而可能留下不完整的用户字体组合。
+                alert.buttons.first?.isEnabled = false
+            }
+        }
+        let completionHandler: (Result<Void, Error>) -> Void = { [weak self, weak window] result in
+            guard let self else { return }
+            self.fontDownloadDidFinish = true
+            if let window, window.attachedSheet == alert.window {
+                window.endSheet(alert.window)
+            }
+            self.fontDownloadAlert = nil
+            self.updateFontMenuItems()
+
+            switch result {
+            case .success:
+                if preview {
+                    self.presentFontResult(
+                        title: L("Font download preview complete"),
+                        detail: L("The preview completed without network or filesystem changes."),
+                        in: window)
+                } else {
+                    GhosttyRuntime.shared.reloadGlobalConfig()
+                    self.presentFontResult(
+                        title: L("Font installed"),
+                        detail: L("Maple Mono NF CN is now available to Lightty and other apps."),
+                        in: window)
+                }
+            case .failure(TerminalFontDownloadError.cancelled):
+                break
+            case .failure(let error):
+                self.presentFontResult(
+                    title: L("Could not install font"),
+                    detail: error.localizedDescription,
+                    in: window)
+            }
+        }
+        if preview {
+            fontDownloadPreview.start(
+                progress: phaseHandler,
+                completion: completionHandler)
+        } else {
+            TerminalFontManager.shared.download(
+                progress: phaseHandler,
+                completion: completionHandler)
+        }
+        updateFontMenuItems()
+    }
+
+    private func presentFontResult(title: String, detail: String, in window: NSWindow?) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.addButton(withTitle: L("OK"))
+        if let window { alert.beginSheetModal(for: window) }
+        else { alert.runModal() }
+    }
+
     @objc private func showHookSetup() {
         guard let controller = AppState.shared.keyWindowController else { return }
         HookSetupOverlay.present(in: controller)
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        isFontDownloadPreviewMode = NSEvent.modifierFlags.contains(.option)
+        TerminalFontManager.shared.refreshAvailability()
+        updateFontMenuItems()
     }
 }

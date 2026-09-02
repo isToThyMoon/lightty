@@ -30,6 +30,30 @@ for resource in lightty-default.ghostty lightty-theme.ghostty; do
         exit 1
     fi
 done
+if ! rg -q '^[[:space:]]*font-family[[:space:]]*=[[:space:]]*"Maple Mono NF CN"' \
+    "$ROOT/Sources/lightty/Resources/lightty-default.ghostty"; then
+    echo "the bundled Lightty defaults must select Maple Mono NF CN" >&2
+    exit 1
+fi
+FONT_MANAGER="$ROOT/Sources/lightty/TerminalFontManager.swift"
+if rg -n 'applicationSupportDirectory' "$FONT_MANAGER"; then
+    echo "downloaded fonts must use the normal user font installation path" >&2
+    exit 1
+fi
+if ! rg -q 'Library/Fonts' "$FONT_MANAGER"; then
+    echo "downloaded fonts must install to ~/Library/Fonts" >&2
+    exit 1
+fi
+if rg -n 'CTFontManagerRegisterFonts' "$FONT_MANAGER"; then
+    echo "fonts in ~/Library/Fonts must use normal system discovery, not dynamic registration" >&2
+    exit 1
+fi
+FONT_PREVIEW="$ROOT/Sources/lightty/TerminalFontDownloadPreview.swift"
+if rg -n 'URLSession|FileManager|TerminalFontManager|CTFontManager|Library/Fonts' \
+    "$FONT_PREVIEW"; then
+    echo "font download preview must remain memory-only" >&2
+    exit 1
+fi
 if rg -n '^[[:space:]]*appearance[[:space:]]*=' \
     "$ROOT/Sources/lightty/TerminalWindow.swift"; then
     echo "TerminalWindow must not force an appearance onto the terminal host" >&2
