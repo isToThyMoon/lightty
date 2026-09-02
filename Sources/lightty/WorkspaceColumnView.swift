@@ -417,7 +417,7 @@ private final class WorkspaceRowView: NSView {
     }
 }
 
-/// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 状态 badge；
+/// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 轻量状态文字；
 /// 第二行 = 绑定任务 + cwd（路径从头截断，优先保留末级目录）。
 /// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
 /// 内核关闭同路）。
@@ -438,7 +438,6 @@ private final class PaneRowView: NSView {
     private let taskName: String?
     private let taskLabel = NSTextField(labelWithString: "")
     private let directoryLabel = NSTextField(labelWithString: "")
-    private let statusBadge = NSView()
     private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var terminalWorkingDirectory: String?
@@ -509,16 +508,15 @@ private final class PaneRowView: NSView {
         secondaryStack.alignment = .firstBaseline
         secondaryStack.spacing = 4
 
-        statusBadge.wantsLayer = true
-        statusBadge.layer?.cornerRadius = 5
-        statusBadge.isHidden = true
-        statusLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        statusLabel.isHidden = true
+        statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
+        statusLabel.textColor = ShellStyle.secondaryText
         statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusBadge.addSubview(statusLabel)
+        statusLabel.setContentHuggingPriority(.required, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(760), for: .horizontal)
 
-        for v in [dotView, closeButton, nameLabel, statusBadge, secondaryStack] {
+        for v in [dotView, closeButton, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -540,19 +538,10 @@ private final class PaneRowView: NSView {
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
-            statusBadge.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
-            statusBadge.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            statusBadge.heightAnchor.constraint(equalToConstant: 18),
-            statusBadge.trailingAnchor.constraint(
+            statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
+            statusLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
-
-            statusLabel.leadingAnchor.constraint(equalTo: statusBadge.leadingAnchor, constant: 6),
-            statusLabel.trailingAnchor.constraint(equalTo: statusBadge.trailingAnchor, constant: -6),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-            statusLabel.topAnchor.constraint(
-                greaterThanOrEqualTo: statusBadge.topAnchor, constant: 1),
-            statusLabel.bottomAnchor.constraint(
-                lessThanOrEqualTo: statusBadge.bottomAnchor, constant: -1),
 
             // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
             // 路径也能多拿到 13pt 的有效宽度。
@@ -564,7 +553,7 @@ private final class PaneRowView: NSView {
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
         applyDotColor()
-        applyStatusBadge()
+        applyStatusLabel()
         applyMetadataLine()
         applyFill()
     }
@@ -594,7 +583,7 @@ private final class PaneRowView: NSView {
         else { return }
         self.status = status
         applyDotColor()
-        applyStatusBadge()
+        applyStatusLabel()
         applyMetadataLine()
         applyFill()
     }
@@ -602,20 +591,16 @@ private final class PaneRowView: NSView {
     /// 活动状态与 pane 名同在第一行；空闲时隐藏，不用任务名补位。
     ///
     /// **颜色不能单独承担语义**——用户没有图例就是在猜"蓝色是什么意思"。
-    /// 文字说明状态、颜色与圆点同色，两者互相解释；扫读时看色块，
-    /// 停下来时看文字。任务名是稳定信息，固定保留在第二行。
-    private func applyStatusBadge() {
+    /// 圆点负责快速扫色，次级文字负责解释语义；不再铺 badge 底色与当前行
+    /// 高亮争抢视觉重心。任务名是稳定信息，固定保留在第二行。
+    private func applyStatusLabel() {
         if let text = Self.statusText(status) {
-            let color = ShellStyle.statusColor(for: status!.state)
-            statusBadge.isHidden = false
+            statusLabel.isHidden = false
             statusLabel.stringValue = text
-            statusLabel.textColor = color
-            statusBadge.layer?.backgroundColor = color
-                .shellResolvedCGColor(for: effectiveAppearance)
-                .copy(alpha: 0.12)
+            statusLabel.toolTip = text
         } else {
-            statusBadge.isHidden = true
-            statusBadge.layer?.backgroundColor = nil
+            statusLabel.isHidden = true
+            statusLabel.toolTip = nil
         }
     }
 
@@ -673,14 +658,14 @@ private final class PaneRowView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyDotColor()
-        applyStatusBadge()
+        applyStatusLabel()
         applyFill()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyDotColor()
-        applyStatusBadge()
+        applyStatusLabel()
         applyFill()
     }
 
