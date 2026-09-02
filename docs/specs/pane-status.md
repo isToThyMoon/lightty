@@ -236,7 +236,7 @@ UTF-8，单个 datagram ≤ 4KB。datagram 天然保留消息边界，不需要�
 
 | state | 语义 | 触发事件（Claude Code / Codex） |
 |---|---|---|
-| `idle` | 无活跃 turn | `SessionStart`、`SessionEnd` |
+| `idle` | 无活跃 turn | `SessionStart`、`SessionEnd`、Codex `Interrupt` |
 | `thinking` | turn 进行中 | `UserPromptSubmit`、`PostToolUse` |
 | `tool` | 正在执行工具 | `PreToolUse` |
 | `attention` | 需要用户介入 | `Notification` / `PermissionRequest` |

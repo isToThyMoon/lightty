@@ -434,8 +434,9 @@ enum HookAgent: String, CaseIterable, Sendable {
         switch self {
         // Notification 是 Claude Code 侧的「需要用户介入」信号
         case .claudeCode: return shared + ["Notification"]
-        // Codex 侧同语义的事件叫 PermissionRequest
-        case .codex: return shared + ["PermissionRequest"]
+        // Codex 侧同语义的事件叫 PermissionRequest；用户主动停止单独发 Interrupt，
+        // 不会补一发 Stop，漏订阅就会让 pane 永久停在 thinking/tool。
+        case .codex: return shared + ["PermissionRequest", "Interrupt"]
         }
     }
 

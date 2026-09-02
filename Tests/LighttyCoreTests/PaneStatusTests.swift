@@ -80,6 +80,19 @@ final class PaneStatusTests: XCTestCase {
         }
     }
 
+    func testHookEventsMapToActivities() {
+        XCTAssertEqual(PaneActivity(hookEventName: "SessionStart"), .idle)
+        XCTAssertEqual(PaneActivity(hookEventName: "SessionEnd"), .idle)
+        XCTAssertEqual(PaneActivity(hookEventName: "Interrupt"), .idle)
+        XCTAssertEqual(PaneActivity(hookEventName: "UserPromptSubmit"), .thinking)
+        XCTAssertEqual(PaneActivity(hookEventName: "PostToolUse"), .thinking)
+        XCTAssertEqual(PaneActivity(hookEventName: "PreToolUse"), .tool)
+        XCTAssertEqual(PaneActivity(hookEventName: "Notification"), .attention)
+        XCTAssertEqual(PaneActivity(hookEventName: "PermissionRequest"), .attention)
+        XCTAssertEqual(PaneActivity(hookEventName: "Stop"), .done)
+        XCTAssertNil(PaneActivity(hookEventName: "FutureEvent"))
+    }
+
     func testRejectsUnknownSchemaVersion() throws {
         let future = """
             {"v":999,"pane":"6C6F4B2E-9E31-4E2F-9D45-3A1C2B7E5F80",\

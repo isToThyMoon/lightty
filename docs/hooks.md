@@ -51,10 +51,11 @@ codex plugin add lightty@lightty
 ### 注册的事件
 
 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`SessionEnd`，
-外加 Claude Code 的 `Notification` / Codex 的 `PermissionRequest`。
+外加 Claude Code 的 `Notification`，以及 Codex 的 `PermissionRequest` / `Interrupt`。
 
-七个都要，是因为状态机需要完整的进出边：只登记 `Stop` 的话圆点永远不会变成"思考中"；
-漏掉 `PostToolUse`，工具跑完后状态会卡在 `tool` 上不回落。
+这些事件缺一条都会让状态机少一条进出边：只登记 `Stop` 的话圆点永远不会变成"思考中"；
+漏掉 `PostToolUse`，工具跑完后状态会卡在 `tool` 上不回落；Codex 漏掉 `Interrupt`，
+用户主动停止后会一直停在 `thinking` / `tool`。
 
 ### 为什么命令指向 `~/.lightty/bin/`
 

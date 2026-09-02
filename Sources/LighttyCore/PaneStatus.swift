@@ -6,7 +6,7 @@ import Foundation
 /// 那是 agent 临别时手写的一次性判断；这里是机器从 hook 生命周期事件派生的
 /// 实时信号——不滞后、不会撒谎、**用完即弃**（不落盘、不恢复）。
 public enum PaneActivity: String, Codable, Sendable {
-    /// 无活跃 turn（SessionStart / SessionEnd）
+    /// 无活跃 turn（SessionStart / SessionEnd / Interrupt）
     case idle
     /// turn 进行中（UserPromptSubmit / PostToolUse）
     case thinking
@@ -16,6 +16,19 @@ public enum PaneActivity: String, Codable, Sendable {
     case attention
     /// turn 完成且**未读**——唯一的粘滞态，只由 lightty 侧清除
     case done
+
+    /// agent hook 事件到 pane 状态的共享契约。
+    /// 不认识的事件返回 nil：agent 随时可能加新事件，静默跳过才向前兼容。
+    public init?(hookEventName event: String) {
+        switch event {
+        case "SessionStart", "SessionEnd", "Interrupt": self = .idle
+        case "UserPromptSubmit", "PostToolUse": self = .thinking
+        case "PreToolUse": self = .tool
+        case "Notification", "PermissionRequest": self = .attention
+        case "Stop": self = .done
+        default: return nil
+        }
+    }
 }
 
 /// 一发状态报文的**载荷**。信封见 `PaneStatusDatagram`。

@@ -151,6 +151,13 @@ final class HookMarketplaceTests: XCTestCase {
         }
     }
 
+    func testInterruptIsCodexOnly() throws {
+        try generate()
+
+        XCTAssertNil(try hooks("plugins/lightty/hooks/hooks.json")["Interrupt"])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Interrupt"], [shim])
+    }
+
     func testEventKeysArePascalCase() throws {
         try generate()
 

@@ -14,21 +14,6 @@ import LighttyCore
 // 3. **不在 lightty 里跑就当自己不存在**：LIGHTTY_PANE_ID / LIGHTTY_SOCK 任一未设时
 //    零输出、零副作用。用户很可能在 lightty 之外也跑同一个 agent，那时 hook 必须完全隐形。
 
-// MARK: - 事件映射
-
-/// hook 事件名 → pane 状态（§4.3）。事件 key 是 PascalCase，两家一致。
-/// 不认识的事件返回 nil：agent 随时可能加新事件，静默跳过才是向前兼容的做法。
-private func activity(for event: String) -> PaneActivity? {
-    switch event {
-    case "SessionStart", "SessionEnd": return .idle
-    case "UserPromptSubmit", "PostToolUse": return .thinking
-    case "PreToolUse": return .tool
-    case "Notification", "PermissionRequest": return .attention
-    case "Stop": return .done
-    default: return nil
-    }
-}
-
 // MARK: - payload 取值
 
 /// 取非空字符串。空串和纯空白当作「没有」——写进报文只会污染 UI。
@@ -182,7 +167,7 @@ else { exit(0) }
 guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any],
       let event = string(payload["hook_event_name"]),
-      let state = activity(for: event)
+      let state = PaneActivity(hookEventName: event)
 else { exit(0) }
 
 let status = PaneStatus(

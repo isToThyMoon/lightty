@@ -155,7 +155,7 @@ final class HookHandoffTests: XCTestCase {
     func testOtherEventsNeverInject() throws {
         let task = try writeTask(name: "eps", body: "task E")
         try bind(task)
-        for event in ["PreToolUse", "PostToolUse", "Stop", "SessionEnd"] {
+        for event in ["PreToolUse", "PostToolUse", "Stop", "Interrupt", "SessionEnd"] {
             XCTAssertNil(try fire(event, session: "s1"), "\(event) 不该有输出")
         }
     }

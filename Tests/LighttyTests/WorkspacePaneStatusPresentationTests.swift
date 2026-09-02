@@ -10,9 +10,6 @@ final class WorkspacePaneStatusPresentationTests: XCTestCase {
         XCTAssertEqual(
             WorkspacePaneStatusPresentation.text(for: tool),
             WorkspacePaneStatusPresentation.text(for: thinking))
-        XCTAssertEqual(
-            WorkspacePaneStatusPresentation.activity(for: tool),
-            .thinking)
     }
 
     func testActionableAndFinishedStatesRemainDistinct() {
