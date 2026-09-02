@@ -512,7 +512,9 @@ private final class PaneRowView: NSView {
             statusLabel.bottomAnchor.constraint(
                 lessThanOrEqualTo: statusBadge.bottomAnchor, constant: -1),
 
-            secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
+            // 路径也能多拿到 13pt 的有效宽度。
+            secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
                 lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
             secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
