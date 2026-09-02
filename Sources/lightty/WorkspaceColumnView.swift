@@ -214,9 +214,6 @@ final class WorkspaceColumnView: NSView {
                             initial: entry.title, confirmLabel: L("Rename")
                         ) { name in controller.renameTab(at: index, to: name) }
                     },
-                    .action(L("Close workspace"), destructive: true) { [weak self] in
-                        self?.controller?.closeTab(at: index)
-                    },
                 ])
             }
             row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
@@ -280,7 +277,8 @@ private final class ColumnFlippedView: NSView {
 }
 
 /// 工作区行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
-/// disclosure 始终直接切换折叠。双击改名，hover 显示 ⋯ 菜单。
+/// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
+/// 关闭不在菜单里重复出现。
 private final class WorkspaceRowView: NSView {
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
