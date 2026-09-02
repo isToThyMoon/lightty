@@ -176,7 +176,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
 
-            capsule.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            // full-size terminal 会延伸到原生标题栏下；工作区侧栏收起时，左贴的
+            // 身份胶囊会被红黄绿与侧栏开关盖住。按各 pane 自身居中后不再依赖
+            // 窗口左侧安全区，多分屏也各自保持一致的视觉轴。
+            capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
+            capsule.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 20),
             capsule.trailingAnchor.constraint(
