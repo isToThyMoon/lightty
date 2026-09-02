@@ -608,6 +608,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard focused, let self, let pane else { return }
             self.lastFocusedPane = pane
             self.updateWindowTitle(for: pane)
+            self.workspaceSidebar?.applyActivePane(pane.dragIdentifier)
             // 「已完成」是唯一粘滞的状态，它的语义是**未读**——用户看到了就该消。
             // 焦点落到这个 pane 上就是"看到了"最直接的证据（docs/specs/pane-status.md
             // §4.3）。不清的话，下次这个 pane 再跑完就不构成状态跳变，提醒会漏发。

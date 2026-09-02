@@ -4,8 +4,9 @@ import LighttyCore
 /// 双栏侧栏的左栏：工作区 › pane 两级树（cmux 形态的窗口活地图）。
 /// spec: docs/specs/double-sidebar.md。全展开无折叠（单工作区 pane ≤6）。
 /// 工作区行：单击切换、双击改名、hover ⋯ 菜单（重命名/关闭）；
-/// pane 行：单击跨工作区聚焦、hover 时圆点变 ✕（内核关闭同路）、
-/// 附绑定任务名次要色。重命名 pane 唯一入口保持灵动岛，此处不提供。
+/// pane 行：单击跨工作区聚焦并保持 hover 同款激活底色、hover 时出现 ✕
+/// （内核关闭同路）、附绑定任务名次要色。重命名 pane 唯一入口保持灵动岛，
+/// 此处不提供。
 final class WorkspaceColumnView: NSView {
     private let sectionLabel = NSTextField(labelWithString: L("Workspaces"))
     private let newButton = ShellIconButton(
@@ -111,6 +112,13 @@ final class WorkspaceColumnView: NSView {
         }
     }
 
+    /// pane 焦点变化只原地切换行底色，不拆建工作区树。
+    func applyActivePane(_ paneID: UUID?) {
+        for (rowPaneID, row) in paneRows {
+            row.setActive(rowPaneID == paneID)
+        }
+    }
+
     @objc private func scheduleReload() {
         guard !reloadScheduled else { return }
         reloadScheduled = true
@@ -130,13 +138,16 @@ final class WorkspaceColumnView: NSView {
         rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         paneRows.removeAll()
         let overview = controller.workspaceOverview()
+        let activePaneID = controller.activePane?.dragIdentifier
         // 单工作区：工作区层级没有信息量，直接平铺 pane 行（缩进减一级）
         let single = overview.count == 1
         for entry in overview {
             let index = entry.index
             if single {
                 for pane in entry.panes {
-                    add(makePaneRow(for: pane, indented: false))
+                    add(makePaneRow(
+                        for: pane, indented: false,
+                        isActive: pane.dragIdentifier == activePaneID))
                 }
                 continue
             }
@@ -168,7 +179,9 @@ final class WorkspaceColumnView: NSView {
             add(row)
 
             for pane in entry.panes {
-                add(makePaneRow(for: pane, indented: true))
+                add(makePaneRow(
+                    for: pane, indented: true,
+                    isActive: pane.dragIdentifier == activePaneID))
             }
         }
         // 重建后立刻补一次状态：新行默认是静息态，不补会闪一下再变回来
@@ -176,16 +189,22 @@ final class WorkspaceColumnView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
-    private func makePaneRow(for pane: PaneView, indented: Bool) -> PaneRowView {
+    private func makePaneRow(
+        for pane: PaneView,
+        indented: Bool,
+        isActive: Bool
+    ) -> PaneRowView {
         let paneRow = PaneRowView(
             paneID: pane.dragIdentifier,
             name: pane.header.title,
             taskName: pane.header.titleOfBoundTask,
             bound: pane.header.titleOfBoundTask != nil,
-            indented: indented)
+            indented: indented,
+            isActive: isActive)
         paneRow.onSelect = { [weak self, weak pane] in
-            guard let pane else { return }
-            self?.controller?.reveal(pane: pane)
+            guard let self, let pane else { return }
+            self.controller?.reveal(pane: pane)
+            self.applyActivePane(pane.dragIdentifier)
         }
         paneRow.onClose = { [weak pane] in
             pane?.terminal.requestCloseFromUser()
@@ -325,7 +344,8 @@ private final class WorkspaceRowView: NSView {
 }
 
 /// pane 行（叶子级）：缩进一级；绑定态圆点常驻 + pane 名 + 任务名次要色；
-/// hover 时行尾出 ✕（与工作区行的关闭位统一；内核关闭同路）。
+/// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
+/// 内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
 private final class PaneRowView: NSView {
     var onSelect: (() -> Void)?
@@ -344,6 +364,7 @@ private final class PaneRowView: NSView {
     private let taskLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var activity: PaneActivity? { status?.state }
+    private var isActive: Bool
     private var hovered = false {
         didSet {
             applyFill()
@@ -351,10 +372,18 @@ private final class PaneRowView: NSView {
         }
     }
 
-    init(paneID: UUID, name: String, taskName: String?, bound: Bool, indented: Bool) {
+    init(
+        paneID: UUID,
+        name: String,
+        taskName: String?,
+        bound: Bool,
+        indented: Bool,
+        isActive: Bool
+    ) {
         self.paneID = paneID
         self.bound = bound
         self.taskName = taskName
+        self.isActive = isActive
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -419,6 +448,12 @@ private final class PaneRowView: NSView {
 
     @objc private func closeTapped() { onClose?() }
 
+    func setActive(_ active: Bool) {
+        guard isActive != active else { return }
+        isActive = active
+        applyFill()
+    }
+
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
     func applyStatus(_ status: PaneStatus?) {
         // tool 名也要进副标题，所以不能只比 state
@@ -467,7 +502,7 @@ private final class PaneRowView: NSView {
         // hover 优先：指针反馈不能被状态底色吃掉。
         // `done` 给一层极淡的同色底——侧栏是"哪个 pane 完事了"的扫读面，
         // 一个 6pt 的点在满屏行里不够抓眼，整行透一点色才扫得出来。
-        if hovered {
+        if hovered || isActive {
             layer?.backgroundColor = ShellStyle.controlFill
                 .shellResolvedCGColor(for: effectiveAppearance)
         } else if activity == .done {

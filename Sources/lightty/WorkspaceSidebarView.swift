@@ -37,6 +37,7 @@ final class WorkspaceSidebarView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func reload() { column.reload() }
+    func applyActivePane(_ paneID: UUID?) { column.applyActivePane(paneID) }
 
     private func applyColors() {
         layer?.backgroundColor =
