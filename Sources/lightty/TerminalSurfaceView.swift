@@ -86,6 +86,9 @@ final class TerminalSurfaceView: NSView {
     /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
+    var onWorkingDirectoryChange: ((String?) -> Void)?
+
+    private(set) var currentWorkingDirectory: String?
 
     private var trackingArea: NSTrackingArea?
     private var eventMonitor: Any?
@@ -111,6 +114,8 @@ final class TerminalSurfaceView: NSView {
 
     init(configuration: TerminalSurfaceConfiguration = .init()) {
         launchConfiguration = configuration
+        currentWorkingDirectory = Self.normalizedWorkingDirectory(
+            configuration.workingDirectory)
         super.init(frame: .zero)
     }
 
@@ -939,6 +944,24 @@ final class TerminalSurfaceView: NSView {
 
     func setTitle(_ title: String) {
         terminalTitle = title
+    }
+
+    /// core 的 PWD action 来自 OSC 7 / OSC 9 / OSC 1337。OSC 7 在部分 shell
+    /// 配置下仍可能是 file URL，壳层统一收敛成可展示的本地路径。
+    func setWorkingDirectory(_ rawValue: String) {
+        let directory = Self.normalizedWorkingDirectory(rawValue)
+        guard directory != currentWorkingDirectory else { return }
+        currentWorkingDirectory = directory
+        onWorkingDirectoryChange?(directory)
+    }
+
+    private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {
+        guard let rawValue, !rawValue.isEmpty else { return nil }
+        if rawValue.hasPrefix("file://"),
+           let url = URL(string: rawValue), url.isFileURL {
+            return url.path
+        }
+        return rawValue
     }
 
     // MARK: - 密码安全输入

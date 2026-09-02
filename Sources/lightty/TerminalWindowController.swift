@@ -4,6 +4,7 @@ import LighttyCore
 /// 窗口内的一个 tab：固定容器 + pane 树。tab 是 lightty 概念（切换只换主区域
 /// 内容），不是 macOS 原生 tab（那是多 NSWindow 结组，已弃用）。
 final class TerminalTab {
+    let id = UUID()
     /// 固定 wrapper：挂在 contentHost 里，isHidden 控制显隐；
     /// split 重组只替换其内部的树，wrapper 本身与约束不动。
     let container = NSView()
@@ -518,9 +519,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// 工作区列（双栏侧栏左栏）的数据快照：全部工作区 + 各自 pane 叶子序。
-    func workspaceOverview() -> [(index: Int, title: String, isActive: Bool, panes: [PaneView])] {
+    func workspaceOverview() -> [(
+        id: UUID,
+        index: Int,
+        title: String,
+        isActive: Bool,
+        panes: [PaneView]
+    )] {
         tabs.enumerated().map { index, tab in
-            (index, tab.title, index == activeTabIndex, panes(in: tab))
+            (tab.id, index, tab.title, index == activeTabIndex, panes(in: tab))
         }
     }
 
@@ -613,6 +620,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             // 焦点落到这个 pane 上就是"看到了"最直接的证据（docs/specs/pane-status.md
             // §4.3）。不清的话，下次这个 pane 再跑完就不构成状态跳变，提醒会漏发。
             PaneStatusStore.shared.markRead(pane.dragIdentifier)
+        }
+        pane.terminal.onWorkingDirectoryChange = { [weak self, weak pane] directory in
+            guard let self, let pane else { return }
+            self.workspaceSidebar?.applyWorkingDirectory(
+                directory, for: pane.dragIdentifier)
         }
     }
 

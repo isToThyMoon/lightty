@@ -2,11 +2,10 @@ import AppKit
 import LighttyCore
 
 /// 双栏侧栏的左栏：工作区 › pane 两级树（cmux 形态的窗口活地图）。
-/// spec: docs/specs/double-sidebar.md。全展开无折叠（单工作区 pane ≤6）。
-/// 工作区行：单击切换、双击改名、hover ⋯ 菜单（重命名/关闭）；
-/// pane 行：单击跨工作区聚焦并保持 hover 同款激活底色、hover 时出现 ✕
-/// （内核关闭同路）、附绑定任务名次要色。重命名 pane 唯一入口保持灵动岛，
-/// 此处不提供。
+/// spec: docs/specs/double-sidebar.md。工作区可折叠，折叠状态仅当前侧栏会话内保留。
+/// 工作区行：单击切换、点 disclosure 折叠、双击改名、hover ⋯ 菜单；
+/// pane 行：双行展示任务/cwd，单击跨工作区聚焦并保持激活底色，hover 出现 ✕。
+/// 重命名 pane 唯一入口保持灵动岛，此处不提供。
 final class WorkspaceColumnView: NSView {
     private let sectionLabel = NSTextField(labelWithString: L("Workspaces"))
     private let newButton = ShellIconButton(
@@ -19,6 +18,8 @@ final class WorkspaceColumnView: NSView {
     /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
     /// （一次工具调用就有 PreToolUse + PostToolUse 两发），拆建必闪。
     private var paneRows: [UUID: PaneRowView] = [:]
+    /// 工作区没有持久化折叠语义；仅在当前侧栏实例内记忆，reload 不丢。
+    private var collapsedWorkspaceIDs = Set<UUID>()
 
     private var controller: TerminalWindowController? {
         window?.windowController as? TerminalWindowController
@@ -119,6 +120,11 @@ final class WorkspaceColumnView: NSView {
         }
     }
 
+    /// shell 的 OSC PWD 更新只改对应 pane 第二行，不重建工作区树。
+    func applyWorkingDirectory(_ directory: String?, for paneID: UUID) {
+        paneRows[paneID]?.applyWorkingDirectory(directory)
+    }
+
     @objc private func scheduleReload() {
         guard !reloadScheduled else { return }
         reloadScheduled = true
@@ -139,20 +145,24 @@ final class WorkspaceColumnView: NSView {
         paneRows.removeAll()
         let overview = controller.workspaceOverview()
         let activePaneID = controller.activePane?.dragIdentifier
-        // 单工作区：工作区层级没有信息量，直接平铺 pane 行（缩进减一级）
-        let single = overview.count == 1
+        collapsedWorkspaceIDs.formIntersection(overview.map(\.id))
         for entry in overview {
             let index = entry.index
-            if single {
-                for pane in entry.panes {
-                    add(makePaneRow(
-                        for: pane, indented: false,
-                        isActive: pane.dragIdentifier == activePaneID))
-                }
-                continue
-            }
-            let row = WorkspaceRowView(title: entry.title, isActive: entry.isActive)
+            let isCollapsed = collapsedWorkspaceIDs.contains(entry.id)
+            let row = WorkspaceRowView(
+                title: entry.title,
+                isActive: entry.isActive,
+                isCollapsed: isCollapsed)
             row.onSelect = { [weak self] in self?.controller?.selectTab(at: index) }
+            row.onToggleCollapse = { [weak self] in
+                guard let self else { return }
+                if self.collapsedWorkspaceIDs.contains(entry.id) {
+                    self.collapsedWorkspaceIDs.remove(entry.id)
+                } else {
+                    self.collapsedWorkspaceIDs.insert(entry.id)
+                }
+                self.reload()
+            }
             row.onRename = { [weak self, weak row] in
                 guard let self, let anchor = row, let controller = self.controller else { return }
                 NameEditorPopover.present(
@@ -178,6 +188,7 @@ final class WorkspaceColumnView: NSView {
             row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
             add(row)
 
+            guard !isCollapsed else { continue }
             for pane in entry.panes {
                 add(makePaneRow(
                     for: pane, indented: true,
@@ -200,7 +211,8 @@ final class WorkspaceColumnView: NSView {
             taskName: pane.header.titleOfBoundTask,
             bound: pane.header.titleOfBoundTask != nil,
             indented: indented,
-            isActive: isActive)
+            isActive: isActive,
+            workingDirectory: pane.terminal.currentWorkingDirectory)
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
@@ -227,11 +239,13 @@ private final class ColumnFlippedView: NSView {
 /// 工作区行（容器级）：当前高亮、单击切换、双击改名、hover ⋯ 菜单。
 private final class WorkspaceRowView: NSView {
     var onSelect: (() -> Void)?
+    var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
     var onMenu: (() -> Void)?
     var onClose: (() -> Void)?
 
     private let isActive: Bool
+    private let disclosureButton = NSButton()
     private let menuButton = NSButton()
     private let closeButton = NSButton()
     private var tracking: NSTrackingArea?
@@ -243,7 +257,7 @@ private final class WorkspaceRowView: NSView {
         }
     }
 
-    init(title: String, isActive: Bool) {
+    init(title: String, isActive: Bool, isCollapsed: Bool) {
         self.isActive = isActive
         super.init(frame: .zero)
         wantsLayer = true
@@ -253,6 +267,19 @@ private final class WorkspaceRowView: NSView {
         label.font = .systemFont(ofSize: 12, weight: isActive ? .semibold : .medium)
         label.textColor = ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
+
+        let disclosureTitle = isCollapsed ? L("Expand workspace") : L("Collapse workspace")
+        disclosureButton.image = NSImage(
+            systemSymbolName: isCollapsed ? "chevron.right" : "chevron.down",
+            accessibilityDescription: disclosureTitle)?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+        disclosureButton.isBordered = false
+        disclosureButton.imagePosition = .imageOnly
+        disclosureButton.focusRingType = .none
+        disclosureButton.contentTintColor = ShellStyle.secondaryText
+        disclosureButton.target = self
+        disclosureButton.action = #selector(toggleCollapse)
+        disclosureButton.toolTip = disclosureTitle
 
         menuButton.image = NSImage(
             systemSymbolName: "ellipsis", accessibilityDescription: L("More actions"))?
@@ -277,13 +304,17 @@ private final class WorkspaceRowView: NSView {
         closeButton.action = #selector(closeTapped)
         closeButton.toolTip = L("Close workspace")
 
-        for v in [label, menuButton, closeButton] {
+        for v in [disclosureButton, label, menuButton, closeButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            heightAnchor.constraint(equalToConstant: 30),
+            disclosureButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
+            disclosureButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            disclosureButton.widthAnchor.constraint(equalToConstant: 18),
+            disclosureButton.heightAnchor.constraint(equalToConstant: 22),
+            label.leadingAnchor.constraint(equalTo: disclosureButton.trailingAnchor, constant: 1),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.trailingAnchor.constraint(
                 lessThanOrEqualTo: menuButton.leadingAnchor, constant: -6),
@@ -301,12 +332,13 @@ private final class WorkspaceRowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    @objc private func toggleCollapse() { onToggleCollapse?() }
     @objc private func menuTapped() { onMenu?() }
     @objc private func closeTapped() { onClose?() }
 
     private func applyFill() {
         let fill: NSColor =
-            isActive ? ShellStyle.selectionFill : (hovered ? ShellStyle.controlFill : .clear)
+            isActive ? ShellStyle.pressedFill : (hovered ? ShellStyle.selectionFill : .clear)
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
 
@@ -343,7 +375,8 @@ private final class WorkspaceRowView: NSView {
     }
 }
 
-/// pane 行（叶子级）：缩进一级；绑定态圆点常驻 + pane 名 + 任务名次要色；
+/// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 状态 badge；
+/// 第二行 = 绑定任务 + cwd（路径从头截断，优先保留末级目录）。
 /// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
 /// 内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
@@ -362,9 +395,11 @@ private final class PaneRowView: NSView {
     private let bound: Bool
     private let taskName: String?
     private let taskLabel = NSTextField(labelWithString: "")
+    private let directoryLabel = NSTextField(labelWithString: "")
     private let statusBadge = NSView()
     private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
+    private var terminalWorkingDirectory: String?
     private var activity: PaneActivity? { status?.state }
     private var isActive: Bool
     private var hovered = false {
@@ -380,12 +415,14 @@ private final class PaneRowView: NSView {
         taskName: String?,
         bound: Bool,
         indented: Bool,
-        isActive: Bool
+        isActive: Bool,
+        workingDirectory: String?
     ) {
         self.paneID = paneID
         self.bound = bound
         self.taskName = taskName
         self.isActive = isActive
+        terminalWorkingDirectory = workingDirectory
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -409,10 +446,26 @@ private final class PaneRowView: NSView {
         nameLabel.font = .systemFont(ofSize: 11.5)
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        taskLabel.font = .systemFont(ofSize: 10.5)
+        taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
-        taskLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        taskLabel.toolTip = taskName
+        taskLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(740), for: .horizontal)
+
+        directoryLabel.font = .systemFont(ofSize: 10)
+        directoryLabel.textColor = ShellStyle.tertiaryText
+        directoryLabel.lineBreakMode = .byTruncatingHead
+        directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        directoryLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(750), for: .horizontal)
+
+        let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
+        secondaryStack.orientation = .horizontal
+        secondaryStack.alignment = .firstBaseline
+        secondaryStack.spacing = 4
 
         statusBadge.wantsLayer = true
         statusBadge.layer?.cornerRadius = 5
@@ -423,17 +476,16 @@ private final class PaneRowView: NSView {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusBadge.addSubview(statusLabel)
 
-        for v in [dotView, closeButton, nameLabel, taskLabel, statusBadge] {
+        for v in [dotView, closeButton, nameLabel, statusBadge, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 24),
+            heightAnchor.constraint(equalToConstant: 44),
 
-            // 嵌套态缩进一级（容器行文字起点 + 10）；单工作区平铺态回到容器级起点
+            // 嵌套态缩进一级；圆点跟第一行对齐，不悬在两行中间。
             dotView.leadingAnchor.constraint(
                 equalTo: leadingAnchor, constant: indented ? 20 : 10),
-            dotView.centerYAnchor.constraint(equalTo: centerYAnchor),
             dotView.widthAnchor.constraint(equalToConstant: 6),
             dotView.heightAnchor.constraint(equalToConstant: 6),
 
@@ -443,15 +495,11 @@ private final class PaneRowView: NSView {
             closeButton.heightAnchor.constraint(equalToConstant: 18),
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            taskLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 5),
-            taskLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-            taskLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+            nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
             statusBadge.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
-            statusBadge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusBadge.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
             statusBadge.heightAnchor.constraint(equalToConstant: 18),
             statusBadge.trailingAnchor.constraint(
                 lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
@@ -463,9 +511,17 @@ private final class PaneRowView: NSView {
                 greaterThanOrEqualTo: statusBadge.topAnchor, constant: 1),
             statusLabel.bottomAnchor.constraint(
                 lessThanOrEqualTo: statusBadge.bottomAnchor, constant: -1),
+
+            secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            secondaryStack.trailingAnchor.constraint(
+                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+            secondaryStack.bottomAnchor.constraint(
+                lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
         applyDotColor()
-        applySecondaryLabel()
+        applyStatusBadge()
+        applyMetadataLine()
         applyFill()
     }
 
@@ -479,26 +535,34 @@ private final class PaneRowView: NSView {
         applyFill()
     }
 
+    func applyWorkingDirectory(_ directory: String?) {
+        guard terminalWorkingDirectory != directory else { return }
+        terminalWorkingDirectory = directory
+        applyMetadataLine()
+    }
+
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
     func applyStatus(_ status: PaneStatus?) {
-        // tool 名也要进副标题，所以不能只比 state
-        guard self.status?.state != status?.state || self.status?.tool != status?.tool
+        // tool 名进 badge，cwd 是第二行在无 OSC PWD 时的兜底。
+        guard self.status?.state != status?.state
+                || self.status?.tool != status?.tool
+                || self.status?.cwd != status?.cwd
         else { return }
         self.status = status
         applyDotColor()
-        applySecondaryLabel()
+        applyStatusBadge()
+        applyMetadataLine()
         applyFill()
     }
 
-    /// 副标题槽位：有活跃状态时显示紧凑 badge，否则显示任务名。
+    /// 活动状态与 pane 名同在第一行；空闲时隐藏，不用任务名补位。
     ///
     /// **颜色不能单独承担语义**——用户没有图例就是在猜"蓝色是什么意思"。
     /// 文字说明状态、颜色与圆点同色，两者互相解释；扫读时看色块，
-    /// 停下来时看文字。任务名是稳定信息、别处也看得到，让位给时效信息不亏。
-    private func applySecondaryLabel() {
+    /// 停下来时看文字。任务名是稳定信息，固定保留在第二行。
+    private func applyStatusBadge() {
         if let text = Self.statusText(status) {
             let color = ShellStyle.statusColor(for: status!.state)
-            taskLabel.isHidden = true
             statusBadge.isHidden = false
             statusLabel.stringValue = text
             statusLabel.textColor = color
@@ -508,10 +572,23 @@ private final class PaneRowView: NSView {
         } else {
             statusBadge.isHidden = true
             statusBadge.layer?.backgroundColor = nil
-            taskLabel.isHidden = false
-            taskLabel.stringValue = taskName.map { "· \($0)" } ?? ""
-            taskLabel.textColor = ShellStyle.tertiaryText
         }
+    }
+
+    /// 第二行同时保留任务映射和 cwd。空间不足时任务名从尾部截断、cwd 从头部
+    /// 截断，因此最有辨识度的任务前缀和路径末级目录都尽量留下。
+    private func applyMetadataLine() {
+        let rawDirectory = terminalWorkingDirectory ?? status?.cwd
+        let displayDirectory = rawDirectory.map {
+            ($0 as NSString).abbreviatingWithTildeInPath
+        }
+        taskLabel.isHidden = taskName == nil
+        taskLabel.stringValue = taskName.map {
+            displayDirectory == nil ? $0 : "\($0) ·"
+        } ?? ""
+        directoryLabel.isHidden = displayDirectory == nil
+        directoryLabel.stringValue = displayDirectory ?? ""
+        directoryLabel.toolTip = rawDirectory
     }
 
     private static func statusText(_ status: PaneStatus?) -> String? {
@@ -552,14 +629,14 @@ private final class PaneRowView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyDotColor()
-        applySecondaryLabel()
+        applyStatusBadge()
         applyFill()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyDotColor()
-        applySecondaryLabel()
+        applyStatusBadge()
         applyFill()
     }
 

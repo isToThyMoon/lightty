@@ -32,6 +32,8 @@
 "Rename workspace" = "Rename workspace";
 "Workspaces" = "Workspaces";
 "Close workspace" = "Close workspace";
+"Collapse workspace" = "Collapse workspace";
+"Expand workspace" = "Expand workspace";
 "Close pane" = "Close pane";
 "New workspace" = "New workspace";
 "New window" = "New window";

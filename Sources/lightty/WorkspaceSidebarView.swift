@@ -38,6 +38,9 @@ final class WorkspaceSidebarView: NSView {
 
     func reload() { column.reload() }
     func applyActivePane(_ paneID: UUID?) { column.applyActivePane(paneID) }
+    func applyWorkingDirectory(_ directory: String?, for paneID: UUID) {
+        column.applyWorkingDirectory(directory, for: paneID)
+    }
 
     private func applyColors() {
         layer?.backgroundColor =

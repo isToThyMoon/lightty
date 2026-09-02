@@ -234,7 +234,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let overview = controller.workspaceOverview().filter { !$0.panes.isEmpty }
             guard !overview.isEmpty else { continue }
             if multiWindow { addSectionHeader(L("Window %d", windowIndex + 1)) }
-            // 单工作区时工作区层级没有信息量，直接平铺（与侧栏工作区列同约定）
+            // 菜单栏空间更紧：单工作区时仍直接平铺；侧栏则始终保留可折叠容器行。
             let showWorkspaces = overview.count > 1
             for entry in overview {
                 if showWorkspaces { addSectionHeader(entry.title) }

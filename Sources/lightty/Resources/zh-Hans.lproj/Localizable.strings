@@ -32,6 +32,8 @@
 "Rename workspace" = "重命名工作区";
 "Workspaces" = "工作区";
 "Close workspace" = "关闭工作区";
+"Collapse workspace" = "折叠工作区";
+"Expand workspace" = "展开工作区";
 "Close pane" = "关闭 pane";
 "New workspace" = "新工作区";
 "New window" = "新窗口";

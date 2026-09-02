@@ -531,6 +531,13 @@ final class GhosttyRuntime {
             return false
 
         case GHOSTTY_ACTION_PWD:
+            guard let view = targetView(),
+                  let directory = copiedString(
+                    action.action.pwd.pwd,
+                    length: UInt(strlen(action.action.pwd.pwd))) else { return false }
+            DispatchQueue.main.async { [weak view] in
+                view?.setWorkingDirectory(directory)
+            }
             return true
 
         // MARK: - 安全输入
