@@ -150,6 +150,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             self.installTitlebarAccessory(on: window)
             self.updateWindowTitle(for: self.activePane)
             self.openWorkspaceSidebar(animated: false)
+            self.updateEdgeExpandButton()
         }
     }
 
@@ -202,7 +203,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         titlebar.addSubview(chrome)
 
         let button = ShellIconButton(
-            symbol: "sidebar.left", accessibilityLabel: L("Task Sidebar"), target: self,
+            symbol: "sidebar.left", accessibilityLabel: L("Workspace Sidebar"), target: self,
             action: #selector(toggleSidebarFromTitlebar))
 
         // 右侧按钮组（图标区分语义）：向右分屏 | 向下分屏 | 新 tab
@@ -288,8 +289,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         window.title = activeTab?.title ?? "lightty"
     }
 
+    /// 亮着 = 点一下会收起东西（工作区栏或 task 卡片任一开着）。
     private func updateSidebarButtonState() {
-        sidebarButton?.isActive = taskPanel != nil
+        sidebarButton?.isActive = workspaceSidebar != nil || taskPanel != nil
     }
 
     /// 「新 Tab」入口固定在标题栏（2026-08-29 定稿）：入口搬家增加用户心智
@@ -1045,21 +1047,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     // task↔pane 是绑定关系——task 卡片开在窗口最左缘、四周留边距、
     // 圆角投影（Ulysses 式"布局占位、视觉悬浮"），把工作区栏与终端整体推移。
     //
-    // 标题栏侧栏按钮状态机：
-    //   task 开           → 关 task
-    //   task 关、工作区开  → 开 task
-    //   两者皆关          → 全开
-    // 工作区侧栏另有专属边缘开关：右边线中点透明关闭钮（边线可左拖关闭）；
-    // 两者皆关时窗口左边线中点透明展开钮（只开工作区）。
+    // 标题栏侧栏按钮 = 工作区侧栏的开关；task 卡片开着时点它是「全关」：
+    //   task 开             → 全关（task + 工作区，一组动画）
+    //   task 关、工作区开    → 关工作区
+    //   两者皆关            → 开工作区
+    // task 卡片由专属边缘钮控制（贴边半胶囊，同形镜像）：卡片关着时窗口左缘
+    // 中点展开钮（只开 task）；开着时卡片右缘中点关闭钮。
+    // 工作区侧栏没有自己的边缘钮，边线左拖关闭保留。
 
     func toggleSidebar() {
         if taskPanel != nil {
-            closeTaskPanel()
+            closeAllSidebars()
         } else if workspaceSidebar != nil {
-            openTaskPanel()
+            closeWorkspaceSidebar()
         } else {
-            openWorkspaceSidebar(animated: false, deferLayout: true)
-            openTaskPanel()
+            openWorkspaceSidebar()
         }
     }
 
@@ -1110,19 +1112,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             leading,
             sidebar.widthAnchor.constraint(equalToConstant: width),
         ])
-        // closeControl 提升到 themeFrame 直属：骑跨侧栏 bounds 右缘，
-        // 两半都在 themeFrame 的 hitTest 范围内，点击和光标区不再被裁断。
-        let cc = sidebar.closeControl
-        cc.translatesAutoresizingMaskIntoConstraints = false
-        themeFrame.addSubview(cc)
-        NSLayoutConstraint.activate([
-            cc.centerXAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            cc.centerYAnchor.constraint(equalTo: sidebar.centerYAnchor),
-        ])
         workspaceSidebar = sidebar
         workspaceSidebarLeadingConstraint = leading
-        updateEdgeExpandButton()
-        guard !deferLayout else { return }  // 调用方（全开）统一编排动画
+        updateSidebarButtonState()
+        guard !deferLayout else { return }  // 调用方统一编排动画
         if animated {
             themeFrame.layoutSubtreeIfNeeded()
             var targets: [(NSLayoutConstraint, CGFloat)] = [(leading, workspaceSidebarOpenX)]
@@ -1139,6 +1132,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     func closeWorkspaceSidebar() {
         guard let sidebar = workspaceSidebar else { return }
         workspaceSidebar = nil
+        updateSidebarButtonState()
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let workspaceSidebarLeadingConstraint {
             targets.append((workspaceSidebarLeadingConstraint, -ShellStyle.workspaceColumnWidth))
@@ -1147,10 +1141,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             targets.append((rootLeadingConstraint, mainAreaInset))
         }
         animateSidebarLayout(targets) { [weak self] in
-            sidebar.closeControl.removeFromSuperview()
             sidebar.removeFromSuperview()
             self?.workspaceSidebarLeadingConstraint = nil
-            self?.updateEdgeExpandButton()
             self?.activePane?.focusTerminal()
         }
     }
@@ -1174,6 +1166,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 equalTo: themeFrame.bottomAnchor, constant: -ShellStyle.panelInset),
             leading,
             panel.widthAnchor.constraint(equalToConstant: ShellStyle.taskPanelWidth),
+        ])
+        // 关闭钮提升到 themeFrame 直属、贴卡片右缘吸附：它的命中区向右溢出卡片
+        // bounds（容错），做子视图会被裁断，且卡片 layer 有圆角遮罩。
+        let cc = panel.closeControl
+        cc.translatesAutoresizingMaskIntoConstraints = false
+        themeFrame.addSubview(cc)
+        NSLayoutConstraint.activate([
+            cc.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            cc.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
         ])
         taskPanel = panel
         taskPanelLeadingConstraint = leading
@@ -1206,27 +1207,60 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             targets.append((rootLeadingConstraint, mainAreaInset))
         }
         animateSidebarLayout(targets) { [weak self] in
+            panel.closeControl.removeFromSuperview()
             panel.removeFromSuperview()
             self?.updateEdgeExpandButton()
             self?.activePane?.focusTerminal()
         }
     }
 
-    // —— 两者皆关时的左缘展开钮 ——
+    /// 全关：task 卡片与工作区栏一组动画同时收。
+    ///
+    /// 不能串行调 closeTaskPanel + closeWorkspaceSidebar：animateSidebarLayout 启动时
+    /// 会掐掉上一个驱动器，前一个的 completion 永远不跑，卡片视图就留在 themeFrame 上。
+    private func closeAllSidebars() {
+        guard let panel = taskPanel else {
+            closeWorkspaceSidebar()
+            return
+        }
+        let sidebar = workspaceSidebar
+        taskPanel = nil
+        workspaceSidebar = nil
+        updateSidebarButtonState()
+        let panelLeading = taskPanelLeadingConstraint
+        taskPanelLeadingConstraint = nil
+        var targets: [(NSLayoutConstraint, CGFloat)] = []
+        if let panelLeading { targets.append((panelLeading, -taskPanelReserve)) }
+        if let workspaceSidebarLeadingConstraint {
+            targets.append((workspaceSidebarLeadingConstraint, -ShellStyle.workspaceColumnWidth))
+        }
+        if let rootLeadingConstraint {
+            targets.append((rootLeadingConstraint, mainAreaInset))
+        }
+        animateSidebarLayout(targets) { [weak self] in
+            panel.closeControl.removeFromSuperview()
+            panel.removeFromSuperview()
+            sidebar?.removeFromSuperview()
+            self?.workspaceSidebarLeadingConstraint = nil
+            self?.updateEdgeExpandButton()
+            self?.activePane?.focusTerminal()
+        }
+    }
 
-    /// 工作区侧栏关着时，其展开胶囊吸附在"它将要展开的边界"上：
-    /// task 卡片开 → 卡片区右缘；否则 → 窗口左缘。状态每变重建（吸附位随变）。
+    // —— task 卡片关着时的左缘展开钮 ——
+
+    /// task 卡片关着时，其展开胶囊吸附在窗口左缘中点（工作区栏开着时正好落在
+    /// 它 12pt 的左边沟里）。卡片开/关时重建。
     private func updateEdgeExpandButton() {
         guard let themeFrame = window?.contentView?.superview else { return }
         edgeExpandButton?.removeFromSuperview()
         edgeExpandButton = nil
         edgeExpandStrip?.removeFromSuperview()
         edgeExpandStrip = nil
-        guard workspaceSidebar == nil else { return }
+        guard taskPanel == nil else { return }
 
-        let offset: CGFloat = taskPanel != nil ? taskPanelReserve : 0
         let button = EdgeToggleControl(pointing: .right)
-        button.onTap = { [weak self] in self?.openWorkspaceSidebar() }
+        button.onTap = { [weak self] in self?.openTaskPanel() }
         // 默认隐形；鼠标靠近边界带才浮现
         let strip = EdgeRevealStrip()
         strip.onHoverChange = { [weak button] hovered in button?.reveal(hovered) }
@@ -1235,13 +1269,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             themeFrame.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            strip.leadingAnchor.constraint(
-                equalTo: themeFrame.leadingAnchor, constant: offset),
+            strip.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
             strip.topAnchor.constraint(equalTo: themeFrame.topAnchor),
             strip.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
             strip.widthAnchor.constraint(equalToConstant: 14),
-            button.leadingAnchor.constraint(
-                equalTo: themeFrame.leadingAnchor, constant: offset),
+            button.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
             button.centerYAnchor.constraint(equalTo: themeFrame.centerYAnchor),
         ])
         edgeExpandButton = button

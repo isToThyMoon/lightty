@@ -8,7 +8,7 @@
 "Split Pane Right" = "向右分 pane";
 "Split Pane Down" = "向下分 pane";
 "Close Pane" = "关闭 pane";
-"Task Sidebar" = "任务侧边栏";
+"Workspace Sidebar" = "工作区侧栏";
 
 /* 通用 */
 "OK" = "确认";

@@ -3,30 +3,23 @@ import AppKit
 /// 工作区侧栏（docked，默认展开）：承载 工作区›pane 两级树。
 /// 与 task 浮层卡片是两套独立面板——工作区↔pane 是严格层级，task↔pane
 /// 是绑定关系，UI 上不呈现并列/嵌套感。
-/// 右边线中点有透明关闭钮；边线本体可向左拖动关闭。
+/// 开关在标题栏侧栏按钮；右边线本体可向左拖动关闭（没有自己的边缘钮）。
 final class WorkspaceSidebarView: NSView {
     var onCloseRequested: (() -> Void)?
 
     private let column = WorkspaceColumnView()
-    let closeControl = EdgeToggleControl(pointing: .left)
     private let dragStrip = EdgeDragStrip()
 
     init(topInset: CGFloat) {
         super.init(frame: .zero)
         wantsLayer = true
 
-        closeControl.onTap = { [weak self] in self?.onCloseRequested?() }
         dragStrip.onDragClose = { [weak self] in self?.onCloseRequested?() }
-        dragStrip.onHoverChange = { [weak self] hovered in
-            self?.closeControl.reveal(hovered)
-        }
 
         for v in [column, dragStrip] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        // closeControl 不作为子视图——由 controller 提升到 themeFrame 直属，
-        // 解决骑跨 bounds 时 hitTest/cursorRects 被父 bounds 裁断的问题。
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
             column.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -61,9 +54,10 @@ final class WorkspaceSidebarView: NSView {
     }
 }
 
-/// 边缘开关：贴边半片胶囊——与边线齐平无缝（吸附感），只圆外侧两角，
-/// 半透明填充、无描边无投影（弱边界）。默认隐形，宿主在鼠标靠近边缘带时
-/// reveal。工作区侧栏右缘的关闭钮与窗口左缘的展开钮共用。
+/// 边缘开关：贴边半片胶囊——与边线齐平无缝（吸附感），只圆离边那一侧两角，
+/// 半透明填充、无描边无投影（弱边界）。默认低存在感，宿主在鼠标靠近边缘带时
+/// reveal。task 卡片的两个开关：窗口左缘的展开钮（左平右圆）与卡片右缘的
+/// 关闭钮（右平左圆），同一形状的镜像。
 final class EdgeToggleControl: NSView {
     enum Pointing { case left, right }
 
@@ -99,7 +93,7 @@ final class EdgeToggleControl: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 14),
+            widthAnchor.constraint(equalToConstant: 12),
             heightAnchor.constraint(equalToConstant: 52),
             blur.topAnchor.constraint(equalTo: topAnchor),
             blur.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -109,10 +103,11 @@ final class EdgeToggleControl: NSView {
             hoverTint.bottomAnchor.constraint(equalTo: bottomAnchor),
             hoverTint.leadingAnchor.constraint(equalTo: leadingAnchor),
             hoverTint.trailingAnchor.constraint(equalTo: trailingAnchor),
-            // 关闭钮骑缝 chevron 偏侧栏侧；展开钮贴边 chevron 居中
+            // chevron 视觉居中。SF Symbol 的画布不对称：实测 8pt bold 下
+            // chevron.right 的墨迹中心比画布中心偏右 1pt、chevron.left 偏左 1pt——
+            // 按画布居中肉眼就是歪的，常量里把这 1pt 补回来。
             chevron.centerXAnchor.constraint(
-                equalTo: centerXAnchor,
-                constant: pointing == .left ? -2 : 0),
+                equalTo: centerXAnchor, constant: pointing == .left ? 1 : -1),
             chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -131,7 +126,8 @@ final class EdgeToggleControl: NSView {
     }
 
     private func applyLook() {
-        let engaged = hovered || revealed
+        // 只看 hovered：revealed 驱动的是整体 alpha（在 reveal 里做动画），
+        // 这里的 tint/chevron 刻意只对指针真正压上来时才加深。
         chevron.contentTintColor = hovered
             ? ShellStyle.primaryText
             : ShellStyle.secondaryText
@@ -153,16 +149,14 @@ final class EdgeToggleControl: NSView {
         // layer 配置延迟到挂窗后（backing layer 重建会吃掉 init 期配置）。
         blur.wantsLayer = true
         blur.layer?.masksToBounds = true
-        if pointing == .left {
-            // 关闭钮：骑线全圆药丸（侧栏/终端分界线上）
-            blur.layer?.cornerRadius = 7
-            hoverTint.layer?.cornerRadius = 7
-        } else {
-            // 展开钮：贴窗口左缘半胶囊（左直右圆，吸附感）
-            blur.layer?.cornerRadius = 7
-            blur.layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-            hoverTint.layer?.cornerRadius = 7
-            hoverTint.layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        // 半胶囊：贴边那一侧平、离边那一侧圆。展开钮贴窗口左缘 → 圆右侧；
+        // 关闭钮贴卡片右缘 → 圆左侧。
+        let rounded: CACornerMask = pointing == .right
+            ? [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            : [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+        for layer in [blur.layer, hoverTint.layer] {
+            layer?.cornerRadius = 7
+            layer?.maskedCorners = rounded
         }
         applyLook()
     }
@@ -221,6 +215,10 @@ final class EdgeRevealStrip: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
+
+    /// 只感应、不命中：它压在工作区栏最左一带上，吞点击会让行的左缘点不到。
+    /// tracking area 不依赖 hitTest，hover 照常。
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// 侧栏右边线的拖动条：向左拖过阈值即关闭（无实时改宽——侧栏定宽，

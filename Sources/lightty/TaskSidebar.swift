@@ -33,8 +33,14 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     var onRequestClose: (() -> Void)?
 
+    /// 卡片右缘贴边吸附的关闭钮（与窗口左缘展开钮同形镜像）。不作为子视图：
+    /// 由 controller 挂到 themeFrame——命中区向右溢出卡片 bounds，做子视图会被裁断，
+    /// 且卡片 layer 有圆角遮罩。
+    let closeControl = EdgeToggleControl(pointing: .left)
+
     init() {
         super.init(frame: .zero)
+        closeControl.onTap = { [weak self] in self?.onRequestClose?() }
 
         clipsToBounds = false
         wantsLayer = true

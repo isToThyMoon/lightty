@@ -54,19 +54,21 @@ final class WorkspaceColumnView: NSView {
         NSLayoutConstraint.activate([
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
             newButton.topAnchor.constraint(equalTo: topAnchor, constant: 0),
-            newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             newButton.widthAnchor.constraint(equalToConstant: 28),
             newButton.heightAnchor.constraint(equalToConstant: 28),
 
-            sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            // 12 边距 + 行内 10 缩进：标题与行文字左对齐
+            sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
             sectionLabel.centerYAnchor.constraint(equalTo: newButton.centerYAnchor),
             sectionLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: newButton.leadingAnchor, constant: -8),
 
             scroll.topAnchor.constraint(equalTo: newButton.bottomAnchor, constant: 12),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            // 对称 padding：边缘胶囊骑跨边界（半进半出），不侵占内容带
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            // 两侧对称 12 = 边缘钮宽度：task 卡片关着时，窗口左缘的展开钮
+            // （EdgeToggleControl）正好落在左侧这条边沟里，行高亮到钮的圆角处止步。
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
             rowsStack.topAnchor.constraint(equalTo: document.topAnchor),
