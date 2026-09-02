@@ -51,6 +51,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let listContainer = NSView()
     private let searchField = NSTextField()
     private let listSeparator = NSView()
+    private let taskScrollView = NSScrollView()
+    private let taskRowsView = FlippedRowsView()
     private var rowViews: [TaskRowView] = []
     private var choices: [TaskChoice] = []
     private var filtered: [TaskChoice] = []
@@ -136,6 +138,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
         // —— 内联任务选择器（默认隐藏；打开时岛体向下生长露出）
         listContainer.isHidden = true
+        listContainer.wantsLayer = true
+        listContainer.layer?.masksToBounds = true
         listSeparator.wantsLayer = true
         searchField.font = .systemFont(ofSize: 11)
         searchField.isBordered = false
@@ -143,6 +147,16 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.focusRingType = .none
         searchField.delegate = self
         (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
+
+        taskScrollView.drawsBackground = false
+        taskScrollView.borderType = .noBorder
+        taskScrollView.hasHorizontalScroller = false
+        taskScrollView.hasVerticalScroller = true
+        taskScrollView.autohidesScrollers = true
+        taskScrollView.scrollerStyle = .overlay
+        taskScrollView.contentView.drawsBackground = false
+        taskRowsView.translatesAutoresizingMaskIntoConstraints = false
+        taskScrollView.documentView = taskRowsView
 
         for v in [dotView, nameField, extras] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -154,10 +168,16 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
         listContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listContainer)
-        for v in [listSeparator, searchField] {
+        for v in [listSeparator, searchField, taskScrollView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listContainer.addSubview(v)
         }
+
+        let listHeightConstraint = listContainer.heightAnchor.constraint(
+            equalToConstant: listHeight)
+        self.listHeightConstraint = listHeightConstraint
+        let rowsHeightConstraint = taskRowsView.heightAnchor.constraint(equalToConstant: 0)
+        self.rowsHeightConstraint = rowsHeightConstraint
 
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: topAnchor),
@@ -206,6 +226,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             listContainer.topAnchor.constraint(equalTo: fixedContent.bottomAnchor),
             listContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             listContainer.widthAnchor.constraint(equalToConstant: Self.panelWidth),
+            listHeightConstraint,
 
             listSeparator.topAnchor.constraint(equalTo: listContainer.topAnchor),
             listSeparator.leadingAnchor.constraint(
@@ -220,6 +241,22 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             searchField.trailingAnchor.constraint(
                 equalTo: listContainer.trailingAnchor, constant: -12),
             searchField.heightAnchor.constraint(equalToConstant: 20),
+
+            taskScrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 7),
+            taskScrollView.leadingAnchor.constraint(
+                equalTo: listContainer.leadingAnchor, constant: 6),
+            taskScrollView.trailingAnchor.constraint(
+                equalTo: listContainer.trailingAnchor, constant: -6),
+            taskScrollView.bottomAnchor.constraint(
+                equalTo: listContainer.bottomAnchor, constant: -6),
+
+            taskRowsView.topAnchor.constraint(
+                equalTo: taskScrollView.contentView.topAnchor),
+            taskRowsView.leadingAnchor.constraint(
+                equalTo: taskScrollView.contentView.leadingAnchor),
+            taskRowsView.widthAnchor.constraint(
+                equalTo: taskScrollView.contentView.widthAnchor),
+            rowsHeightConstraint,
         ])
     }
 
@@ -364,7 +401,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         rowViews.forEach { $0.removeFromSuperview() }
         rowViews = []
 
-        var previous: NSView = searchField
+        var previous: NSView?
         for (index, choice) in filtered.enumerated() {
             let row = TaskRowView(
                 title: choice.name,
@@ -406,40 +443,41 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             attach(row: row, below: previous)
             rowViews.append(row)
         }
-        // ⚠️ 容器必须有确定高度：底边钉到最后一行（无行时钉搜索框）。
-        // 否则高度解析为 0，行视图溢出可见（NSView 不裁剪）但 hitTest 不
-        // 进入 bounds 外的子树——看得见点不着。存储约束避免跨次重建累积。
-        listBottomConstraint?.isActive = false
-        let bottomAnchorView: NSView = rowViews.last ?? searchField
-        let bottom = bottomAnchorView.bottomAnchor.constraint(
-            equalTo: listContainer.bottomAnchor, constant: -6)
-        bottom.isActive = true
-        listBottomConstraint = bottom
+        // 岛体最多展示七行；更多任务留在原生滚动视口内，不能继续撑高透明面板。
+        rowsHeightConstraint?.constant = max(CGFloat(rowViews.count) * 26 - 2, 0)
+        listHeightConstraint?.constant = listHeight
 
         setHighlight(0)
         if listOpen { onIslandHeightChange?(currentIslandHeight) }
         window?.invalidateCursorRects(for: self)
     }
 
-    private var listBottomConstraint: NSLayoutConstraint?
+    private var listHeightConstraint: NSLayoutConstraint?
+    private var rowsHeightConstraint: NSLayoutConstraint?
 
-    private func attach(row: TaskRowView, below previous: NSView) {
+    private func attach(row: TaskRowView, below previous: NSView?) {
         row.translatesAutoresizingMaskIntoConstraints = false
-        listContainer.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.topAnchor.constraint(
-                equalTo: previous.bottomAnchor,
-                constant: previous === searchField ? 7 : 2),
-            row.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor, constant: 6),
-            row.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor, constant: -6),
+        taskRowsView.addSubview(row)
+        var constraints = [
+            row.leadingAnchor.constraint(equalTo: taskRowsView.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: taskRowsView.trailingAnchor),
             row.heightAnchor.constraint(equalToConstant: 24),
-        ])
+        ]
+        if let previous {
+            constraints.append(row.topAnchor.constraint(equalTo: previous.bottomAnchor, constant: 2))
+        } else {
+            constraints.append(row.topAnchor.constraint(equalTo: taskRowsView.topAnchor))
+        }
+        NSLayoutConstraint.activate(constraints)
     }
 
     private func setHighlight(_ index: Int) {
         highlighted = index
         for (i, row) in rowViews.enumerated() {
             row.highlighted = i == index
+        }
+        if rowViews.indices.contains(index) {
+            rowViews[index].scrollToVisible(rowViews[index].bounds)
         }
     }
 
@@ -569,6 +607,11 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             addCursorRect(view.convert(view.bounds, to: self), cursor: .pointingHand)
         }
     }
+}
+
+/// NSScrollView 的文档坐标从上向下增长，任务排序与键盘移动因此保持直观。
+private final class FlippedRowsView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// 内联任务选择器的行（terminal palette）：高亮/勾选/尾注。
