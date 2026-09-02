@@ -3,8 +3,8 @@ import LighttyCore
 
 /// 全文搜索浮层（⇧⇧ 呼出），Notion 式：窗口左右居中、偏上，无遮罩压暗，
 /// 点击卡片外关闭；卡片与侧栏/标题栏同底色，内部无分割线；
-/// 左列表（任务名 + 命中摘录）+ 右预览（handoff 正文 + 目的地操作，
-/// 目的地语义与侧栏任务点击一致：跳转已打开 pane / 三种打开方式）。
+/// 左列表（任务名 + 命中摘录）+ 右预览（handoff 正文 + 目的地操作：
+/// 跳转已打开 pane / 三种打开方式）。
 final class SearchPaletteView: NSView, NSTextFieldDelegate {
     var onDismiss: (() -> Void)?
 
@@ -385,11 +385,9 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         let active = !result.running.isEmpty
         previewTag.stringValue = active ? L("Active") : L("Dormant")
         previewTag.textColor = active ? ShellStyle.boundAccent : ShellStyle.tertiaryText
-        previewBody.string = result.task.body.isEmpty
-            ? RestoreFlow.summarize(result.task.body)
-            : result.task.body
+        previewBody.string = result.task.body
 
-        // 目的地操作：与侧栏任务点击（RestoreFlow）同一套语义
+        // 全文搜索保留显式目的地：用户已经进入详情预览，选择位置是有意动作。
         for (index, entry) in result.running.enumerated() {
             let workspace = entry.controller.workspaceName(of: entry.pane)
             let label = workspace.map { "\($0) › \(entry.pane.header.title)" }

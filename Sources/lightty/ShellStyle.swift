@@ -216,13 +216,11 @@ final class ShellIconButton: NSButton {
     }
 }
 
-/// 无系统强调色的文字按钮；应用 chrome 与 terminal pane 可选择各自 palette。
+/// 无系统强调色的应用 chrome 文字按钮。
 final class ShellTextButton: NSButton {
     enum Emphasis { case quiet, primary }
-    enum Palette { case shell, terminal }
 
     private let emphasis: Emphasis
-    private let palette: Palette
     /// 改文字必须走这里，**不要设 `title`**：上色是通过 `attributedTitle` 做的，
     /// 而设 `title` 会把 attributedTitle 连同前景色一起清掉，按钮退回系统默认黑字
     /// （深底上就读不出来了）。
@@ -230,9 +228,6 @@ final class ShellTextButton: NSButton {
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { updateAppearance() } }
 
-    /// terminal palette 的前景色来源；core 报告 COLOR_CHANGE（主题切换/OSC）后
-    /// 由 pane header 注入当前值，未设置时回退启动期全局 config。
-    var terminalForeground: NSColor? { didSet { updateAppearance() } }
     /// 软置灰：呈禁用观感但保留点击（用于"点击给出引导提示"的按钮）。
     /// 与 isEnabled 不同——后者会吞掉点击。
     var looksDisabled = false { didSet { updateAppearance() } }
@@ -242,12 +237,10 @@ final class ShellTextButton: NSButton {
     init(
         _ title: String,
         emphasis: Emphasis = .quiet,
-        palette: Palette = .shell,
         target: AnyObject?,
         action: Selector?
     ) {
         self.emphasis = emphasis
-        self.palette = palette
         self.label = title
         super.init(frame: .zero)
         self.title = title
@@ -285,29 +278,18 @@ final class ShellTextButton: NSButton {
     private func updateAppearance() {
         let fill: NSColor
         let enabledText: NSColor
-        let disabledText: NSColor
-        switch palette {
-        case .shell:
-            if emphasis == .primary {
-                fill = isHovered ? ShellStyle.actionHoverFill : ShellStyle.actionFill
-                enabledText = ShellStyle.actionText
-            } else {
-                fill = isHovered ? ShellStyle.hoverFill : .clear
-                enabledText = ShellStyle.secondaryText
-            }
-            disabledText = ShellStyle.tertiaryText
-        case .terminal:
-            let foreground = terminalForeground
-                ?? GhosttyRuntime.shared.configValues.foregroundColor
-            fill = isHovered ? foreground.withAlphaComponent(0.12) : .clear
-            enabledText = foreground.withAlphaComponent(0.72)
-            disabledText = foreground.withAlphaComponent(0.32)
+        if emphasis == .primary {
+            fill = isHovered ? ShellStyle.actionHoverFill : ShellStyle.actionFill
+            enabledText = ShellStyle.actionText
+        } else {
+            fill = isHovered ? ShellStyle.hoverFill : .clear
+            enabledText = ShellStyle.secondaryText
         }
         let dimmed = !isEnabled || looksDisabled
         layer?.backgroundColor = (dimmed ? .clear : fill)
             .shellResolvedCGColor(for: effectiveAppearance)
         alphaValue = isEnabled ? 1 : 0.62
-        let color = dimmed ? disabledText : enabledText
+        let color = dimmed ? ShellStyle.tertiaryText : enabledText
         attributedTitle = NSAttributedString(
             string: label,
             attributes: [.font: font ?? NSFont.systemFont(ofSize: 11), .foregroundColor: color])

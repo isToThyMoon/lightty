@@ -144,8 +144,8 @@ shell。各实例各绑各的，无 EADDRINUSE 探测、无 unlink 孤儿化。�
 `ghostty_surface_config_s.env_vars` **逐 surface** 注入，不碰进程全局环境——而且每个
 pane 需要不同的值，进程级变量本来也做不到。两者正交。
 
-**`HandoffPrompt.swift:6` 的「LIGHTTY_TASK 已整体移除」**指的是任务路径改为点击时
-实时嵌入提示词，不是说 env var 机制有问题。本期的 `LIGHTTY_PANE_ID` 用途不同
+**旧手动 `HandoffPrompt` 实现里「LIGHTTY_TASK 已整体移除」的记录**指的是任务路径
+当时改为点击时实时嵌入提示词，不是说 env var 机制有问题。本期的 `LIGHTTY_PANE_ID` 用途不同
 （pane 身份，不是任务路径），不受该结论约束。
 
 ---
@@ -354,8 +354,8 @@ S4/S5 只依赖 §4.4 的 **API 签名**，不依赖 S3 的实现——签名已
 
 **目标**：每个 pane 的 shell 拿到 `LIGHTTY_PANE_ID`。
 
-0. **先读 §2.3**：`main.swift` 的 env 剥离逻辑 + `HandoffPrompt.swift` 顶部关于
-   `LIGHTTY_TASK` 被移除的注释。搞清历史原因再动手。
+0. **先读 §2.3**：`main.swift` 的 env 剥离逻辑 + 已退役手动 HandoffPrompt 关于
+   `LIGHTTY_TASK` 被移除的历史。搞清原因再动手。
 1. `TerminalSurfaceConfiguration` 加 `var envVars: [String: String] = [:]`。
 2. `withCValue` 里构造 `ghostty_env_var_s` 数组。
    **关键**：ghostty 会 `dupeZ` 到自己的 arena，C 字符串只需活过 `body(&config)`
@@ -563,7 +563,9 @@ lightty 在前台且该 pane 可见时**不**发通知；拒绝通知权限后�
   两家的 `UserPromptSubmit` 都接受 `additionalContext`，wire 与 `SessionStart` 完全一致
 - 解绑时 lightty 连去重标记一起删：否则同会话解绑再绑回同一任务会被当成已注过
 
-`Restore` 按钮的注入流程由此退役。
+pane header 的 `Restore` / `Handoff` 手动注入按钮由此退役；恢复后的 agent 启动或
+下一次提交会自动收到 handoff。旧 `RestoreFlow` 恢复气泡同样删除：任务卡片点击
+已运行任务直接跳转，点击休眠任务直接在当前工作区打开；全文搜索保留显式目的地选择。
 
 ---
 

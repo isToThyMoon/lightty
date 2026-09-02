@@ -66,20 +66,13 @@
 "Archive task" = "Archive task";
 "Delete task (move to Trash)" = "Delete task (move to Trash)";
 
-/* 恢复气泡 */
-"Task: %@" = "Task: %@";
-"No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section." = "No handoff summary yet — after “Handoff”, the agent writes next steps / current state / blockers, excerpted here by section.";
-"After restoring, start claude/codex and click “Restore” in the pane header to hand over." = "After restoring, start claude/codex and click “Restore” in the pane header to hand over.";
-"Already open" = "Already open";
-"Open in" = "Open in";
-"Open another" = "Open another";
+/* 任务打开 / 跳转 */
 "Jump · %@" = "Jump · %@";
 
 /* 灵动岛 */
 "Name this terminal" = "Name this terminal";
 "Search, or type a new task name and press Return" = "Search, or type a new task name and press Return";
 "Bind task" = "Bind task";
-"Bind a task first — click the pane name capsule to pick one" = "Bind a task first — click the pane name capsule to pick one";
 "New task “%@”" = "New task “%@”";
 "Return" = "Return";
 "Unbind" = "Unbind";

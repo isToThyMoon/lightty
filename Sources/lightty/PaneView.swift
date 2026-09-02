@@ -48,8 +48,6 @@ final class PaneView: NSView {
         super.init(frame: .zero)
         header.title = L("Terminal %d", Self.paneCounter)
         header.dot = .unnamed
-        header.injectEnabled = false
-        header.finishLooksEnabled = false
         header.dragIdentifier = dragIdentifier
         header.onSelect = { [weak self] in self?.focusTerminal() }
         header.dragPreviewProvider = { [weak self] in self?.makeDragPreview() }
@@ -83,8 +81,6 @@ final class PaneView: NSView {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ruler.needsDisplay = true }
         }
 
-        header.onFinish = { [weak self] in self?.finish() }
-        header.onInject = { [weak self] in self?.inject() }
         header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
         // ✕ 走内核关闭流程（与 cmd+W 同路），最终回到 close_surface_cb
         header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
@@ -116,8 +112,6 @@ final class PaneView: NSView {
         binding = .bound(fileURL: fileURL)
         header.setTaskName(name)
         header.dot = .active
-        header.injectEnabled = true
-        header.finishLooksEnabled = true
         syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
@@ -129,8 +123,6 @@ final class PaneView: NSView {
         binding = .unnamed
         header.setTaskName(nil)
         header.dot = .unnamed
-        header.injectEnabled = false
-        header.finishLooksEnabled = false
         syncTaskPointer()
         refreshIdentityPanel()
         onMetadataChange?(self)
@@ -358,28 +350,6 @@ final class PaneView: NSView {
         onMetadataChange?(self)
         // 工作区列的 pane 行显示 pane 名，改名后需要活地图刷新
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-    }
-
-    // MARK: - 收工 / 注入（指令在点击时实时嵌入当前任务文件路径）
-
-    private func finish() {
-        switch binding {
-        case .unnamed:
-            // 未绑定：原地文字提示（就近反馈——跳去打开别处的选择器
-            // 会造成 A 点击 B 响应的空间跳跃）。
-            ShellHintPopover.present(
-                from: header.finishAnchor,
-                text: L("Bind a task first — click the pane name capsule to pick one"),
-                onClose: { [weak self] in self?.header.endCapsuleAttention() })
-            header.beginCapsuleAttention()
-        case .bound(let url):
-            terminal.sendText(HandoffPrompt.finish(taskFilePath: url.path) + "\r")
-        }
-    }
-
-    private func inject() {
-        guard case .bound(let url) = binding else { return }
-        terminal.sendText(HandoffPrompt.resume(taskFilePath: url.path) + "\r")
     }
 
     func focusTerminal() {

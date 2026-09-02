@@ -2,8 +2,8 @@ import AppKit
 import GhosttyKit
 import LighttyCore
 
-/// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）+
-/// 收工/注入按钮。胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
+/// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
+/// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
 /// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
 /// 并入胶囊，窄时只剩点 + pane 名，信息由展开面板承载。
 /// 它紧贴 terminal surface，底色/文字仍取 Ghostty config 的
@@ -22,8 +22,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         }
     }
 
-    var onFinish: (() -> Void)?
-    var onInject: (() -> Void)?
     /// 单击/开始拖动 header 时把该 pane 设为 active。
     var onSelect: (() -> Void)?
     /// 点击身份胶囊：展开/收起 PaneIdentityPanel。
@@ -43,12 +41,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     var onCloseRequested: (() -> Void)?
     private let nameLabel = NSTextField(labelWithString: "")
     private let taskHintLabel = NSTextField(labelWithString: "")
-    // 动词直接用 handoff 术语本身（UI 中 handoff 一律不翻译）：
-    // Handoff = 让 agent 写交接文档交出这一棒；Restore = 让 agent 读文档接续。
-    private let finishButton = ShellTextButton(
-        "Handoff", palette: .terminal, target: nil, action: nil)
-    private let injectButton = ShellTextButton(
-        "Restore", palette: .terminal, target: nil, action: nil)
     private var capsuleTracking: NSTrackingArea?
     private var capsuleHovered = false {
         didSet {
@@ -89,39 +81,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         didSet { applyDotColor() }
     }
 
-    var injectEnabled: Bool {
-        get { injectButton.isEnabled }
-        set { injectButton.isEnabled = newValue }
-    }
-
-    /// Handoff 的"软置灰"：未绑定任务时呈禁用观感，但保留点击——点击原地
-    /// 提示"先绑定任务"，而不是无声吞掉。观感由按钮状态机维护，不会被
-    /// hover/点击刷新冲掉。
-    var finishLooksEnabled: Bool {
-        get { !finishButton.looksDisabled }
-        set { finishButton.looksDisabled = !newValue }
-    }
-
-    /// 未绑定提示气泡的锚点（原地反馈用）
-    var finishAnchor: NSView { finishButton }
-
-    /// 注意力环的申领方。两条互不知情的路会同时想要这个环：Handoff 未绑定提示
-    /// 气泡（临时，几秒）和 `.attention` 状态（可能持续几分钟）。所以按持有方记账
-    /// 而不是单一开关——否则气泡关闭时会顺手掐掉状态环，反过来状态转出
-    /// `.attention` 也会把还开着的气泡的环收走。
-    enum CapsuleAttentionOwner { case hint, status }
-
-    /// 轻量注意力环：胶囊外圈细描边缓慢呼吸。有任一持有方时存在，全部退出才淡出。
+    /// `.attention` 的轻量注意力环：胶囊外圈细描边缓慢呼吸。
     private var attentionRing: NSView?
-    private var attentionOwners: Set<CapsuleAttentionOwner> = []
     private static let ringBreatheKey = "breathe"
 
-    /// 默认 `.hint` 保持既有调用点（HandoffPrompt 气泡）零改动。
-    func beginCapsuleAttention(_ owner: CapsuleAttentionOwner = .hint) {
-        let wasIdle = attentionOwners.isEmpty
-        attentionOwners.insert(owner)
-        guard wasIdle else {
-            // 环已在，第二个持有方只是接手，不重启动画——重启会让呼吸相位跳一下
+    private func beginCapsuleAttention() {
+        guard attentionRing == nil else {
             syncAttentionRingFrame()
             return
         }
@@ -135,9 +100,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         updateAmbientAnimations()
     }
 
-    func endCapsuleAttention(_ owner: CapsuleAttentionOwner = .hint) {
-        guard attentionOwners.remove(owner) != nil else { return }
-        guard attentionOwners.isEmpty, let ring = attentionRing else { return }
+    private func endCapsuleAttention() {
+        guard let ring = attentionRing else { return }
         attentionRing = nil
         // 先摘掉无限循环的呼吸，否则它会一直改写 opacity，把这段淡出盖掉
         ring.layer?.removeAnimation(forKey: Self.ringBreatheKey)
@@ -148,7 +112,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     }
 
     /// 环是 frame 布局（不在约束链上，避免影响胶囊尺寸），胶囊被重排后要跟上。
-    /// 提示气泡活不过一次布局所以以前没这问题，状态环能挂几分钟，必须跟。
     private func syncAttentionRingFrame() {
         attentionRing?.frame = capsule.frame.insetBy(dx: -4, dy: -4)
     }
@@ -203,20 +166,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         applyTerminalColors()
 
-        finishButton.target = self
-        finishButton.action = #selector(finishTapped)
-        injectButton.target = self
-        injectButton.action = #selector(injectTapped)
-
         addSubview(capsule)
         for v in [dotView, closeButton, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             capsule.addSubview(v)
         }
-        for v in [capsule, injectButton, finishButton] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            if v !== capsule { addSubview(v) }
-        }
+        capsule.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
@@ -225,7 +180,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 20),
             capsule.trailingAnchor.constraint(
-                lessThanOrEqualTo: injectButton.leadingAnchor, constant: -8),
+                lessThanOrEqualTo: trailingAnchor, constant: -4),
 
             dotView.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 6),
             dotView.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
@@ -245,13 +200,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             taskHintLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
             taskHintLabel.trailingAnchor.constraint(
                 equalTo: capsule.trailingAnchor, constant: -7),
-
-            finishButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            finishButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            finishButton.heightAnchor.constraint(equalToConstant: 20),
-            injectButton.trailingAnchor.constraint(equalTo: finishButton.leadingAnchor, constant: -4),
-            injectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            injectButton.heightAnchor.constraint(equalToConstant: 20),
         ])
 
         // 状态动画的开关条件（key / 遮挡）都是窗口级事件。object 传 nil 收全部窗口的，
@@ -309,11 +257,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     override func layout() {
         super.layout()
-        guard injectButton.frame.minX > 0 else { return }
+        guard bounds.width > 0 else { return }
         // 胶囊完整需求宽度 vs 可用宽度：不够时先收任务 hint（pane 名常显）。
         let chrome: CGFloat = 6 + 7 + 6 + 7 // 胶囊内边距 + 点 + 间距
         let nameWidth = ceil(nameLabel.intrinsicContentSize.width)
-        let available = injectButton.frame.minX - 8 - 4
+        let available = bounds.width - 8
         let fits = chrome + nameWidth + fullHintWidth <= available
         let want = (fits && boundTaskName != nil)
             ? " · \(boundTaskName ?? "")" : ""
@@ -354,8 +302,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         applyCapsuleFill()
         attentionRing?.layer?.borderColor = terminalForeground
             .withAlphaComponent(0.5).cgColor
-        finishButton.terminalForeground = terminalForeground
-        injectButton.terminalForeground = terminalForeground
     }
 
     /// 状态色是 `shellDynamic`，CGColor 只是快照——外观切换必须重解析，
@@ -413,9 +359,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // `.attention` 直接复用现成的呼吸环（唯一一处「非人不可」的状态，
         // 值得动用胶囊级的提示；其余状态一律只在圆点里表达）
         if status?.state == .attention {
-            beginCapsuleAttention(.status)
+            beginCapsuleAttention()
         } else {
-            endCapsuleAttention(.status)
+            endCapsuleAttention()
         }
 
         // 转出 done（focus 后 markRead）时把欠着的闪烁一并作废——
@@ -568,13 +514,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     // MARK: - 点击 / 拖拽
 
-    /// 胶囊/空白都属于可拖 header；动作按钮保留自己的点击语义。
+    /// 胶囊/空白都属于可拖 header；hover 态的关闭钮保留自己的点击语义。
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        if hit === finishButton || hit.isDescendant(of: finishButton)
-            || hit === injectButton || hit.isDescendant(of: injectButton) {
-            return hit
-        }
         // hover 态的 ✕（隐藏时 hitTest 天然不会命中它）
         if !closeButton.isHidden,
             hit === closeButton || hit.isDescendant(of: closeButton) {
@@ -674,7 +616,5 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         return image
     }
 
-    @objc private func finishTapped() { onFinish?() }
     @objc private func closeTapped() { onCloseRequested?() }
-    @objc private func injectTapped() { onInject?() }
 }
