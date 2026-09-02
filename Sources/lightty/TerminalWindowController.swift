@@ -123,7 +123,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private weak var titlebarChrome: NSView?
-    private weak var workspaceLabel: TitlebarWorkspaceLabel?
     private weak var lastFocusedPane: PaneView?
     private weak var zoomedPane: PaneView?
 
@@ -175,25 +174,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             symbol: "sidebar.left", accessibilityLabel: L("Workspace Sidebar"), target: self,
             action: #selector(toggleSidebarFromTitlebar))
 
-        // 单工作区时 tab 栏隐藏，用户无从感知/重命名当前工作区——标题栏放一个
-        // 安静的名字标签补位（多工作区时隐藏，感知交还给 tab 栏本身）。
-        let workspaceLabel = TitlebarWorkspaceLabel()
-        workspaceLabel.onRenameRequest = { [weak self, weak workspaceLabel] in
-            guard let self, let anchor = workspaceLabel else { return }
-            let index = self.activeTabIndex
-            guard self.tabs.indices.contains(index) else { return }
-            NameEditorPopover.present(
-                from: anchor, title: L("Rename workspace"),
-                initial: self.tabs[index].title
-            ) { [weak self] name in
-                self?.renameTab(at: index, to: name)
-            }
-        }
-
-        for view in [button, workspaceLabel] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            chrome.addSubview(view)
-        }
+        button.translatesAutoresizingMaskIntoConstraints = false
+        chrome.addSubview(button)
         NSLayoutConstraint.activate([
             chrome.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor),
             chrome.trailingAnchor.constraint(equalTo: titlebar.trailingAnchor),
@@ -204,20 +186,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             button.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
             button.widthAnchor.constraint(equalToConstant: 28),
             button.heightAnchor.constraint(equalToConstant: 24),
-
-            workspaceLabel.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 10),
-            workspaceLabel.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
-            workspaceLabel.heightAnchor.constraint(equalToConstant: 24),
-            workspaceLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: chrome.leadingAnchor,
-                constant: ShellStyle.workspaceColumnWidth - 12),
         ])
 
         titlebarChrome = chrome
         sidebarButton = button
-        self.workspaceLabel = workspaceLabel
         updateSidebarButtonState()
-        updateWorkspaceLabel()
     }
 
     private func updateWindowTitle(for pane: PaneView?) {
@@ -456,16 +429,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if visible {
             tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
         }
-        updateWorkspaceLabel()
         workspaceSidebar?.reload()
-    }
-
-    /// 标题栏工作区名标签：单工作区（tab 栏隐藏）时显示当前名字，否则隐藏。
-    private func updateWorkspaceLabel() {
-        guard let workspaceLabel else { return }
-        let single = tabs.count <= 1
-        workspaceLabel.isHidden = !single
-        if single { workspaceLabel.text = tabs.first?.title ?? "" }
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -1275,89 +1239,4 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
 private extension NSRect {
     var center: NSPoint { NSPoint(x: midX, y: midY) }
-}
-
-/// 标题栏工作区名标签：仅单工作区（tab 栏隐藏）时显示，单击重命名。
-/// 双击被标题栏的系统缩放手势占用，不可用；单击在标题栏无原生语义，安全。
-/// 从标签按下后拖动（>3pt）交还窗口拖拽，不误触发重命名。
-private final class TitlebarWorkspaceLabel: NSView {
-    var onRenameRequest: (() -> Void)?
-
-    private let label = NSTextField(labelWithString: "")
-    private var tracking: NSTrackingArea?
-    private var hovered = false { didSet { applyFill() } }
-
-    var text: String {
-        get { label.stringValue }
-        set { label.stringValue = newValue }
-    }
-
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 5
-        label.font = .systemFont(ofSize: 11, weight: .medium)
-        label.textColor = ShellStyle.tertiaryText
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        toolTip = L("Rename workspace")
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func applyFill() {
-        let fill: NSColor = hovered ? ShellStyle.controlFill : .clear
-        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyFill()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let start = event.locationInWindow
-        while true {
-            guard let next = window?.nextEvent(
-                matching: [.leftMouseUp, .leftMouseDragged]) else { return }
-            switch next.type {
-            case .leftMouseUp:
-                onRenameRequest?()
-                return
-            case .leftMouseDragged:
-                let dx = next.locationInWindow.x - start.x
-                let dy = next.locationInWindow.y - start.y
-                if dx * dx + dy * dy > 9 {
-                    window?.performDrag(with: event)
-                    return
-                }
-            default:
-                return
-            }
-        }
-    }
 }
