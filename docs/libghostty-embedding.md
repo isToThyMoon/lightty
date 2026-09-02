@@ -78,7 +78,7 @@ lightty 只有产品壳，没有第二套 terminal keymap、terminal config 或 
 | split-divider-color 默认 | 亮背景 darken 8% / 暗背景 darken 40%（HSB） | Config.splitDividerColor + OSColor+Extension | 对齐（公式照抄） |
 | window-theme | 保留在传给 libghostty 的完整 config 中；lightty host 不再读取它来设置整窗 NSAppearance，应用 chrome 固定为产品定义的 Codex 浅色外观 | Config.windowTheme | **有意分叉**：terminal config ≠ app chrome theme |
 | window-colorspace | **壳层不碰**（core 渲染层自行消费） | 官方壳同样不设 window.colorSpace | 对齐 |
-| macos-titlebar-style | 保留 lightty 原生操作标题栏，不读取该项 | HiddenTitlebarTerminalWindow | **有意分叉**：标题栏承担任务导航与 pane 操作 |
+| macos-titlebar-style | 保留 lightty 原生标题栏，不读取该项 | HiddenTitlebarTerminalWindow | **有意分叉**：标题栏只承载系统三键与侧栏开关，pane 操作位于侧栏标题行 |
 | 热重载 | core `reload_config` action 重新执行同一条 default_files → recursive_files → finalize 链，并用 `ghostty_app_update_config` / `ghostty_surface_update_config` 更新 | 官方监听 reload + 系统外观变化重载 | terminal core 已接；依赖启动快照的 pane chrome/window base 刷新待补 |
 
 配置一致性回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。脚本从

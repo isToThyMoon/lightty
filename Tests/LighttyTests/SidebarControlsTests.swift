@@ -16,7 +16,12 @@ final class SidebarControlsTests: XCTestCase {
         }
 
         let controller = TerminalWindowController()
-        let themeFrame = try XCTUnwrap(controller.window?.contentView?.superview)
+        let window = try XCTUnwrap(controller.window)
+        let themeFrame = try XCTUnwrap(window.contentView?.superview)
+
+        XCTAssertTrue(
+            window.styleMask.contains(.fullSizeContentView),
+            "terminal content 应铺到窗口四边")
 
         // TerminalWindowController finishes installing its initial chrome on the
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
@@ -32,5 +37,18 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertGreaterThan(control.alphaValue, 0)
         XCTAssertEqual(control.frame.minX, themeFrame.bounds.minX, accuracy: 0.5)
         XCTAssertEqual(control.frame.width, 12, accuracy: 0.5)
+
+        let sidebar = try XCTUnwrap(
+            themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first)
+        let sidebarToolTips = descendantToolTips(of: sidebar)
+        XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
+        XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
+        XCTAssertTrue(sidebarToolTips.contains(L("New workspace")))
+    }
+
+    private func descendantToolTips(of view: NSView) -> [String] {
+        view.subviews.flatMap { child in
+            [child.toolTip].compactMap { $0 } + descendantToolTips(of: child)
+        }
     }
 }

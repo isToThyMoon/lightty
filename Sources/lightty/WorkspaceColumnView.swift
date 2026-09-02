@@ -8,7 +8,13 @@ import LighttyCore
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
 final class WorkspaceColumnView: NSView {
     private let sectionLabel = NSTextField(labelWithString: L("Workspaces"))
-    private let newButton = ShellIconButton(
+    private let splitRightButton = ShellIconButton(
+        symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"),
+        target: nil, action: nil)
+    private let splitDownButton = ShellIconButton(
+        symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"),
+        target: nil, action: nil)
+    private let newWorkspaceButton = ShellIconButton(
         symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New workspace"),
         target: nil, action: nil)
     private let scroll = NSScrollView()
@@ -31,8 +37,12 @@ final class WorkspaceColumnView: NSView {
         sectionLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         sectionLabel.textColor = ShellStyle.tertiaryText
 
-        newButton.target = self
-        newButton.action = #selector(newWorkspace)
+        splitRightButton.target = self
+        splitRightButton.action = #selector(splitRight)
+        splitDownButton.target = self
+        splitDownButton.action = #selector(splitDown)
+        newWorkspaceButton.target = self
+        newWorkspaceButton.action = #selector(newWorkspace)
 
         rowsStack.orientation = .vertical
         rowsStack.alignment = .leading
@@ -47,7 +57,7 @@ final class WorkspaceColumnView: NSView {
         scroll.drawsBackground = false
         scroll.scrollerStyle = .overlay
 
-        for v in [sectionLabel, newButton, scroll] {
+        for v in [sectionLabel, splitRightButton, splitDownButton, newWorkspaceButton, scroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -55,18 +65,30 @@ final class WorkspaceColumnView: NSView {
 
         NSLayoutConstraint.activate([
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
-            newButton.topAnchor.constraint(equalTo: topAnchor, constant: 0),
-            newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            newButton.widthAnchor.constraint(equalToConstant: 28),
-            newButton.heightAnchor.constraint(equalToConstant: 28),
+            newWorkspaceButton.topAnchor.constraint(equalTo: topAnchor),
+            newWorkspaceButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            newWorkspaceButton.widthAnchor.constraint(equalToConstant: 28),
+            newWorkspaceButton.heightAnchor.constraint(equalToConstant: 28),
+
+            splitDownButton.trailingAnchor.constraint(
+                equalTo: newWorkspaceButton.leadingAnchor, constant: -1),
+            splitDownButton.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
+            splitDownButton.widthAnchor.constraint(equalToConstant: 28),
+            splitDownButton.heightAnchor.constraint(equalToConstant: 28),
+
+            splitRightButton.trailingAnchor.constraint(
+                equalTo: splitDownButton.leadingAnchor, constant: -1),
+            splitRightButton.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
+            splitRightButton.widthAnchor.constraint(equalToConstant: 28),
+            splitRightButton.heightAnchor.constraint(equalToConstant: 28),
 
             // 12 边距 + 行内 10 缩进：标题与行文字左对齐
             sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
-            sectionLabel.centerYAnchor.constraint(equalTo: newButton.centerYAnchor),
+            sectionLabel.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
             sectionLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: newButton.leadingAnchor, constant: -8),
+                lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
 
-            scroll.topAnchor.constraint(equalTo: newButton.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: newWorkspaceButton.bottomAnchor, constant: 12),
             // 两侧对称 12 = 边缘钮宽度：task 卡片关着时，窗口左缘的展开钮
             // （EdgeToggleControl）正好落在左侧这条边沟里，行高亮到钮的圆角处止步。
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -135,8 +157,17 @@ final class WorkspaceColumnView: NSView {
     }
 
     @objc private func newWorkspace() {
-        guard let controller else { return }
-        controller.addTab(initialPane: PaneView())
+        // 保留原标题栏按钮的 Ghostty action 通路：新工作区继承当前 pane 的
+        // cwd/font/context，而不是在侧栏层直接造一个默认 PaneView。
+        controller?.activePane?.terminal.performBindingAction("new_tab")
+    }
+
+    @objc private func splitRight() {
+        controller?.activePane?.terminal.performBindingAction("new_split:right")
+    }
+
+    @objc private func splitDown() {
+        controller?.activePane?.terminal.performBindingAction("new_split:down")
     }
 
     func reload() {

@@ -124,8 +124,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private weak var titlebarChrome: NSView?
     private weak var workspaceLabel: TitlebarWorkspaceLabel?
-    private weak var newTabButton: ShellIconButton?
-    private var newTabButtonWidthConstraint: NSLayoutConstraint?
     private weak var lastFocusedPane: PaneView?
     private weak var zoomedPane: PaneView?
 
@@ -138,7 +136,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         rootContainer.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = rootContainer
         installMainArea()
-        installTitlebarBackdrop(on: window)
         install(pane: initialPane)
         lastFocusedPane = initialPane
         addTab(initialPane: initialPane, select: true, installPane: false)
@@ -155,37 +152,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// 标题栏是应用 chrome，不继承 terminal background/background-opacity。
-    /// 参考 Codex 的浅色顶栏使用近白实底和 1pt 底边，终端透明度只留在 content 区。
-    private func installTitlebarBackdrop(on window: NSWindow) {
-        guard let contentView = window.contentView,
-              let themeFrame = contentView.superview else { return }
-        let wash = ShellBackdropView(fill: ShellStyle.titlebarBackground)
-        wash.translatesAutoresizingMaskIntoConstraints = false
-        // 原生 tab bar 会在首次 new_tab 时动态插入 titlebar container。wash 必须
-        // 永远位于整个 container 下方；若只相对 contentView 排序，新 tab 首帧会被
-        // 这块不透明底色盖住，直到切换 tab 触发 AppKit 重排。
-        var titlebarContainer: NSView? = window.standardWindowButton(.closeButton)
-        while let view = titlebarContainer, view.superview !== themeFrame {
-            titlebarContainer = view.superview
-        }
-        if let titlebarContainer {
-            themeFrame.addSubview(wash, positioned: .below, relativeTo: titlebarContainer)
-        } else {
-            themeFrame.addSubview(wash, positioned: .below, relativeTo: contentView)
-        }
-
-        // 不画底部分隔线：与侧栏边线同理，标题栏与内容区靠底色自然分界。
-        NSLayoutConstraint.activate([
-            wash.topAnchor.constraint(equalTo: themeFrame.topAnchor),
-            wash.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
-            wash.trailingAnchor.constraint(equalTo: themeFrame.trailingAnchor),
-            wash.bottomAnchor.constraint(equalTo: contentView.topAnchor),
-        ])
-    }
-
-    /// 标题栏操作区：三键后是抽屉开关，右侧是高频的新 tab 与分屏。任务名只在
-    /// pane header 显示，避免同一名字在 titlebar 与 pane 重复。
+    /// 标题栏操作区：三键后只保留抽屉开关。新工作区与分屏操作归入工作区侧栏
+    /// 标题行，使右侧 terminal 可以延伸到窗口顶边，不再有一条全宽操作栏。
     /// 直接挂进标题栏视图并以缩放键锚点对齐，保证与红绿灯严格同一水平线。
     /// ⚠️ 标题栏是私有视图，会在侧边栏插拔/全屏切换时重建并丢掉外来子视图——
     /// 所以做成幂等的 ensure：掉了就重装（toggle 与窗口激活时都会调）。
@@ -207,17 +175,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             symbol: "sidebar.left", accessibilityLabel: L("Workspace Sidebar"), target: self,
             action: #selector(toggleSidebarFromTitlebar))
 
-        // 右侧按钮组（图标区分语义）：向右分屏 | 向下分屏 | 新 tab
-        let newTabButton = ShellIconButton(
-            symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New workspace"), target: self,
-            action: #selector(newTabFromTitlebar))
-        let splitRightButton = ShellIconButton(
-            symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"), target: self,
-            action: #selector(splitRightFromTitlebar))
-        let splitDownButton = ShellIconButton(
-            symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"), target: self,
-            action: #selector(splitDownFromTitlebar))
-
         // 单工作区时 tab 栏隐藏，用户无从感知/重命名当前工作区——标题栏放一个
         // 安静的名字标签补位（多工作区时隐藏，感知交还给 tab 栏本身）。
         let workspaceLabel = TitlebarWorkspaceLabel()
@@ -233,11 +190,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             }
         }
 
-        for view in [button, splitRightButton, splitDownButton, newTabButton, workspaceLabel] {
+        for view in [button, workspaceLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             chrome.addSubview(view)
         }
-        let newTabWidth = newTabButton.widthAnchor.constraint(equalToConstant: 28)
         NSLayoutConstraint.activate([
             chrome.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor),
             chrome.trailingAnchor.constraint(equalTo: titlebar.trailingAnchor),
@@ -249,35 +205,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             button.widthAnchor.constraint(equalToConstant: 28),
             button.heightAnchor.constraint(equalToConstant: 24),
 
-            newTabButton.trailingAnchor.constraint(equalTo: chrome.trailingAnchor, constant: -10),
-            newTabButton.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
-            newTabWidth,
-            newTabButton.heightAnchor.constraint(equalToConstant: 24),
-
-            splitDownButton.trailingAnchor.constraint(equalTo: newTabButton.leadingAnchor, constant: -3),
-            splitDownButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            splitDownButton.widthAnchor.constraint(equalToConstant: 28),
-            splitDownButton.heightAnchor.constraint(equalToConstant: 24),
-
-            splitRightButton.trailingAnchor.constraint(equalTo: splitDownButton.leadingAnchor, constant: -3),
-            splitRightButton.centerYAnchor.constraint(equalTo: splitDownButton.centerYAnchor),
-            splitRightButton.widthAnchor.constraint(equalToConstant: 28),
-            splitRightButton.heightAnchor.constraint(equalToConstant: 24),
-
             workspaceLabel.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 10),
             workspaceLabel.centerYAnchor.constraint(equalTo: zoomButton.centerYAnchor),
             workspaceLabel.heightAnchor.constraint(equalToConstant: 24),
             workspaceLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -12),
+                lessThanOrEqualTo: chrome.leadingAnchor,
+                constant: ShellStyle.workspaceColumnWidth - 12),
         ])
 
         titlebarChrome = chrome
         sidebarButton = button
         self.workspaceLabel = workspaceLabel
-        self.newTabButton = newTabButton
-        newTabButtonWidthConstraint = newTabWidth
         updateSidebarButtonState()
-        updateNewTabButtonVisibility()
         updateWorkspaceLabel()
     }
 
@@ -295,22 +234,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarButton?.isActive = workspaceSidebar != nil || taskPanel != nil
     }
 
-    /// 「新 Tab」入口固定在标题栏（2026-08-29 定稿）：入口搬家增加用户心智
-    /// 负担，tab 条内不再放重复「+」。
-    private func updateNewTabButtonVisibility() {
-        newTabButton?.isHidden = false
-        newTabButtonWidthConstraint?.constant = 28
-    }
-
     func windowDidBecomeKey(_ notification: Notification) {
         guard let window else { return }
         installTitlebarAccessory(on: window)
-        updateNewTabButtonVisibility()
         updateWindowTitle(for: activePane)
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
             self.installTitlebarAccessory(on: window)
-            self.updateNewTabButtonVisibility()
             self.updateWindowTitle(for: self.activePane)
         }
     }
@@ -320,24 +250,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     func windowDidUpdate(_ notification: Notification) {
         guard let window else { return }
         installTitlebarAccessory(on: window)
-        updateNewTabButtonVisibility()
         updateWindowTitle(for: activePane)
     }
 
     @objc private func toggleSidebarFromTitlebar() {
         toggleSidebar()
-    }
-
-    @objc private func newTabFromTitlebar() {
-        activePane?.terminal.performBindingAction("new_tab")
-    }
-
-    @objc private func splitRightFromTitlebar() {
-        activePane?.terminal.performBindingAction("new_split:right")
-    }
-
-    @objc private func splitDownFromTitlebar() {
-        activePane?.terminal.performBindingAction("new_split:down")
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -539,7 +456,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if visible {
             tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
         }
-        updateNewTabButtonVisibility()
         updateWorkspaceLabel()
         workspaceSidebar?.reload()
     }
@@ -1094,6 +1010,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             + (workspaceSidebar != nil ? ShellStyle.workspaceColumnWidth : 0)
     }
 
+    /// fullSizeContentView 让 contentView 铺满整个窗口；侧栏 chrome 仍需避让原生
+    /// 标题栏。contentLayoutRect 是 AppKit 给出的安全区，不能再从 contentView 推算。
+    private func titlebarSafeInset(in window: NSWindow) -> CGFloat {
+        max(window.frame.height - window.contentLayoutRect.height, 28)
+    }
+
     // —— 工作区侧栏（docked）——
 
     func openWorkspaceSidebar(animated: Bool = true, deferLayout: Bool = false) {
@@ -1104,8 +1026,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         while let v = titlebarContainer, v.superview !== themeFrame {
             titlebarContainer = v.superview
         }
-        let titlebarHeight = window.frame.height - contentView.frame.height
-        let sidebar = WorkspaceSidebarView(topInset: max(titlebarHeight, 28))
+        let sidebar = WorkspaceSidebarView(topInset: titlebarSafeInset(in: window))
         sidebar.onCloseRequested = { [weak self] in self?.closeWorkspaceSidebar() }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         // 必须垫在 task 卡片之下：侧栏滑入/滑出时从卡片下方穿行
@@ -1174,7 +1095,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             equalTo: themeFrame.leadingAnchor, constant: -taskPanelReserve)
         NSLayoutConstraint.activate([
             panel.topAnchor.constraint(
-                equalTo: contentView.topAnchor, constant: ShellStyle.panelInset),
+                equalTo: themeFrame.topAnchor,
+                constant: titlebarSafeInset(in: window) + ShellStyle.panelInset),
             panel.bottomAnchor.constraint(
                 equalTo: themeFrame.bottomAnchor, constant: -ShellStyle.panelInset),
             leading,

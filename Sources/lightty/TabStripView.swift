@@ -18,7 +18,7 @@ final class TabStripView: NSView {
         wantsLayer = true
         applyBackground()
 
-        // 「新 Tab」入口固定在标题栏，条内不放重复「+」（入口搬家伤心智）。
+        // 「新工作区」入口固定在工作区侧栏标题行，条内不放重复「+」。
         stack.orientation = .horizontal
         stack.spacing = 4
         stack.alignment = .centerY
