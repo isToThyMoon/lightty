@@ -6,6 +6,29 @@ import LighttyCore
 /// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
 final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
+    enum TaskActivation {
+        case jump
+        case chooseDestination
+    }
+
+    static func activation(hasRunningPane: Bool) -> TaskActivation {
+        hasRunningPane ? .jump : .chooseDestination
+    }
+
+    enum OpenDestination: CaseIterable {
+        case currentWorkspace
+        case newWorkspace
+        case newWindow
+
+        var title: String {
+            switch self {
+            case .currentWorkspace: L("Split in current workspace")
+            case .newWorkspace: L("New workspace")
+            case .newWindow: L("New window")
+            }
+        }
+    }
+
     private struct Entry {
         let fileURL: URL
         let task: TaskFile
@@ -227,7 +250,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ])
     }
 
-    /// 新建 handoff 任务文档（只建档；点击任务行时在当前工作区打开）。
+    /// 新建 handoff 任务文档（只建档；点击任务行时再选择打开目的地）。
     @objc private func newTask() {
         NameEditorPopover.present(
             from: newTaskButton, title: L("New task"), confirmLabel: L("Create")
@@ -427,7 +450,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ShellMenuPopover.present(from: sender, items: items)
     }
 
-    /// 默认动作：运行中跳到最近绑定 pane；休眠则直接在当前工作区新开 pane。
+    /// 默认动作：运行中跳到最近绑定 pane；休眠则选择打开目的地。
     @objc private func openOrJump() {
         let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
         guard row >= 0, row < filtered.count else { return }
@@ -437,16 +460,41 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let running = AppState.shared.runningPanes().first {
             $0.pane.taskFileURL?.standardizedFileURL == entry.fileURL.standardizedFileURL
         }
-        if let running {
+        switch Self.activation(hasRunningPane: running != nil) {
+        case .jump:
+            guard let running else { return }
             running.controller.window?.makeKeyAndOrderFront(nil)
             running.controller.reveal(pane: running.pane)
-        } else {
+        case .chooseDestination:
             guard let controller = window?.windowController as? TerminalWindowController
             else { return }
-            let pane = PaneView()
-            pane.bind(to: entry.fileURL, name: entry.task.name)
-            controller.addPaneToActiveTab(pane)
-            pane.focusTerminal()
+            let anchor = tableView.rowView(atRow: row, makeIfNecessary: false) ?? self
+            presentDestinationPicker(for: entry, from: anchor, in: controller)
         }
+    }
+
+    private func presentDestinationPicker(
+        for entry: Entry,
+        from anchor: NSView,
+        in controller: TerminalWindowController
+    ) {
+        var items: [ShellMenuPopover.Item] = [.header(L("Open in"))]
+        items.append(contentsOf: OpenDestination.allCases.map { destination in
+            .action(destination.title) { [weak controller] in
+                guard let controller else { return }
+                let pane = PaneView()
+                pane.bind(to: entry.fileURL, name: entry.task.name)
+                switch destination {
+                case .currentWorkspace:
+                    controller.addPaneToActiveTab(pane)
+                case .newWorkspace:
+                    controller.addTab(initialPane: pane)
+                case .newWindow:
+                    AppState.shared.newWindow(initialPane: pane)
+                }
+                pane.focusTerminal()
+            }
+        })
+        ShellMenuPopover.present(from: anchor, items: items)
     }
 }

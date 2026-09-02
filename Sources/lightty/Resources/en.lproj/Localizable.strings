@@ -35,6 +35,7 @@
 "Close pane" = "Close pane";
 "New workspace" = "New workspace";
 "New window" = "New window";
+"Open in" = "Open in";
 "Split right" = "Split right";
 "Split down" = "Split down";
 "Split in current workspace" = "Split in current workspace";

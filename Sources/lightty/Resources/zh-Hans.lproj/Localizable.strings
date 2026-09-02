@@ -35,6 +35,7 @@
 "Close pane" = "关闭 pane";
 "New workspace" = "新工作区";
 "New window" = "新窗口";
+"Open in" = "打开到";
 "Split right" = "向右分屏";
 "Split down" = "向下分屏";
 "Split in current workspace" = "当前工作区分屏";
