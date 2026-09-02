@@ -447,6 +447,8 @@ cat ~/.lightty/panes/test/status.json   # state == "tool"
    - `PaneRowView` 目前**不持有 pane 引用**，先加，才能原地更新
    - **不要走 `reload()`**——它拆掉重建每一行，高频状态更新会闪
    - 加 `updateStatus(_:)` 做行内更新；`done` 的行给轻高亮
+   - 活动状态文字使用状态色的轻量 badge，并与 pane 名按文字基线对齐；
+     空闲时仍显示普通的绑定任务名，不套 badge
 4. `PaneStatusPresenter`：观察 `lighttyPaneStatusDidChange`，遍历
    `AppState.shared.runningPanes()` 分发到各 pane 的 header 与侧栏行。
    提供 `install()` 供集成步骤调用。

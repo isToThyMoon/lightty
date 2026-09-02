@@ -362,6 +362,8 @@ private final class PaneRowView: NSView {
     private let bound: Bool
     private let taskName: String?
     private let taskLabel = NSTextField(labelWithString: "")
+    private let statusBadge = NSView()
+    private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var activity: PaneActivity? { status?.state }
     private var isActive: Bool
@@ -412,7 +414,16 @@ private final class PaneRowView: NSView {
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        for v in [dotView, closeButton, nameLabel, taskLabel] {
+        statusBadge.wantsLayer = true
+        statusBadge.layer?.cornerRadius = 5
+        statusBadge.isHidden = true
+        statusLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusBadge.addSubview(statusLabel)
+
+        for v in [dotView, closeButton, nameLabel, taskLabel, statusBadge] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -435,9 +446,23 @@ private final class PaneRowView: NSView {
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             taskLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 5),
-            taskLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            taskLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
             taskLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+
+            statusBadge.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
+            statusBadge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusBadge.heightAnchor.constraint(equalToConstant: 18),
+            statusBadge.trailingAnchor.constraint(
+                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+
+            statusLabel.leadingAnchor.constraint(equalTo: statusBadge.leadingAnchor, constant: 6),
+            statusLabel.trailingAnchor.constraint(equalTo: statusBadge.trailingAnchor, constant: -6),
+            statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
+            statusLabel.topAnchor.constraint(
+                greaterThanOrEqualTo: statusBadge.topAnchor, constant: 1),
+            statusLabel.bottomAnchor.constraint(
+                lessThanOrEqualTo: statusBadge.bottomAnchor, constant: -1),
         ])
         applyDotColor()
         applySecondaryLabel()
@@ -465,16 +490,25 @@ private final class PaneRowView: NSView {
         applyFill()
     }
 
-    /// 副标题槽位：有活跃状态时让位给状态文字，否则显示任务名。
+    /// 副标题槽位：有活跃状态时显示紧凑 badge，否则显示任务名。
     ///
     /// **颜色不能单独承担语义**——用户没有图例就是在猜"蓝色是什么意思"。
     /// 文字说明状态、颜色与圆点同色，两者互相解释；扫读时看色块，
     /// 停下来时看文字。任务名是稳定信息、别处也看得到，让位给时效信息不亏。
     private func applySecondaryLabel() {
         if let text = Self.statusText(status) {
-            taskLabel.stringValue = text
-            taskLabel.textColor = ShellStyle.statusColor(for: status!.state)
+            let color = ShellStyle.statusColor(for: status!.state)
+            taskLabel.isHidden = true
+            statusBadge.isHidden = false
+            statusLabel.stringValue = text
+            statusLabel.textColor = color
+            statusBadge.layer?.backgroundColor = color
+                .shellResolvedCGColor(for: effectiveAppearance)
+                .copy(alpha: 0.12)
         } else {
+            statusBadge.isHidden = true
+            statusBadge.layer?.backgroundColor = nil
+            taskLabel.isHidden = false
             taskLabel.stringValue = taskName.map { "· \($0)" } ?? ""
             taskLabel.textColor = ShellStyle.tertiaryText
         }
@@ -518,12 +552,14 @@ private final class PaneRowView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyDotColor()
+        applySecondaryLabel()
         applyFill()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyDotColor()
+        applySecondaryLabel()
         applyFill()
     }
 
