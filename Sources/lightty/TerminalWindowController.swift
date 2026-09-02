@@ -39,6 +39,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private weak var sidebarButton: ShellIconButton?
     private var workspaceSidebar: WorkspaceSidebarView?
     private var workspaceSidebarLeadingConstraint: NSLayoutConstraint?
+    private var workspaceSidebarWidthConstraint: NSLayoutConstraint?
+    private var workspaceSidebarWidth = WorkspaceSidebarWidthPreference.width()
+    private var workspaceSidebarResizeActive = false
     private var taskPanel: TaskSidebar?
     private var taskPanelLeadingConstraint: NSLayoutConstraint?
     private var edgeExpandButton: EdgeToggleControl?
@@ -946,7 +949,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     //   两者皆关            → 开工作区
     // task 卡片由专属边缘钮控制（贴边半胶囊，同形镜像）：卡片关着时窗口左缘
     // 中点展开钮（只开 task）；开着时卡片右缘中点关闭钮。
-    // 工作区侧栏没有自己的边缘钮，边线左拖关闭保留。
+    // 工作区侧栏没有自己的边缘钮，右边线负责调宽与越界左拖关闭。
 
     func toggleSidebar() {
         if taskPanel != nil {
@@ -971,7 +974,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 终端主区左缘的总让位
     private var mainAreaInset: CGFloat {
         (taskPanel != nil ? taskPanelReserve : 0)
-            + (workspaceSidebar != nil ? ShellStyle.workspaceColumnWidth : 0)
+            + (workspaceSidebar != nil ? workspaceSidebarWidth : 0)
     }
 
     /// fullSizeContentView 让 contentView 铺满整个窗口；侧栏 chrome 仍需避让原生
@@ -992,6 +995,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         let sidebar = WorkspaceSidebarView(topInset: titlebarSafeInset(in: window))
         sidebar.onCloseRequested = { [weak self] in self?.closeWorkspaceSidebar() }
+        sidebar.onResizeBegan = { [weak self] in self?.beginWorkspaceSidebarResize() }
+        sidebar.onWidthChange = { [weak self] width in
+            self?.resizeWorkspaceSidebar(to: width)
+        }
+        sidebar.onResizeEnded = { [weak self] in self?.endWorkspaceSidebarResize() }
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         // 必须垫在 task 卡片之下：侧栏滑入/滑出时从卡片下方穿行
         if let taskPanel {
@@ -1001,17 +1009,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         } else {
             themeFrame.addSubview(sidebar)
         }
-        let width = ShellStyle.workspaceColumnWidth
+        let width = workspaceSidebarWidth
         let leading = sidebar.leadingAnchor.constraint(
             equalTo: themeFrame.leadingAnchor, constant: -width)
+        let widthConstraint = sidebar.widthAnchor.constraint(equalToConstant: width)
         NSLayoutConstraint.activate([
             sidebar.topAnchor.constraint(equalTo: themeFrame.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
             leading,
-            sidebar.widthAnchor.constraint(equalToConstant: width),
+            widthConstraint,
         ])
         workspaceSidebar = sidebar
         workspaceSidebarLeadingConstraint = leading
+        workspaceSidebarWidthConstraint = widthConstraint
         updateSidebarButtonState()
         guard !deferLayout else { return }  // 调用方统一编排动画
         if animated {
@@ -1029,11 +1039,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     func closeWorkspaceSidebar() {
         guard let sidebar = workspaceSidebar else { return }
+        endWorkspaceSidebarResize()
         workspaceSidebar = nil
         updateSidebarButtonState()
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let workspaceSidebarLeadingConstraint {
-            targets.append((workspaceSidebarLeadingConstraint, -ShellStyle.workspaceColumnWidth))
+            targets.append((workspaceSidebarLeadingConstraint, -workspaceSidebarWidth))
         }
         if let rootLeadingConstraint {
             targets.append((rootLeadingConstraint, mainAreaInset))
@@ -1041,8 +1052,35 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         animateSidebarLayout(targets) { [weak self] in
             sidebar.removeFromSuperview()
             self?.workspaceSidebarLeadingConstraint = nil
+            self?.workspaceSidebarWidthConstraint = nil
             self?.activePane?.focusTerminal()
         }
+    }
+
+    private func beginWorkspaceSidebarResize() {
+        guard workspaceSidebar != nil, !workspaceSidebarResizeActive else { return }
+        // 若用户在打开动画尚未结束时抓住边线，先落到完整展开态再接管拖动。
+        stopSidebarAnimationDriver()
+        workspaceSidebarLeadingConstraint?.constant = workspaceSidebarOpenX
+        rootLeadingConstraint?.constant = mainAreaInset
+        window?.contentView?.superview?.layoutSubtreeIfNeeded()
+        workspaceSidebarResizeActive = true
+        panes().forEach { $0.terminal.setPromptClearOnResize(false) }
+    }
+
+    private func resizeWorkspaceSidebar(to proposedWidth: CGFloat) {
+        guard workspaceSidebar != nil, let workspaceSidebarWidthConstraint else { return }
+        workspaceSidebarWidth = WorkspaceSidebarSizing.clampedWidth(proposedWidth)
+        workspaceSidebarWidthConstraint.constant = workspaceSidebarWidth
+        rootLeadingConstraint?.constant = mainAreaInset
+        window?.contentView?.superview?.layoutSubtreeIfNeeded()
+    }
+
+    private func endWorkspaceSidebarResize() {
+        guard workspaceSidebarResizeActive else { return }
+        workspaceSidebarResizeActive = false
+        WorkspaceSidebarWidthPreference.setWidth(workspaceSidebarWidth)
+        panes().forEach { $0.terminal.setPromptClearOnResize(true) }
     }
 
     // —— 任务浮空卡片（布局占位、视觉悬浮）——
@@ -1123,6 +1161,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         let sidebar = workspaceSidebar
+        endWorkspaceSidebarResize()
         taskPanel = nil
         workspaceSidebar = nil
         updateSidebarButtonState()
@@ -1131,7 +1170,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let panelLeading { targets.append((panelLeading, -taskPanelReserve)) }
         if let workspaceSidebarLeadingConstraint {
-            targets.append((workspaceSidebarLeadingConstraint, -ShellStyle.workspaceColumnWidth))
+            targets.append((workspaceSidebarLeadingConstraint, -workspaceSidebarWidth))
         }
         if let rootLeadingConstraint {
             targets.append((rootLeadingConstraint, mainAreaInset))
@@ -1141,6 +1180,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             panel.removeFromSuperview()
             sidebar?.removeFromSuperview()
             self?.workspaceSidebarLeadingConstraint = nil
+            self?.workspaceSidebarWidthConstraint = nil
             self?.updateEdgeExpandButton()
             self?.activePane?.focusTerminal()
         }

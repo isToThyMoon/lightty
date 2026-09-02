@@ -1,11 +1,46 @@
 import AppKit
 
+enum WorkspaceSidebarSizing {
+    static let minimumWidth = ShellStyle.workspaceColumnWidth
+    static let maximumWidth = minimumWidth * 2
+    /// 到达最小宽度后还要再拖一段才关闭，避免想调窄时误收起。
+    static let closeOvershoot: CGFloat = 40
+
+    static func clampedWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, minimumWidth), maximumWidth)
+    }
+
+    static func shouldClose(rawWidth: CGFloat) -> Bool {
+        rawWidth < minimumWidth - closeOvershoot
+    }
+}
+
+enum WorkspaceSidebarWidthPreference {
+    static let defaultsKey = "lightty.workspaceSidebar.width"
+
+    static func width(in defaults: UserDefaults = .standard) -> CGFloat {
+        guard defaults.object(forKey: defaultsKey) != nil else {
+            return WorkspaceSidebarSizing.minimumWidth
+        }
+        let stored = CGFloat(defaults.double(forKey: defaultsKey))
+        guard stored.isFinite else { return WorkspaceSidebarSizing.minimumWidth }
+        return WorkspaceSidebarSizing.clampedWidth(stored)
+    }
+
+    static func setWidth(_ width: CGFloat, in defaults: UserDefaults = .standard) {
+        defaults.set(Double(WorkspaceSidebarSizing.clampedWidth(width)), forKey: defaultsKey)
+    }
+}
+
 /// 工作区侧栏（docked，默认展开）：承载 工作区›pane 两级树。
 /// 与 task 浮层卡片是两套独立面板——工作区↔pane 是严格层级，task↔pane
 /// 是绑定关系，UI 上不呈现并列/嵌套感。
-/// 开关在标题栏侧栏按钮；右边线本体可向左拖动关闭（没有自己的边缘钮）。
+/// 开关在标题栏侧栏按钮；右边线可调宽，越过最小宽度继续左拖则关闭。
 final class WorkspaceSidebarView: NSView {
     var onCloseRequested: (() -> Void)?
+    var onResizeBegan: (() -> Void)?
+    var onWidthChange: ((CGFloat) -> Void)?
+    var onResizeEnded: (() -> Void)?
 
     private let column = WorkspaceColumnView()
     private let dragStrip = EdgeDragStrip()
@@ -15,6 +50,9 @@ final class WorkspaceSidebarView: NSView {
         wantsLayer = true
 
         dragStrip.onDragClose = { [weak self] in self?.onCloseRequested?() }
+        dragStrip.onResizeBegan = { [weak self] in self?.onResizeBegan?() }
+        dragStrip.onWidthChange = { [weak self] width in self?.onWidthChange?(width) }
+        dragStrip.onResizeEnded = { [weak self] in self?.onResizeEnded?() }
 
         for v in [column, dragStrip] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -225,10 +263,13 @@ final class EdgeRevealStrip: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// 侧栏右边线的拖动条：向左拖过阈值即关闭（无实时改宽——侧栏定宽，
-/// 拖动语义就是"合上"）；同时是边缘控件的 hover 浮现带。
+/// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽；到达最小宽后继续
+/// 向左拖过阈值即关闭。同时保留边缘 hover 感应。
 private final class EdgeDragStrip: NSView {
     var onDragClose: (() -> Void)?
+    var onResizeBegan: (() -> Void)?
+    var onWidthChange: ((CGFloat) -> Void)?
+    var onResizeEnded: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
 
     private var tracking: NSTrackingArea?
@@ -252,18 +293,26 @@ private final class EdgeDragStrip: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let initialWidth = superview?.bounds.width ?? WorkspaceSidebarSizing.minimumWidth
         let origin = event.locationInWindow.x
+        onResizeBegan?()
         while let next = NSApp.nextEvent(
             matching: [.leftMouseDragged, .leftMouseUp],
             until: .distantFuture, inMode: .eventTracking, dequeue: true
         ) {
+            let rawWidth = initialWidth + next.locationInWindow.x - origin
             switch next.type {
             case .leftMouseDragged:
-                if next.locationInWindow.x - origin < -40 {
+                if WorkspaceSidebarSizing.shouldClose(rawWidth: rawWidth) {
+                    onWidthChange?(WorkspaceSidebarSizing.minimumWidth)
+                    onResizeEnded?()
                     onDragClose?()
                     return
                 }
+                onWidthChange?(WorkspaceSidebarSizing.clampedWidth(rawWidth))
             case .leftMouseUp:
+                onWidthChange?(WorkspaceSidebarSizing.clampedWidth(rawWidth))
+                onResizeEnded?()
                 return
             default:
                 continue

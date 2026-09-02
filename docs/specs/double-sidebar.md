@@ -72,13 +72,16 @@ disclosure chevron 折叠；折叠只影响导航显示，不改变工作区/pan
 - **开合职权（2026-09-02 改）**：标题栏侧栏按钮 = 工作区侧栏开关，task 卡片开着时
   点击为全关（两块一组动画同收）。task 卡片由边缘钮控制：卡片关着时窗口左缘中点
   展开钮、开着时卡片右缘中点关闭钮——同形镜像的贴边半胶囊，宽 12，与侧栏两侧
-  12 的边沟等宽。工作区侧栏不再有自己的边缘钮，右边线左拖关闭保留。
+  12 的边沟等宽。工作区侧栏不再有自己的边缘钮，右边线负责调宽与越界左拖关闭。
 - **工作区行数据源**：TerminalWindowController 的 tabs/activeTabIndex
   （per-window），复用既有 addTab/selectTab/closeTab/renameTab/workspaceName
   入口，不新造状态；刷新走既有中心点（原 refreshTabStrip 调用位）。
   整行单击按当前态分流：未激活 → `selectTab`，已激活 → 切换该工作区折叠态；
   disclosure 不受激活态限制，始终直接切换折叠态。
 - **宽度 token**：ShellStyle 增加工作区列/任务列宽度常量，替换现有单一 sidebarWidth。
+  工作区列以 token（200pt）为最小宽度，右边线可连续拖到最大 2 倍；到达最小值后
+  继续向左拖过防误触阈值则关闭。用户调整后的宽度写入偏好，当前窗口按钮开合保留，
+  后续新窗口沿用。
 - **样式**：行样式对齐任务行（hover/选中 fill、圆点/副标题排版），节标签行
   「工作区」+ 分屏/新建三键沿用壳层图标按钮体系。
 - **pane 树**：工作区行下嵌套 pane 行（缩进一级），数据源 = 该工作区的
@@ -92,10 +95,8 @@ disclosure chevron 折叠；折叠只影响导航显示，不改变工作区/pan
 
 ## Testing Decisions
 
-- 本仓约定：AppKit UI 层无单元测试，纯逻辑在 LighttyCore 测试
-  （TaskStore/TaskFile/FuzzyMatch 为先例）。本特性为纯 UI 编排，
-  不新增 LighttyCore 逻辑，**不新增单测**；好的测试只测外部行为，
-  为测试而抽 view-model 层被认为是为覆盖率发明缝隙，不做。
+- 本仓约定：AppKit 事件循环与约束编排不造测试缝隙；宽度上下限、关闭阈值和偏好
+  round-trip 是独立纯规则，由 `WorkspaceSidebarWidthTests` 覆盖。
 - 验收走人工冒烟清单：多工作区创建/切换/折叠/重命名/关闭、cwd 实时更新与
   路径头部截断、⌘1..9、
   标题栏快速切换、hover 预览与钉住双形态、明暗外观、侧栏动画无闪烁
