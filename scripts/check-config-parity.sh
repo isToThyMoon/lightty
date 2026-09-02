@@ -1,26 +1,31 @@
 #!/bin/bash
-# Differential regression check: lightty and the official Ghostty binary must
-# resolve the terminal-facing colors/opacity/blur identically.
+# Regression check for Lightty's libghostty configuration layering:
+# bundled defaults first, user Ghostty configuration second.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIGHTTY_BIN="${LIGHTTY_BIN:-$ROOT/.build/debug/lightty}"
-GHOSTTY_BIN="${GHOSTTY_BIN:-/Applications/Ghostty.app/Contents/MacOS/ghostty}"
 
 if [[ ! -x "$LIGHTTY_BIN" ]]; then
     echo "missing lightty binary: $LIGHTTY_BIN" >&2
     exit 2
 fi
-if [[ ! -x "$GHOSTTY_BIN" ]]; then
-    echo "missing Ghostty binary: $GHOSTTY_BIN" >&2
-    exit 2
-fi
 
-# Architectural guard: lightty owns the shell, never a second terminal config layer.
-# The only accepted loaders are default_files + recursive_files in GhosttyRuntime.
-if rg -n 'ghostty_config_load_(file|cli_args)|\.config/lightty/config' \
+# Architectural guard: one bundled baseline is allowed; there is still no CLI,
+# ~/.config/lightty, or post-finalize terminal override layer.
+if rg -n 'ghostty_config_load_cli_args|\.config/lightty/config' \
     "$ROOT/Sources/lightty"; then
-    echo "lightty must not load or overlay terminal configuration" >&2
+    echo "lightty must not add another terminal configuration source" >&2
+    exit 1
+fi
+load_file_count="$(rg -n 'ghostty_config_load_file\(' \
+    "$ROOT/Sources/lightty/GhosttyRuntime.swift" | wc -l | tr -d ' ')"
+if [[ "$load_file_count" != "1" ]]; then
+    echo "expected exactly one bundled terminal config loader, found $load_file_count" >&2
+    exit 1
+fi
+if [[ ! -f "$ROOT/Sources/lightty/Resources/lightty-default.ghostty" ]]; then
+    echo "missing bundled terminal defaults" >&2
     exit 1
 fi
 if rg -n '^[[:space:]]*appearance[[:space:]]*=' \
@@ -30,17 +35,31 @@ if rg -n '^[[:space:]]*appearance[[:space:]]*=' \
 fi
 
 KEYS='^(background|foreground|background-opacity|background-blur) = '
-official="$($GHOSTTY_BIN +show-config | sed -n -E "/$KEYS/p")"
-# Run outside the repository so a passing result cannot accidentally depend on cwd.
-actual="$(cd /tmp && "$LIGHTTY_BIN" --print-effective-terminal-config | sed -n -E "/$KEYS/p")"
+probe() {
+    local xdg_config_home="$1"
+    env \
+        HOME="$ROOT/Tests/Fixtures/GhosttyConfigBaseline" \
+        XDG_CONFIG_HOME="$xdg_config_home" \
+        "$LIGHTTY_BIN" --print-effective-terminal-config | sed -n -E "/$KEYS/p"
+}
 
-if [[ "$actual" != "$official" ]]; then
-    echo "terminal config mismatch" >&2
-    diff -u <(printf '%s\n' "$official") <(printf '%s\n' "$actual") || true
-    echo >&2
-    (cd /tmp && "$LIGHTTY_BIN" --print-effective-terminal-config) \
-        | sed -n '/^diagnostic = /p' >&2
+expected_baseline=$'background = #eff1f5\nforeground = #4c4f69\nbackground-opacity = 0.88\nbackground-blur = 30'
+actual_baseline="$(probe "$ROOT/Tests/Fixtures/GhosttyConfigBaseline")"
+[[ "$actual_baseline" == "$expected_baseline" ]] || {
+    echo "bundled terminal defaults mismatch" >&2
+    diff -u <(printf '%s\n' "$expected_baseline") \
+        <(printf '%s\n' "$actual_baseline") || true
     exit 1
-fi
+}
 
-printf '%s\n' "$actual"
+expected_override=$'background = #010203\nforeground = #a1b2c3\nbackground-opacity = 0.42\nbackground-blur = 7'
+actual_override="$(probe "$ROOT/Tests/Fixtures/GhosttyConfigOverride")"
+[[ "$actual_override" == "$expected_override" ]] || {
+    echo "user Ghostty config did not override bundled defaults" >&2
+    diff -u <(printf '%s\n' "$expected_override") \
+        <(printf '%s\n' "$actual_override") || true
+    exit 1
+}
+
+printf '%s\n' "$actual_baseline"
+printf '%s\n' "user override: OK"

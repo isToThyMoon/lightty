@@ -1,7 +1,8 @@
 #!/bin/bash
 # Architectural regression guard for the AppKit <-> libghostty seam.
 # This intentionally checks ownership boundaries in addition to runtime tests:
-# lightty may host core actions, but it must never grow a second keymap or terminal config.
+# lightty may host core actions and provide one declarative baseline config, but it must
+# never grow a second keymap or a shell-side terminal configuration implementation.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

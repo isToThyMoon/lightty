@@ -11,15 +11,15 @@
 ## 最小调用序列（spike 已验证）
 
 1. `ghostty_init(argc, argv)` == GHOSTTY_SUCCESS，进程一次，先于一切 ghostty_* 调用
-2. `ghostty_config_new` → `ghostty_config_load_default_files`（读 Ghostty 全局配置）→ `ghostty_config_load_recursive_files` → `ghostty_config_finalize`
+2. `ghostty_config_new` → `ghostty_config_load_file`（Lightty 随包基线）→ `ghostty_config_load_default_files`（读用户 Ghostty 全局配置）→ `ghostty_config_load_recursive_files` → `ghostty_config_finalize`
 3. `ghostty_runtime_config_s`：六个回调只有 `close_surface_cb` 可为 NULL；`action_cb`/`read_clipboard_cb` 可恒 return false，终端照样渲染
-4. `ghostty_app_new(&rt, config)`（core 内部 clone；host 可立即 free，也可像 lightty 一样只为后续 reload 保留同一份已 finalize config，绝不能叠加 lightty terminal 配置）
+4. `ghostty_app_new(&rt, config)`（core 内部 clone；host 可立即 free，也可像 Lightty 一样只为后续 reload 保留同一份已 finalize config；绝不能在 finalize 后由壳层二次改写 terminal 选项）
 5. 非零 frame 的普通 NSView 入窗口层级（见下方硬约束）
 6. 首个 surface 用 `ghostty_surface_config_new()` 取默认值（勿 memset 0），只设平台/view/userdata/scale；不覆盖 cwd/font。core 请求 new window/tab/split 时，先用 `ghostty_surface_inherited_config(source, context)` 取得 cwd/font/context，再交给 `ghostty_surface_new`。PTY/渲染线程自动起。
 
 ## Terminal 行为所有权（硬约束）
 
-lightty 只有产品壳，没有第二套 terminal keymap、terminal config 或 PTY 行为。物理键必须先进入 surface，由 libghostty 根据全局 Ghostty config（包括默认与用户 keybind）解析；需要 macOS 宿主完成的行为再由 `action_cb` 回到壳层。AppKit 菜单不得设置非空 `keyEquivalent`，标题栏/菜单的 terminal 操作也只能调用 `ghostty_surface_binding_action`，不能绕过 core 直接修改 pane 树。
+Lightty 只有产品壳和一份声明式随包基线，没有第二套 terminal parser、keymap 或 PTY 行为。物理键必须先进入 surface，由 libghostty 根据合并后的 Ghostty config（随包默认 + 用户配置）解析；需要 macOS 宿主完成的行为再由 `action_cb` 回到壳层。AppKit 菜单不得设置非空 `keyEquivalent`，标题栏/菜单的 terminal 操作也只能调用 `ghostty_surface_binding_action`，不能绕过 core 直接修改 pane 树。
 
 实现基准是当前 vendored Ghostty 的 `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`、`NSEvent+Extension.swift` 与 `Ghostty.Input.swift`。升级 vendor 后先逐项复核 bridge，再运行本文末尾门禁；不要凭 AppKit 习惯另写一套近似行为。
 
@@ -68,10 +68,12 @@ lightty 只有产品壳，没有第二套 terminal keymap、terminal config 或 
 
 原则：**凡属于 terminal 视觉域的配置项，其取值方式和推导公式必须照抄官方壳**（macos/Sources/Ghostty/Ghostty.Config.swift 等）；lightty 应用 chrome 是独立产品层，不在此规则内。上游更新后按此清单复核。当前对齐状态：
 
+> **配置职权变更（2026-09-02）**：Lightty 开始随包携带 `lightty-default.ghostty`，只作为用户未配置项目的基线。Ghostty 的标量配置以后加载者优先，因此用户全局文件及其递归 `config-file` 始终可以覆盖随包值；启动和热重载必须共用同一条加载链。
+
 | 配置项 | 我们的实现 | 官方出处 | 状态 |
 |---|---|---|---|
 | libghostty resources | `ghostty_init` 前解析：显式 `GHOSTTY_RESOURCES_DIR` → app `Contents/Resources/ghostty` → 从开发期可执行文件向上查找 `vendor/ghostty/zig-out/share/ghostty` | `src/os/resourcesdir.zig` | 纯资源定位 adapter；不解析或修改配置。app 打包必须复制整个 `zig-out/share/ghostty` |
-| 配置加载顺序 | default_files → recursive_files → finalize；finalize 后同一对象原样传给 `ghostty_app_new` | Ghostty.Config.swift loadConfig | 对齐全局 Ghostty config；仅跳过 load_cli_args（命令行属于 lightty）。**不存在 lightty terminal 覆盖层** |
+| 配置加载顺序 | bundled file → default_files → recursive_files → finalize；finalize 后同一对象原样传给 `ghostty_app_new` | Ghostty.Config.swift loadConfig + `ghostty_config_load_file` | 随包文件提供产品基线，用户 Ghostty 配置后加载并覆盖；仅跳过 load_cli_args（命令行属于 Lightty） |
 | background / foreground | ghostty_config_get + color struct | 同式 | 对齐 |
 | background-opacity | Double get，<1 时 terminal 窗口底座非不透明 + 白 0.001 背景；应用标题栏/侧栏另铺不透明实底 | TerminalWindow.syncAppearance | terminal 对齐，chrome 有意分叉 |
 | background-blur | ghostty_set_window_background_blur（窗口就绪后） | 同 API | 对齐 |
@@ -79,14 +81,13 @@ lightty 只有产品壳，没有第二套 terminal keymap、terminal config 或 
 | window-theme | 保留在传给 libghostty 的完整 config 中；lightty host 不再读取它来设置整窗 NSAppearance，应用 chrome 固定为产品定义的 Codex 浅色外观 | Config.windowTheme | **有意分叉**：terminal config ≠ app chrome theme |
 | window-colorspace | **壳层不碰**（core 渲染层自行消费） | 官方壳同样不设 window.colorSpace | 对齐 |
 | macos-titlebar-style | 保留 lightty 原生标题栏，不读取该项 | HiddenTitlebarTerminalWindow | **有意分叉**：标题栏只承载系统三键与侧栏开关，pane 操作位于侧栏标题行 |
-| 热重载 | core `reload_config` action 重新执行同一条 default_files → recursive_files → finalize 链，并用 `ghostty_app_update_config` / `ghostty_surface_update_config` 更新 | 官方监听 reload + 系统外观变化重载 | terminal core 已接；依赖启动快照的 pane chrome/window base 刷新待补 |
+| 热重载 | core `reload_config` action 重新执行同一条 bundled file → default_files → recursive_files → finalize 链，并用 `ghostty_app_update_config` / `ghostty_surface_update_config` 更新 | 官方监听 reload + 系统外观变化重载 | terminal core 已接；依赖启动快照的 pane chrome/window base 刷新待补 |
 
-配置一致性回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。脚本从
-`/tmp` 启动 lightty（排除 cwd 偶然命中资源），并将 lightty 的实际 libghostty
-加载结果与 `/Applications/Ghostty.app/Contents/MacOS/ghostty +show-config` 对比。
-`--print-effective-terminal-config` 只输出 background/foreground/opacity/blur 和配置
-diagnostics，供这个差分检查使用；脚本同时拒绝重新引入额外 config loader、
-`~/.config/lightty/config` 或 `TerminalWindow` 级 appearance 强制。
+配置分层回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。脚本用两套
+隔离的 XDG fixture 启动 Lightty：空用户文件必须得到随包基线，显式用户值必须覆盖
+基线。`--print-effective-terminal-config` 只输出 background/foreground/opacity/blur
+和配置 diagnostics，供检查使用；脚本同时拒绝引入第二个 bundled loader、CLI
+loader、`~/.config/lightty/config` 或 `TerminalWindow` 级 appearance 强制。
 
 Terminal adapter 回归：运行 `scripts/check-terminal-adapter-parity.sh`。它拒绝任何
 AppKit 非空快捷键和 surface Home cwd override，并钉住 inherited config、IME、

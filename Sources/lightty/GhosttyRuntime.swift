@@ -37,13 +37,13 @@ final class GhosttyRuntime {
             fatalError("ghostty_init failed")
         }
 
-        // 终端配置边界：只走 Ghostty 的全局配置链，并把 finalize 后的同一份 config
-        // 原样交给 ghostty_app_new。lightty 不加载覆盖文件，也不改写任何 terminal 选项。
-        // 有意跳过 load_cli_args：这里的命令行属于 lightty，而不是 Ghostty.app。
-        guard let config = ghostty_config_new() else { fatalError("ghostty_config_new failed") }
-        ghostty_config_load_default_files(config)
-        ghostty_config_load_recursive_files(config)
-        ghostty_config_finalize(config)
+        // 终端配置边界：先加载随包基线，再让 Ghostty 用户配置覆盖它，最后把
+        // finalize 后的同一份 config 原样交给 ghostty_app_new。Lightty 不在壳层
+        // 二次解析或改写 terminal 选项。有意跳过 load_cli_args：这里的命令行属于
+        // Lightty，而不是 Ghostty.app。
+        guard let config = Self.loadGlobalConfig() else {
+            fatalError("failed to load terminal configuration")
+        }
         self.configValues = Self.readConfigValues(config)
         self.configDiagnostics = Self.readDiagnostics(config)
         self.loadedConfig = config
@@ -153,10 +153,21 @@ final class GhosttyRuntime {
         ghostty_app_tick(app)
     }
 
-    /// 与官方 Ghostty.Config 相同的文件加载链。这是 reload 的唯一入口，
-    /// 不允许 lightty overlay 或壳层二次解析。
+    /// 启动与 reload 共用的唯一配置入口。Ghostty 的标量配置以后加载者优先，
+    /// 因此随包文件只提供缺省值，用户的全局配置与递归 config-file 均可覆盖它。
     private static func loadGlobalConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
+
+        guard let bundledDefaults = Bundle.module.path(
+            forResource: "lightty-default",
+            ofType: "ghostty"
+        ) else {
+            ghostty_config_free(config)
+            assertionFailure("missing bundled terminal defaults")
+            return nil
+        }
+
+        ghostty_config_load_file(config, bundledDefaults)
         ghostty_config_load_default_files(config)
         ghostty_config_load_recursive_files(config)
         ghostty_config_finalize(config)

@@ -1,0 +1,5 @@
+# User config must win over Lightty's bundled defaults.
+background = 010203
+foreground = a1b2c3
+background-opacity = 0.42
+background-blur = 7
