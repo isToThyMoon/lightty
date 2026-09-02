@@ -2,7 +2,7 @@ import AppKit
 import LighttyCore
 
 /// 身份胶囊的展开态（灵动岛式）。由 PaneView 驱动岛体背景层（island）形变；
-/// 面板本体静止，第一行只在水平方向随形变平滑归位。结构：
+/// 面板本体与第一行身份内容保持静止，背景从其周围形变。结构：
 ///   [●] pane 名（无框编辑，回车提交）
 ///   ─────────────────────────
 ///   [📄] 任务行（点击 → 岛体再向下生长出内联任务选择器）
@@ -33,8 +33,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 任务数据源（每次打开列表时拉取）。
     var taskProvider: (() -> [TaskChoice])?
 
-    /// 岛体背景层：frame 由 PaneView 驱动；内容布局与背景 frame 解耦，只有
-    /// fixedContent 的水平 leading 会同步归位，避免居中展开时第一行瞬移。
+    /// 岛体背景层：frame 由 PaneView 驱动；第一行身份内容与背景 frame 解耦，
+    /// 展开时状态点和标题保持原位。
     let island = NSView()
     /// 扩展区（分隔线 + 任务行）：初次形变期间渐显/渐隐；第一行不参与。
     let extras = NSView()
@@ -91,8 +91,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         island.layer?.masksToBounds = false
         addSubview(island)
 
-        fixedContent.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(fixedContent)
+        for v in [fixedContent, extras] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
 
         // —— 第一行：与胶囊逐像素同构（dot 领距 6、间距 6、11pt medium、centerY=10）
         dotView.wantsLayer = true
@@ -160,7 +162,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskRowsView.translatesAutoresizingMaskIntoConstraints = false
         taskScrollView.documentView = taskRowsView
 
-        for v in [dotView, nameField, extras] {
+        for v in [dotView, nameField] {
             v.translatesAutoresizingMaskIntoConstraints = false
             fixedContent.addSubview(v)
         }
@@ -187,7 +189,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: topAnchor),
             fixedContentLeadingConstraint,
-            fixedContent.widthAnchor.constraint(equalToConstant: Self.panelWidth),
+            fixedContent.trailingAnchor.constraint(equalTo: trailingAnchor),
             fixedContent.heightAnchor.constraint(equalToConstant: Self.baseHeight),
 
             dotView.leadingAnchor.constraint(equalTo: fixedContent.leadingAnchor, constant: 6),
@@ -201,8 +203,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 equalTo: fixedContent.trailingAnchor, constant: -10),
 
             extras.topAnchor.constraint(equalTo: fixedContent.topAnchor, constant: 24),
-            extras.leadingAnchor.constraint(equalTo: fixedContent.leadingAnchor),
-            extras.trailingAnchor.constraint(equalTo: fixedContent.trailingAnchor),
+            extras.leadingAnchor.constraint(equalTo: leadingAnchor),
+            extras.trailingAnchor.constraint(equalTo: trailingAnchor),
             extras.bottomAnchor.constraint(equalTo: fixedContent.bottomAnchor),
 
             separator.topAnchor.constraint(equalTo: extras.topAnchor),
@@ -267,9 +269,9 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// 胶囊居中形变时，第一行最初仍需与 header 胶囊逐像素重合；展开过程中再
-    /// 平滑归位到面板左轴。约束只移动 fixedContent，岛体背景由 PaneView 独立驱动。
-    func setIdentityMorphOffset(_ offset: CGFloat) {
+    /// 第一行始终锚在 header 胶囊原位；只有目标胶囊在面板打开期间移动时（例如
+    /// 侧栏开合），收起阶段才更新这个锚点以完成无缝交接。
+    func setIdentityAnchorOffset(_ offset: CGFloat) {
         fixedContentLeadingConstraint.constant = offset
         needsLayout = true
     }

@@ -23,6 +23,32 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertLessThan(expanded.minY, collapsed.minY)
     }
 
+    func testIdentityIconAndTitleStayFixedWhileIslandExpands() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(
+            x: 0, y: 0,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
+        panel.setIdentityAnchorOffset(74)
+        panel.layoutSubtreeIfNeeded()
+
+        let title = try XCTUnwrap(
+            panel.descendants.compactMap { $0 as? NSTextField }.first {
+                $0.stringValue == "Terminal"
+            })
+        let before = panel.convert(title.bounds, from: title)
+
+        panel.island.frame = PaneIdentityMorphGeometry.expandedIslandFrame(
+            in: panel.bounds, height: PaneIdentityPanel.baseHeight)
+        panel.layoutSubtreeIfNeeded()
+        let after = panel.convert(title.bounds, from: title)
+
+        XCTAssertEqual(after.minX, before.minX, accuracy: 0.001)
+        XCTAssertEqual(after.midY, before.midY, accuracy: 0.001)
+    }
+
     func testCollapseFadeIncludesOpenTaskList() throws {
         _ = NSApplication.shared
 

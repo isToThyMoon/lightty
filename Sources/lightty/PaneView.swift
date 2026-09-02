@@ -291,9 +291,9 @@ final class PaneView: NSView {
         panel.frame = PaneIdentityMorphGeometry.panelFrame(around: start)
         let collapsedFrame = PaneIdentityMorphGeometry.collapsedIslandFrame(
             capsule: start, panelFrame: panel.frame)
-        // 第一行不参与淡入：从胶囊位置平滑归位，所有扩展内容统一渐显。
+        // 第一行不参与淡入且始终停在胶囊原位；所有扩展内容统一渐显。
         panel.setExpandedContentAlpha(0, animated: false)
-        panel.setIdentityMorphOffset(collapsedFrame.minX)
+        panel.setIdentityAnchorOffset(collapsedFrame.minX)
         panel.island.frame = collapsedFrame
         host.addSubview(panel)
         identityPanel = panel
@@ -306,8 +306,6 @@ final class PaneView: NSView {
             context.allowsImplicitAnimation = true
             panel.island.animator().frame = islandRect(
                 in: panel, height: PaneIdentityPanel.baseHeight)
-            panel.setIdentityMorphOffset(0)
-            panel.animator().layoutSubtreeIfNeeded()
             panel.setExpandedContentAlpha(1, animated: true)
         } completionHandler: { [weak panel] in
             panel?.focusNameField()
@@ -343,9 +341,9 @@ final class PaneView: NSView {
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             context.allowsImplicitAnimation = true
-            // 岛体缩回中心，第一行同步回到胶囊位置，扩展区渐隐。
+            // 岛体缩回中心；第一行通常原地不动，仅在 header 曾移动时跟到新锚点。
             panel.island.animator().frame = islandEnd
-            panel.setIdentityMorphOffset(islandEnd.minX)
+            panel.setIdentityAnchorOffset(islandEnd.minX)
             panel.animator().layoutSubtreeIfNeeded()
             panel.setExpandedContentAlpha(0, animated: true)
         } completionHandler: { [weak self, weak panel] in
