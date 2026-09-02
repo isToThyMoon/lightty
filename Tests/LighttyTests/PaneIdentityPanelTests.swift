@@ -4,6 +4,25 @@ import XCTest
 
 @MainActor
 final class PaneIdentityPanelTests: XCTestCase {
+    func testMorphExpandsEquallyLeftAndRightAndOnlyDownward() {
+        let capsule = NSRect(x: 410, y: 612, width: 96, height: 20)
+        let panel = PaneIdentityMorphGeometry.panelFrame(around: capsule)
+        let collapsed = PaneIdentityMorphGeometry.collapsedIslandFrame(
+            capsule: capsule, panelFrame: panel)
+        let expanded = PaneIdentityMorphGeometry.expandedIslandFrame(
+            in: NSRect(origin: .zero, size: panel.size),
+            height: PaneIdentityPanel.baseHeight)
+
+        XCTAssertEqual(panel.midX, capsule.midX, accuracy: 0.001)
+        XCTAssertEqual(collapsed.midX, expanded.midX, accuracy: 0.001)
+        XCTAssertEqual(collapsed.maxY, expanded.maxY, accuracy: 0.001)
+        XCTAssertEqual(
+            collapsed.minX - expanded.minX,
+            expanded.maxX - collapsed.maxX,
+            accuracy: 0.001)
+        XCTAssertLessThan(expanded.minY, collapsed.minY)
+    }
+
     func testCollapseFadeIncludesOpenTaskList() throws {
         _ = NSApplication.shared
 

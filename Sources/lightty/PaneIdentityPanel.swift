@@ -2,7 +2,7 @@ import AppKit
 import LighttyCore
 
 /// 身份胶囊的展开态（灵动岛式）。由 PaneView 驱动岛体背景层（island）形变；
-/// 面板本体与内容全程静止。结构：
+/// 面板本体静止，第一行只在水平方向随形变平滑归位。结构：
 ///   [●] pane 名（无框编辑，回车提交）
 ///   ─────────────────────────
 ///   [📄] 任务行（点击 → 岛体再向下生长出内联任务选择器）
@@ -33,8 +33,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 任务数据源（每次打开列表时拉取）。
     var taskProvider: (() -> [TaskChoice])?
 
-    /// 岛体背景层：唯一参与形变动画的视图（frame 由 PaneView 驱动）。
-    /// 面板本体与内容全程静止——动画与布局彻底解耦，内容物理上不可能动。
+    /// 岛体背景层：frame 由 PaneView 驱动；内容布局与背景 frame 解耦，只有
+    /// fixedContent 的水平 leading 会同步归位，避免居中展开时第一行瞬移。
     let island = NSView()
     /// 扩展区（分隔线 + 任务行）：初次形变期间渐显/渐隐；第一行不参与。
     let extras = NSView()
@@ -66,6 +66,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// agent 活动状态色。一旦设了就压过 `dotColor`——后者由 PaneView 在
     /// bind/unbind/rename 时传进来，那条路径不知道状态，会把状态色刷掉。
     private var statusDotColor: NSColor?
+    private var fixedContentLeadingConstraint: NSLayoutConstraint!
 
     var currentIslandHeight: CGFloat {
         listOpen ? Self.baseHeight + listHeight : Self.baseHeight
@@ -180,9 +181,12 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         let rowsHeightConstraint = taskRowsView.heightAnchor.constraint(equalToConstant: 0)
         self.rowsHeightConstraint = rowsHeightConstraint
 
+        let fixedContentLeadingConstraint = fixedContent.leadingAnchor.constraint(
+            equalTo: leadingAnchor)
+        self.fixedContentLeadingConstraint = fixedContentLeadingConstraint
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: topAnchor),
-            fixedContent.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fixedContentLeadingConstraint,
             fixedContent.widthAnchor.constraint(equalToConstant: Self.panelWidth),
             fixedContent.heightAnchor.constraint(equalToConstant: Self.baseHeight),
 
@@ -262,6 +266,13 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 胶囊居中形变时，第一行最初仍需与 header 胶囊逐像素重合；展开过程中再
+    /// 平滑归位到面板左轴。约束只移动 fixedContent，岛体背景由 PaneView 独立驱动。
+    func setIdentityMorphOffset(_ offset: CGFloat) {
+        fixedContentLeadingConstraint.constant = offset
+        needsLayout = true
+    }
 
     // MARK: - 数据与主题
 

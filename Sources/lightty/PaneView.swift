@@ -6,6 +6,34 @@ extension Notification.Name {
     static let lighttyTasksDidChange = Notification.Name("lighttyTasksDidChange")
 }
 
+/// pane 身份岛的 frame 规划：折叠胶囊与展开岛保持同一水平中点、同一顶边，
+/// 因而展开只向左右等量延伸并向下生长。纯几何独立出来供回归测试锁住方向。
+struct PaneIdentityMorphGeometry {
+    static func panelFrame(around capsule: NSRect) -> NSRect {
+        NSRect(
+            x: capsule.midX - PaneIdentityPanel.panelWidth / 2,
+            y: capsule.maxY - PaneIdentityPanel.maxHeight,
+            width: PaneIdentityPanel.panelWidth,
+            height: PaneIdentityPanel.maxHeight)
+    }
+
+    static func collapsedIslandFrame(capsule: NSRect, panelFrame: NSRect) -> NSRect {
+        NSRect(
+            x: capsule.minX - panelFrame.minX,
+            y: capsule.minY - panelFrame.minY,
+            width: capsule.width,
+            height: capsule.height)
+    }
+
+    static func expandedIslandFrame(in panelBounds: NSRect, height: CGFloat) -> NSRect {
+        NSRect(
+            x: 0,
+            y: panelBounds.height - height,
+            width: PaneIdentityPanel.panelWidth,
+            height: height)
+    }
+}
+
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
@@ -186,9 +214,7 @@ final class PaneView: NSView {
     /// 收起反向缩回。frame 驱动动画，不用 Auto Layout 钉面板位置。
     /// 岛体在面板内的 rect：顶边恒对齐面板顶边，高度 h（非翻转坐标）。
     private func islandRect(in panel: PaneIdentityPanel, height: CGFloat) -> NSRect {
-        NSRect(
-            x: 0, y: panel.bounds.height - height,
-            width: PaneIdentityPanel.panelWidth, height: height)
+        PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: height)
     }
 
     private func showIdentityPanel() {
@@ -262,16 +288,13 @@ final class PaneView: NSView {
         // 面板高度取上限（岛体在其中生长），本体静止、永不动画。
         guard let host = window?.contentView else { return }
         let start = host.convert(header.capsuleFrame, from: header)
-        panel.frame = NSRect(
-            x: start.minX,
-            y: start.maxY - PaneIdentityPanel.maxHeight,
-            width: PaneIdentityPanel.panelWidth,
-            height: PaneIdentityPanel.maxHeight)
-        // 第一行不参与淡入：标题原地不动，所有扩展内容统一渐显。
+        panel.frame = PaneIdentityMorphGeometry.panelFrame(around: start)
+        let collapsedFrame = PaneIdentityMorphGeometry.collapsedIslandFrame(
+            capsule: start, panelFrame: panel.frame)
+        // 第一行不参与淡入：从胶囊位置平滑归位，所有扩展内容统一渐显。
         panel.setExpandedContentAlpha(0, animated: false)
-        panel.island.frame = NSRect(
-            x: start.minX - panel.frame.minX, y: start.minY - panel.frame.minY,
-            width: start.width, height: start.height)
+        panel.setIdentityMorphOffset(collapsedFrame.minX)
+        panel.island.frame = collapsedFrame
         host.addSubview(panel)
         identityPanel = panel
         panel.layoutSubtreeIfNeeded()
@@ -283,6 +306,8 @@ final class PaneView: NSView {
             context.allowsImplicitAnimation = true
             panel.island.animator().frame = islandRect(
                 in: panel, height: PaneIdentityPanel.baseHeight)
+            panel.setIdentityMorphOffset(0)
+            panel.animator().layoutSubtreeIfNeeded()
             panel.setExpandedContentAlpha(1, animated: true)
         } completionHandler: { [weak panel] in
             panel?.focusNameField()
@@ -312,15 +337,16 @@ final class PaneView: NSView {
         identityPanel = nil
 
         let end = (panel.superview ?? self).convert(header.capsuleFrame, from: header)
-        let islandEnd = NSRect(
-            x: end.minX - panel.frame.minX, y: end.minY - panel.frame.minY,
-            width: end.width, height: end.height)
+        let islandEnd = PaneIdentityMorphGeometry.collapsedIslandFrame(
+            capsule: end, panelFrame: panel.frame)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             context.allowsImplicitAnimation = true
-            // 内容静止，只缩回岛体背景层 + 扩展区渐隐
+            // 岛体缩回中心，第一行同步回到胶囊位置，扩展区渐隐。
             panel.island.animator().frame = islandEnd
+            panel.setIdentityMorphOffset(islandEnd.minX)
+            panel.animator().layoutSubtreeIfNeeded()
             panel.setExpandedContentAlpha(0, animated: true)
         } completionHandler: { [weak self, weak panel] in
             // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
