@@ -37,6 +37,23 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertGreaterThan(control.alphaValue, 0)
         XCTAssertEqual(control.frame.minX, themeFrame.bounds.minX, accuracy: 0.5)
         XCTAssertEqual(control.frame.width, 12, accuracy: 0.5)
+        let expandControlMidY = control.frame.midY
+
+        control.onTap?()
+        themeFrame.layoutSubtreeIfNeeded()
+
+        let taskPanel = try XCTUnwrap(
+            themeFrame.subviews.compactMap { $0 as? TaskSidebar }.first)
+        XCTAssertTrue(taskPanel.closeControl.superview === themeFrame)
+        XCTAssertEqual(
+            taskPanel.closeControl.frame.midY,
+            expandControlMidY,
+            accuracy: 0.5,
+            "task 开关前后应共用窗口边界中线")
+        XCTAssertEqual(
+            taskPanel.closeControl.frame.midY,
+            themeFrame.bounds.midY,
+            accuracy: 0.5)
 
         let sidebar = try XCTUnwrap(
             themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first)
@@ -44,6 +61,9 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
         XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
         XCTAssertTrue(sidebarToolTips.contains(L("New workspace")))
+
+        taskPanel.closeControl.onTap?()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
     }
 
     private func descendantToolTips(of view: NSView) -> [String] {

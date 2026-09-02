@@ -1111,7 +1111,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         themeFrame.addSubview(cc)
         NSLayoutConstraint.activate([
             cc.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            cc.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
+            // 开/关两态都以整窗边界中线为纵向基准。卡片自身为避让标题栏
+            // 上下并不对称，跟随 panel.centerY 会让关闭钮比展开钮偏下。
+            cc.centerYAnchor.constraint(equalTo: themeFrame.centerYAnchor),
         ])
         taskPanel = panel
         taskPanelLeadingConstraint = leading
