@@ -1,7 +1,7 @@
 import AppKit
 
-/// 自绘菜单气泡：替代原生 NSMenu（样式与壳层不符）。用于管理菜单和任务
-/// 打开目的地选择：圆角卡片、整行 hover 提亮、ShellStyle 明暗动态色。
+/// 自绘菜单气泡：替代原生 NSMenu（样式与壳层不符）。用于管理菜单：
+/// 圆角卡片、整行 hover 提亮、ShellStyle 明暗动态色。
 /// 支持：勾选态、尾注（如「运行中」）、分组标题、分隔线、危险项。
 enum ShellMenuPopover {
     struct Item {

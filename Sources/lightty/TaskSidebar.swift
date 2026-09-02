@@ -6,29 +6,6 @@ import LighttyCore
 /// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
 final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
-    enum TaskActivation {
-        case jump
-        case chooseDestination
-    }
-
-    static func activation(hasRunningPane: Bool) -> TaskActivation {
-        hasRunningPane ? .jump : .chooseDestination
-    }
-
-    enum OpenDestination: CaseIterable {
-        case currentWorkspace
-        case newWorkspace
-        case newWindow
-
-        var title: String {
-            switch self {
-            case .currentWorkspace: L("Split in current workspace")
-            case .newWorkspace: L("New workspace")
-            case .newWindow: L("New window")
-            }
-        }
-    }
-
     private struct Entry {
         let fileURL: URL
         let task: TaskFile
@@ -180,6 +157,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
+    private var selectedEntry: Entry? {
+        guard tableView.selectedRow >= 0, tableView.selectedRow < filtered.count else { return nil }
+        return filtered[tableView.selectedRow]
+    }
+
     // MARK: - 列表页
 
     private func buildListPage() {
@@ -202,7 +184,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         tableView.target = self
-        tableView.action = #selector(openOrJump)
+        tableView.action = #selector(rowClicked)
+        tableView.doubleAction = #selector(jumpOrRestore)
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -250,7 +233,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ])
     }
 
-    /// 新建 handoff 任务文档（只建档；点击任务行时再选择打开目的地）。
+    /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
     @objc private func newTask() {
         NameEditorPopover.present(
             from: newTaskButton, title: L("New task"), confirmLabel: L("Create")
@@ -290,8 +273,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         title.textColor = ShellStyle.primaryText
         title.lineBreakMode = .byTruncatingTail
 
-        // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示；
-        // handoff 正文可从更多菜单打开，列表只保留存在性 + 时间。
+        // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
+        // 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
         let activity = entry.running != nil ? L("Active") : L("Dormant")
         let subtitle = NSTextField(
             labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
@@ -353,7 +336,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
 
-    // MARK: - 行「⋯」菜单（自绘气泡；纯管理动作，跳转/打开走行点击）
+    // MARK: - 行「⋯」菜单（自绘气泡；纯管理动作，跳转走单击气泡/双击）
 
     @objc private func showRowMenu(_ sender: NSButton) {
         guard sender.tag >= 0, sender.tag < filtered.count else { return }
@@ -450,51 +433,30 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ShellMenuPopover.present(from: sender, items: items)
     }
 
-    /// 默认动作：运行中跳到最近绑定 pane；休眠则选择打开目的地。
-    @objc private func openOrJump() {
-        let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
+    /// 单击：统一弹任务气泡（已打开的列跳转行 + 打开到三目的地），侧栏保持展开。
+    @objc private func rowClicked() {
+        let row = tableView.clickedRow
         guard row >= 0, row < filtered.count else { return }
-        let entry = filtered[row]
-        // 不信缓存里的 running：双击会在列表异步 reload 前进来第二次；实时查一遍
-        // 才不会为同一任务连开两个 pane。
-        let running = AppState.shared.runningPanes().first {
-            $0.pane.taskFileURL?.standardizedFileURL == entry.fileURL.standardizedFileURL
-        }
-        switch Self.activation(hasRunningPane: running != nil) {
-        case .jump:
-            guard let running else { return }
+        presentTaskPopover(for: filtered[row], at: row)
+    }
+
+    /// 双击 / Enter 快捷路径：运行中直接跳最近绑定 pane；休眠同单击弹气泡。
+    @objc private func jumpOrRestore() {
+        guard let entry = selectedEntry else { return }
+        if let running = entry.running {
             running.controller.window?.makeKeyAndOrderFront(nil)
             running.controller.reveal(pane: running.pane)
-        case .chooseDestination:
-            guard let controller = window?.windowController as? TerminalWindowController
-            else { return }
-            let anchor = tableView.rowView(atRow: row, makeIfNecessary: false) ?? self
-            presentDestinationPicker(for: entry, from: anchor, in: controller)
+        } else {
+            presentTaskPopover(for: entry, at: tableView.selectedRow)
         }
     }
 
-    private func presentDestinationPicker(
-        for entry: Entry,
-        from anchor: NSView,
-        in controller: TerminalWindowController
-    ) {
-        var items: [ShellMenuPopover.Item] = [.header(L("Open in"))]
-        items.append(contentsOf: OpenDestination.allCases.map { destination in
-            .action(destination.title) { [weak controller] in
-                guard let controller else { return }
-                let pane = PaneView()
-                pane.bind(to: entry.fileURL, name: entry.task.name)
-                switch destination {
-                case .currentWorkspace:
-                    controller.addPaneToActiveTab(pane)
-                case .newWorkspace:
-                    controller.addTab(initialPane: pane)
-                case .newWindow:
-                    AppState.shared.newWindow(initialPane: pane)
-                }
-                pane.focusTerminal()
-            }
-        })
-        ShellMenuPopover.present(from: anchor, items: items)
+    private func presentTaskPopover(for entry: Entry, at row: Int) {
+        guard let controller = window?.windowController as? TerminalWindowController
+        else { return }
+        let anchor = tableView.rowView(atRow: row, makeIfNecessary: false) ?? self
+        RestoreFlow.begin(
+            fileURL: entry.fileURL, task: entry.task,
+            from: anchor, in: controller)
     }
 }
