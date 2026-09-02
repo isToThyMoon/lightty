@@ -9,6 +9,7 @@
 "Split Pane Down" = "向下分 pane";
 "Close Pane" = "关闭 pane";
 "Workspace Sidebar" = "工作区侧栏";
+"Use Lightty Theme" = "使用 Lightty 内置主题";
 
 /* 通用 */
 "OK" = "确认";

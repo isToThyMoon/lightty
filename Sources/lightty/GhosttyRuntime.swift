@@ -153,25 +153,45 @@ final class GhosttyRuntime {
         ghostty_app_tick(app)
     }
 
-    /// 启动与 reload 共用的唯一配置入口。Ghostty 的标量配置以后加载者优先，
-    /// 因此随包文件只提供缺省值，用户的全局配置与递归 config-file 均可覆盖它。
+    /// 菜单偏好变更后全局刷新现有 surface；启动和 core reload 也走同一加载链。
+    func reloadGlobalConfig() {
+        reloadConfig(surface: nil, soft: false)
+    }
+
+    /// 启动与 reload 共用的唯一配置入口。普通随包配置只提供缺省值，用户的
+    /// 全局配置与递归 config-file 均可覆盖它；勾选内置主题时，仅把 `theme`
+    /// 选择在用户配置之后重放，不接管其他 terminal 选项。
     private static func loadGlobalConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
 
-        guard let bundledDefaults = Bundle.module.path(
-            forResource: "lightty-default",
-            ofType: "ghostty"
-        ) else {
+        guard loadBundledConfig(named: "lightty-default", into: config) else {
             ghostty_config_free(config)
-            assertionFailure("missing bundled terminal defaults")
             return nil
         }
 
-        ghostty_config_load_file(config, bundledDefaults)
         ghostty_config_load_default_files(config)
         ghostty_config_load_recursive_files(config)
+
+        if TerminalThemePreference.usesBuiltInTheme(),
+           !loadBundledConfig(named: "lightty-theme", into: config) {
+            ghostty_config_free(config)
+            return nil
+        }
+
         ghostty_config_finalize(config)
         return config
+    }
+
+    private static func loadBundledConfig(
+        named name: String,
+        into config: ghostty_config_t
+    ) -> Bool {
+        guard let path = Bundle.module.path(forResource: name, ofType: "ghostty") else {
+            assertionFailure("missing bundled terminal config: \(name).ghostty")
+            return false
+        }
+        ghostty_config_load_file(config, path)
+        return true
     }
 
     private func reloadConfig(surface: ghostty_surface_t?, soft: Bool) {

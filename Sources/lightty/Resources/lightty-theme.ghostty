@@ -1,0 +1,2 @@
+# Loaded after user configuration when “Use Lightty Theme” is enabled.
+theme = light:Catppuccin Latte,dark:Catppuccin Mocha

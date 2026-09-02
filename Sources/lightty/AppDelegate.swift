@@ -111,6 +111,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appMenu.addItem(.separator())
         appMenu.addItem(makeItem(L("Agent status hooks"), #selector(showHookSetup)))
+        let themeToggle = NSMenuItem(
+            title: L("Use Lightty Theme"),
+            action: #selector(toggleBuiltInTheme(_:)),
+            keyEquivalent: "")
+        themeToggle.target = self
+        themeToggle.state = TerminalThemePreference.usesBuiltInTheme() ? .on : .off
+        appMenu.addItem(themeToggle)
         // 菜单栏状态项可以被它自己的菜单关掉，关掉后就没有入口再打开了——
         // 这里是唯一的复位开关，不能省。
         let statusBarToggle = NSMenuItem(
@@ -188,6 +195,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
+
+    @objc private func toggleBuiltInTheme(_ sender: NSMenuItem) {
+        let enabled = !TerminalThemePreference.usesBuiltInTheme()
+        TerminalThemePreference.setUsesBuiltInTheme(enabled)
+        sender.state = enabled ? .on : .off
+        GhosttyRuntime.shared.reloadGlobalConfig()
+    }
 
     @objc private func showHookSetup() {
         guard let controller = AppState.shared.keyWindowController else { return }
