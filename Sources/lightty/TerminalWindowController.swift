@@ -131,9 +131,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     init(initialPane: PaneView = PaneView()) {
         let window = TerminalWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640))
+        // 新建 surface 的窗口先保持透明：contentRect 只是占位，真实尺寸要等 core 的
+        // INITIAL_SIZE（window-width/height × cell）异步到达。若此时就露脸，用户会
+        // 看到空壳小窗再跳成正式尺寸的两段闪。surface 已存在的 pane（拖出成窗）
+        // 不会再收到 INITIAL_SIZE，直接正常显示。
+        let expectsInitialSize = initialPane.terminal.surface == nil
         super.init(window: window)
         window.delegate = self
         window.center()
+        if expectsInitialSize {
+            window.alphaValue = 0
+            // 兜底：INITIAL_SIZE 丢失/被 guard 挡下也必须显形
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.revealWindowIfNeeded()
+            }
+        }
 
         rootContainer.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = rootContainer
@@ -152,6 +164,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             self.openWorkspaceSidebar(animated: false)
             self.updateEdgeExpandButton()
         }
+    }
+
+    /// INITIAL_SIZE 应用后（或兜底超时）把窗口从透明占位态显形。幂等。
+    func revealWindowIfNeeded() {
+        guard let window, window.alphaValue < 1 else { return }
+        window.alphaValue = 1
     }
 
     /// 标题栏操作区：三键后只保留抽屉开关。新工作区与分屏操作归入工作区侧栏

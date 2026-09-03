@@ -387,8 +387,11 @@ final class GhosttyRuntime {
                     NSLog("INITIAL_SIZE %dx%d, located=%@", size.width, size.height,
                           locate() != nil ? "yes" : "no")
                 }
-                guard let (controller, _) = locate(), let window = controller.window,
-                      controller.panes().count == 1,
+                guard let (controller, _) = locate(), let window = controller.window else { return }
+                // 尺寸应用完成前窗口保持透明（见 TerminalWindowController.init）；
+                // 无论是否满足单 pane 单 tab 的调整条件，此刻都必须显形。
+                defer { controller.revealWindowIfNeeded() }
+                guard controller.panes().count == 1,
                       controller.tabCount == 1 else { return }
                 window.setContentSize(NSSize(
                     width: CGFloat(size.width),
