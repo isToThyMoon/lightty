@@ -10,14 +10,23 @@ extension NSPasteboard.PasteboardType {
 enum PaneDropZone: CaseIterable, Equatable {
     case top, bottom, left, right
 
+    /// 与官方逐式对齐：先归一化再比距离（对角线切出四个等面积三角区）。
+    /// 绝对距离在瘦高 pane 里会让左右区吞掉几乎全部面积，上下分无从落点。
+    /// 判序也保持官方一致：left → right → top → bottom。
     static func calculate(at point: NSPoint, in bounds: NSRect) -> PaneDropZone {
-        let distances: [(PaneDropZone, CGFloat)] = [
-            (.left, max(0, point.x - bounds.minX)),
-            (.right, max(0, bounds.maxX - point.x)),
-            (.bottom, max(0, point.y - bounds.minY)),
-            (.top, max(0, bounds.maxY - point.y)),
-        ]
-        return distances.min { $0.1 < $1.1 }?.0 ?? .right
+        guard bounds.width > 0, bounds.height > 0 else { return .right }
+        let relX = (point.x - bounds.minX) / bounds.width
+        let relY = (point.y - bounds.minY) / bounds.height
+        let distToLeft = relX
+        let distToRight = 1 - relX
+        // AppKit y 轴向上：minY 是底边
+        let distToBottom = relY
+        let distToTop = 1 - relY
+        let minDist = min(distToLeft, distToRight, distToTop, distToBottom)
+        if minDist == distToLeft { return .left }
+        if minDist == distToRight { return .right }
+        if minDist == distToTop { return .top }
+        return .bottom
     }
 
     func frame(in bounds: NSRect) -> NSRect {
