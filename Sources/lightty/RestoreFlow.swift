@@ -66,7 +66,8 @@ private final class RestorePopoverController: NSViewController {
     override func loadView() {
         let root = NSView()
 
-        let title = NSTextField(labelWithString: L("Task: %@", task.name))
+        // 气泡从任务行锚定弹出，上下文已经是这个任务，标题只写名字不加前缀
+        let title = NSTextField(labelWithString: task.name)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = ShellStyle.primaryText
 
