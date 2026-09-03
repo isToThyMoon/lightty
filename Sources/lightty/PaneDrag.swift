@@ -48,13 +48,12 @@ enum PaneDropZone: CaseIterable, Equatable {
 }
 
 /// Ghostty drop overlay 的 AppKit 对应物；只绘制，不参与命中测试。
+/// 样式对齐官方 `TerminalSplitDropZone.overlay`：accent 30% 纯色半区填充、无描边。
 final class PaneDropOverlayView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.24).cgColor
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.65).cgColor
-        layer?.borderWidth = 1
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor
     }
 
     required init?(coder: NSCoder) { fatalError() }

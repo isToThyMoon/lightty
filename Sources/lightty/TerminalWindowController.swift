@@ -619,6 +619,64 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         refreshTabStrip()
     }
 
+    /// pane 移动前的原位快照，供 undo 把它移回去。
+    ///
+    /// 官方的 undo 靠值类型 SplitTree 整树快照还原；我们的树是活视图层级，
+    /// 等价物是「记住原兄弟叶子与相对方位，undo 时走同一条 movePane 路径移回」。
+    /// 原邻居随后被关掉时快照自然失效（movePane 返回 false，undo 无声无效），
+    /// 比例不做精确还原——这是活树语义下对官方行为的近似。
+    private struct PaneMoveRestore {
+        weak var controller: TerminalWindowController?
+        weak var anchor: PaneView?
+        /// nil = 原来独占一个工作区，undo 走 toWorkspaceAt
+        let zone: PaneDropZone?
+        let workspaceIndex: Int
+    }
+
+    private func moveRestore(for pane: PaneView) -> PaneMoveRestore {
+        let hostTab = tab(hosting: pane)
+        let index = hostTab.flatMap { host in tabs.firstIndex { $0 === host } } ?? 0
+        guard let parent = pane.superview as? NSSplitView,
+              let paneIndex = parent.arrangedSubviews.firstIndex(of: pane) else {
+            return PaneMoveRestore(controller: self, anchor: nil, zone: nil, workspaceIndex: index)
+        }
+        // 邻位子树的任一叶子都能当锚点；恒嵌套后树是二叉的，取相邻一侧
+        let neighborIndex = paneIndex == 0 ? 1 : paneIndex - 1
+        guard parent.arrangedSubviews.indices.contains(neighborIndex),
+              let anchor = Self.firstLeaf(in: parent.arrangedSubviews[neighborIndex]) else {
+            return PaneMoveRestore(controller: self, anchor: nil, zone: nil, workspaceIndex: index)
+        }
+        let before = paneIndex < neighborIndex
+        // isVertical = 左右排列；否则上下排列（arranged 顺序 = 上→下）
+        let zone: PaneDropZone = parent.isVertical
+            ? (before ? .left : .right)
+            : (before ? .top : .bottom)
+        return PaneMoveRestore(controller: self, anchor: anchor, zone: zone, workspaceIndex: index)
+    }
+
+    private static func firstLeaf(in view: NSView) -> PaneView? {
+        if let pane = view as? PaneView { return pane }
+        for sub in view.subviews {
+            if let pane = firstLeaf(in: sub) { return pane }
+        }
+        return nil
+    }
+
+    /// undo 栈注册。movePane 的反向操作也走 movePane，会再注册一次——
+    /// undo 中执行时那次注册自动成为 redo（NSUndoManager 语义）。
+    private func registerMoveUndo(_ restore: PaneMoveRestore, sourceID: UUID) {
+        guard let undoManager = window?.undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { _ in
+            guard let controller = restore.controller else { return }
+            if let anchor = restore.anchor, let zone = restore.zone {
+                controller.movePane(withID: sourceID, to: anchor, zone: zone)
+            } else {
+                controller.movePane(withID: sourceID, toWorkspaceAt: restore.workspaceIndex)
+            }
+        }
+        undoManager.setActionName(L("Move Split"))
+    }
+
     /// 侧栏跨工作区拖拽：把 pane 挪进指定工作区（tab），插到其最后一个 pane
     /// 右侧；空工作区直接作树根。与分屏 drag/drop 共用 detach/install 路径，
     /// PTY、cwd 与 scrollback 全保留。不跟随切换工作区——拖动是整理动作，
@@ -638,7 +696,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         restoreSplitZoomIfNeeded()
         if sourceController !== self { sourceController.restoreSplitZoomIfNeeded() }
+        let restore = sourceController.moveRestore(for: source)
         guard sourceController.detach(pane: source) else { return false }
+        registerMoveUndo(restore, sourceID: sourceID)
 
         install(pane: source)
         if let anchor = panes(in: targetTab).last {
@@ -685,7 +745,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
         restoreSplitZoomIfNeeded()
         if sourceController !== self { sourceController.restoreSplitZoomIfNeeded() }
+        let restore = sourceController.moveRestore(for: source)
         guard sourceController.detach(pane: source) else { return false }
+        registerMoveUndo(restore, sourceID: sourceID)
 
         install(pane: source)
         let direction: SplitDirection = switch zone {
@@ -714,40 +776,32 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// 把一个已存在的 pane 插到目标旁边。new_split 与 drag/drop 共用同一棵
     /// NSSplitView tree 变换，避免出现两套布局语义。
+    ///
+    /// 与官方 `SplitTree.inserting` 逐式对齐：**无条件**把目标叶子原位包成
+    /// 新的二叉 split（内部对半分，外层各 pane 尺寸不动），同方向也不压平。
+    /// 树形状决定后续分隔线拖动的分组行为——压平会让 [A|[B|C]] 退化成
+    /// [A|B|C]，拖第一条线时 B、C 不再作为整体缩放，手感与官方不一致。
     private func insert(_ pane: PaneView, nextTo active: PaneView, direction: SplitDirection) {
         guard let hostTab = tab(hosting: active) else { return }
         pane.translatesAutoresizingMaskIntoConstraints = false
         let vertical = direction.isVertical
         rootContainer.layoutSubtreeIfNeeded()
 
-        if let parent = active.superview as? NSSplitView, parent.isVertical == vertical {
-            // 方向一致：插在当前 pane 相邻位
-            let index = parent.arrangedSubviews.firstIndex(of: active) ?? parent.arrangedSubviews.count - 1
-            var sizes = parent.arrangedSubviews.map { axisSize($0, vertical: parent.isVertical) }
-            let half = max(1, (sizes[index] - parent.dividerThickness) / 2)
-            sizes[index] = half
-            let insertAt = direction.insertsAfter ? index + 1 : index
-            sizes.insert(half, at: insertAt)
-            parent.insertArrangedSubview(pane, at: insertAt)
-            setSizes(sizes, in: parent)
+        let split = makeSplit(vertical: vertical)
+        let pair = direction.insertsAfter ? [active, pane] : [pane, active]
+        if let parent = active.superview as? NSSplitView {
+            let outerSizes = parent.arrangedSubviews.map { axisSize($0, vertical: parent.isVertical) }
+            let index = parent.arrangedSubviews.firstIndex(of: active)!
+            active.removeFromSuperview()
+            pair.forEach { split.addArrangedSubview($0) }
+            parent.insertArrangedSubview(split, at: index)
+            setSizes(outerSizes, in: parent)
         } else {
-            // 方向不同：原位包一层反向 split，内部对半分；外层各 pane 尺寸不动
-            let split = makeSplit(vertical: vertical)
-            let pair = direction.insertsAfter ? [active, pane] : [pane, active]
-            if let parent = active.superview as? NSSplitView {
-                let outerSizes = parent.arrangedSubviews.map { axisSize($0, vertical: parent.isVertical) }
-                let index = parent.arrangedSubviews.firstIndex(of: active)!
-                active.removeFromSuperview()
-                pair.forEach { split.addArrangedSubview($0) }
-                parent.insertArrangedSubview(split, at: index)
-                setSizes(outerSizes, in: parent)
-            } else {
-                active.removeFromSuperview()
-                pair.forEach { split.addArrangedSubview($0) }
-                setRoot(split, in: hostTab)
-            }
-            equalize(split)
+            active.removeFromSuperview()
+            pair.forEach { split.addArrangedSubview($0) }
+            setRoot(split, in: hostTab)
         }
+        equalize(split)
     }
 
     /// 从 split tree 摘下 pane 并递归压平单子节点；不会关闭 surface。
