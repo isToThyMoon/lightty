@@ -1,12 +1,14 @@
 # Lightty
 
-面向 AI agent 工作流的 macOS 终端：内核基于 [libghostty](https://github.com/ghostty-org/ghostty)，壳层围绕「任务」组织终端会话——每个 pane 可绑定一个任务的 handoff 文档，会话中断后随时在新会话里让 agent 接续上一棒。
+给同时跑多个 AI agent 的人的 macOS 终端。内核是 [libghostty](https://github.com/ghostty-org/ghostty)——终端该有的样子一点不少；壳层解决的是开一排 claude / codex 之后的真实问题：**谁在跑、谁跑完了、中断的活怎么接着干**。
 
-- **知道 agent 在干什么的终端**：一键安装 agent 状态 hooks（经 claude / codex 自家 CLI 注册，不改你的 agent 配置），pane 级实时显示思考中 / 执行工具 / 需要你 / 已完成；跑完或卡住时菜单栏状态项计数提醒 + 系统通知，点击直达对应 pane
-- **任务与 Handoff**：任务 = 一个 markdown 文件（frontmatter + handoff 正文），活跃/休眠由 pane 绑定实时派生；绑定任务后 hook 自动向 agent 会话注入 handoff 上下文，接续上一棒无需手工粘贴
-- **窗口 › 工作区 › pane 三层布局**：双层侧栏（工作区栏 + 任务浮层卡片，可拖宽）、pane 身份胶囊（灵动岛式展开改名/绑任务）、全文搜索浮层（⇧⇧）
-- **分屏行为对齐 Ghostty.app**：cmd+D 分屏、拖 pane header 四边落点重组（可 cmd+Z 撤销）、跨窗口拖拽、侧栏行拖到其他工作区；侧栏动画期间终端逐帧真实重排（内核补丁消除 prompt 闪烁）
-- **开箱即用**：Sparkle 应用内更新、内置终端主题开关、一键下载安装默认字体（Maple Mono NF CN）；界面中英双语（跟随系统），handoff 文档协议为英文
+**不用盯着屏幕。** 每个 pane 实时显示它的 agent 在思考、在执行还是在等你；切去干别的也没关系——agent 跑完或卡住时，菜单栏和系统通知会叫你，点一下直达那个 pane。
+
+**中断的工作接得上。** 每个 pane 可以绑定一个「任务」。让 agent 收工时把现状写进任务的交接文档，之后在任何新会话里打开这个任务，新 agent 自动拿到上下文，接着上一棒继续干——不用翻聊天记录、不用手工粘贴。
+
+**还是你熟悉的终端。** Ghostty 的渲染、配置和快捷键原样可用；工作区和分屏随意组织，pane 想怎么拖就怎么拖（拖错了 cmd+Z）。应用内更新，界面中英双语。
+
+初次使用：菜单里「Agent 状态 hooks」一键安装即可接入 claude / codex 的状态——安装走它们自家的插件机制，不会改动你的 agent 配置。
 
 ## 安装 / Install
 
@@ -37,7 +39,7 @@ swift build && .build/debug/lightty      # 开发运行
 scripts/package-app.sh                   # 打包 lightty.app（MAKE_DMG=1 出 DMG）
 ```
 
-深入文档：[任务文件格式](docs/task-format.md) · [agent 状态 hooks](docs/hooks.md) · [pane 状态协议](docs/specs/pane-status.md) · [双层侧栏设计](docs/specs/double-sidebar.md)
+开发文档：[任务文件格式](docs/task-format.md) · [agent 状态 hooks](docs/hooks.md)
 
 ## License
 
