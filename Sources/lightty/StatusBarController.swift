@@ -166,7 +166,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let weight: NSFont.Weight = tint == nil ? .regular : .semibold
         var config = NSImage.SymbolConfiguration(pointSize: 14, weight: weight)
         if let tint {
-            config = config.applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
+            // `X.circle.fill` 是多层符号：第一层是勾/叹号、第二层是圆底。
+            // 单色 palette 会把两层涂成同色，符号退化成一个纯色团（勾被吞掉）。
+            config = config.applying(NSImage.SymbolConfiguration(paletteColors: [.white, tint]))
         }
         let image = Self.symbol(names, accessibility: L("Pane status"))?
             .withSymbolConfiguration(config)
@@ -174,8 +176,27 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // 上了色的档次必须关掉 template，否则调色板会被系统抹平成单色。
         image?.isTemplate = (tint == nil)
         button.image = image
-        button.title = unread > 0 ? " \(unread)" : ""
-        button.toolTip = L("Pane status")
+
+        // 计数跟着档位换语义：要人 = 卡住数、跑完 = 未读数；
+        // 在跑只在 >1 时标数——单个在跑省略号本身已经表达，数字纯属噪声。
+        let count: Int
+        switch aggregate {
+        case .attention: count = store.attentionCount
+        case .done: count = unread
+        case .thinking, .tool: count = store.activeCount > 1 ? store.activeCount : 0
+        case .idle: count = 0
+        }
+        button.title = count > 0 ? " \(count)" : ""
+        button.toolTip = Self.summaryTooltip(store: store)
+    }
+
+    /// 悬停即知全局：如「2 running · 1 needs you」。全空闲退回静态名。
+    private static func summaryTooltip(store: PaneStatusStore) -> String {
+        var parts: [String] = []
+        if store.activeCount > 0 { parts.append(L("%d running", store.activeCount)) }
+        if store.attentionCount > 0 { parts.append(L("%d needs you", store.attentionCount)) }
+        if store.unreadCount > 0 { parts.append(L("%d finished", store.unreadCount)) }
+        return parts.isEmpty ? L("Pane status") : parts.joined(separator: " · ")
     }
 
     /// SF Symbol 名字随系统版本增删（最低支持 macOS 13）。逐个试，
@@ -189,31 +210,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return nil
     }
 
-    private static func glyph(for state: PaneActivity) -> NSImage? {
-        let names: [String]
-        let color: NSColor
-        switch state {
-        // 形状承担主要区分（色觉障碍下仍可辨），颜色与 pane 头共用同一套 token
-        case .idle:
-            names = ["circle", "circle.fill"]
-            color = ShellStyle.statusColor(for: .idle)
-        case .thinking:
-            names = ["ellipsis.circle", "circle.fill"]
-            color = ShellStyle.statusColor(for: .thinking)
-        case .tool:
-            names = ["gearshape.fill", "circle.fill"]
-            color = ShellStyle.statusColor(for: .tool)
-        case .attention:
-            names = ["exclamationmark.circle.fill", "circle.fill"]
-            color = ShellStyle.statusColor(for: .attention)
-        case .done:
-            names = ["checkmark.circle.fill", "circle.fill"]
-            color = ShellStyle.statusColor(for: .done)
+    /// 菜单行圆点：与侧栏 pane 行同一视觉语言、同一取色入口（`dotColor`）。
+    /// 之前这里用一组大号 SF Symbol，跟侧栏的小圆点撞形不撞色，被读成
+    /// 「两套状态标记」；语义现在由行内状态文字承担，圆点只管颜色。
+    private static func dot(bound: Bool, state: PaneActivity) -> NSImage {
+        let color = ShellStyle.dotColor(bound: bound, activity: state)
+        let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            // 块内取色：动态色随菜单当前明暗外观解析
+            color.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            return true
         }
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-        let image = symbol(names, accessibility: "")?.withSymbolConfiguration(config)
-        image?.isTemplate = false
+        image.isTemplate = false
         return image
     }
 
@@ -284,22 +292,35 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// 壳层菜单只是鼠标 adapter，按键必须直达 surface 交给 libghostty 的
     /// keybind 处理，菜单抢一个就少一个终端快捷键。
     private func paneItem(for pane: PaneView, indent: Int) -> NSMenuItem {
-        let state = PaneStatusStore.shared.status(for: pane.dragIdentifier)?.state ?? .idle
+        let status = PaneStatusStore.shared.status(for: pane.dragIdentifier)
+        let bound = !(pane.header.titleOfBoundTask ?? "").isEmpty
         let item = NSMenuItem(title: "", action: #selector(focusPane(_:)), keyEquivalent: "")
         item.target = self
         // 存 UUID 而不是 PaneView：菜单不该让一个已经关掉的 pane 续命
         item.representedObject = pane.dragIdentifier
-        item.image = Self.glyph(for: state)
+        item.image = Self.dot(bound: bound, state: status?.state ?? .idle)
         item.indentationLevel = indent
-        item.attributedTitle = paneTitle(for: pane)
+        item.attributedTitle = paneTitle(for: pane, status: status)
+        // 完整信息（工具名 + detail）走 tooltip，与 pane 头同一份文案
+        item.toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
         return item
     }
 
-    private func paneTitle(for pane: PaneView) -> NSAttributedString {
+    private func paneTitle(for pane: PaneView, status: PaneStatus?) -> NSAttributedString {
         let font = NSFont.menuFont(ofSize: 0)
         let name = pane.header.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = NSMutableAttributedString(
             string: name.isEmpty ? L("Pane") : name, attributes: [.font: font])
+        // 状态文字与侧栏同一套三档文案；上状态色而不是灰，与圆点互为呼应，
+        // 也和后面灰色的任务名拉开层次。
+        if let status, let text = WorkspacePaneStatusPresentation.text(for: status) {
+            title.append(NSAttributedString(
+                string: "  \(text)",
+                attributes: [
+                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                    .foregroundColor: ShellStyle.statusColor(for: status.state),
+                ]))
+        }
         if let task = pane.header.titleOfBoundTask, !task.isEmpty {
             title.append(NSAttributedString(
                 string: "  \(task)",

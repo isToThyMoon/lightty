@@ -111,6 +111,9 @@
 "Needs your attention" = "需要你处理";
 "%d agents finished" = "%d 个 agent 跑完了";
 "%d panes need your attention" = "%d 个 pane 需要你处理";
+"%d running" = "%d 个在跑";
+"%d needs you" = "%d 个需要你";
+"%d finished" = "%d 个已完成";
 
 /* agent 状态：hook 安装器 */
 "Agent status hooks" = "Agent 状态 hooks";

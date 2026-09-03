@@ -429,6 +429,26 @@ enum WorkspacePaneStatusPresentation {
         case .done: return L("Finished")
         }
     }
+
+    /// tooltip / 菜单用的完整一行：状态动词 + 工具名 + detail 摘要。
+    /// pane 头 tooltip 与菜单栏行共用，两处文案不许走岔。
+    static func detailLine(for status: PaneStatus?) -> String? {
+        guard let status, status.state != .idle else { return nil }
+        var line: String
+        switch status.state {
+        case .thinking: line = L("Agent is thinking")
+        case .tool: line = status.tool.map { L("Running %@", $0) } ?? L("Agent is working")
+        case .attention: line = L("Agent needs your input")
+        case .done: line = L("Agent finished")
+        case .idle: return nil
+        }
+        // detail 来自 hook 写的文件，长度不可信（契约 §4.2 要求读方截断）
+        if let detail = status.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !detail.isEmpty {
+            line += " · " + String(detail.prefix(120))
+        }
+        return line
+    }
 }
 
 /// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 轻量状态文字；

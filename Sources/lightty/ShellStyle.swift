@@ -93,8 +93,9 @@ enum ShellStyle {
     static let statusThinking = NSColor.shellDynamic(light: 0x4E6EF2, dark: 0x7E9BFF)
     /// 执行工具：同蓝族偏青一档，「更活跃」但不换语义。
     static let statusTool = NSColor.shellDynamic(light: 0x1E8FD0, dark: 0x55BAF0)
-    /// 需要你介入：琥珀，通用的「卡住等人」色。
-    static let statusAttention = NSColor.shellDynamic(light: 0xC97A08, dark: 0xF2A93B)
+    /// 需要你介入：系统橙。曾用土琥珀（C97A08/F2A93B），在菜单栏里读成脏黄点；
+    /// 系统橙更亮更饱和，也是 macOS 通知/警示的惯用色。跟随系统动态明暗。
+    static let statusAttention = NSColor.systemOrange
     /// 跑完未读：品红。刻意跳出整套暖灰/绿/蓝——它的唯一职责就是被看见，
     /// 尤其不能跟「已绑定」的绿撞色，否则从绿变绿等于没变。
     static let statusDone = NSColor.shellDynamic(light: 0xC9227E, dark: 0xFF71B8)

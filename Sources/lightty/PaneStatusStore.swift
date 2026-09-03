@@ -251,6 +251,20 @@ final class PaneStatusStore {
         return statuses.values.reduce(into: 0) { $0 += ($1.state == .done ? 1 : 0) }
     }
 
+    /// 正在跑（thinking/tool）的 pane 数。菜单栏计数用。
+    var activeCount: Int {
+        assertMain()
+        return statuses.values.reduce(into: 0) {
+            $0 += ($1.state == .thinking || $1.state == .tool ? 1 : 0)
+        }
+    }
+
+    /// 等用户介入的 pane 数。菜单栏计数用。
+    var attentionCount: Int {
+        assertMain()
+        return statuses.values.reduce(into: 0) { $0 += ($1.state == .attention ? 1 : 0) }
+    }
+
     /// 菜单栏图标用的聚合态。
     ///
     /// 优先级 `attention` > `done` > `tool` > `thinking` > `idle`，

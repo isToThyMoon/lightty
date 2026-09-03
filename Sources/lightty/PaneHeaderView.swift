@@ -408,24 +408,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     /// 不停跳变——比呼吸的圆点扎眼得多，正好和「不打扰」相反），要么再加一段
     /// 仲裁逻辑去挤 pane 名。两条都比这点信息量贵，所以走 tooltip。
     private func updateStatusTooltip() {
-        guard let status, status.state != .idle else {
-            toolTip = nil
-            return
-        }
-        var line: String
-        switch status.state {
-        case .thinking: line = L("Agent is thinking")
-        case .tool: line = status.tool.map { L("Running %@", $0) } ?? L("Agent is working")
-        case .attention: line = L("Agent needs your input")
-        case .done: line = L("Agent finished")
-        case .idle: return
-        }
-        // detail 来自 hook 写的文件，长度不可信（契约 §4.2 要求读方截断）
-        if let detail = status.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !detail.isEmpty {
-            line += " · " + String(detail.prefix(120))
-        }
-        toolTip = line
+        toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
     }
 
     // MARK: 环境动画的开关

@@ -23,7 +23,23 @@ final class WorkspacePaneStatusPresentationTests: XCTestCase {
             WorkspacePaneStatusPresentation.text(for: status(.idle)))
     }
 
-    private func status(_ state: PaneActivity, tool: String? = nil) -> PaneStatus {
-        PaneStatus(ts: Date(timeIntervalSince1970: 0), state: state, tool: tool)
+    func testDetailLineCarriesToolAndTruncatedDetail() {
+        let line = WorkspacePaneStatusPresentation.detailLine(
+            for: status(.tool, tool: "Bash", detail: String(repeating: "x", count: 500)))
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.hasPrefix(L("Running %@", "Bash")))
+        // 契约 §4.2：detail 长度不可信，读方必须截断
+        XCTAssertLessThan(line!.count, 200)
+    }
+
+    func testDetailLineSilentForIdleAndNil() {
+        XCTAssertNil(WorkspacePaneStatusPresentation.detailLine(for: status(.idle)))
+        XCTAssertNil(WorkspacePaneStatusPresentation.detailLine(for: nil))
+    }
+
+    private func status(
+        _ state: PaneActivity, tool: String? = nil, detail: String? = nil
+    ) -> PaneStatus {
+        PaneStatus(ts: Date(timeIntervalSince1970: 0), state: state, tool: tool, detail: detail)
     }
 }
