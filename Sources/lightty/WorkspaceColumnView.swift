@@ -197,6 +197,9 @@ final class WorkspaceColumnView: NSView {
             row.onToggleCollapse = { [weak self] in
                 self?.toggleWorkspaceCollapse(workspaceID)
             }
+            row.onPaneDrop = { [weak self] paneID in
+                self?.controller?.movePane(withID: paneID, toWorkspaceAt: index) ?? false
+            }
             row.onRename = { [weak self, weak row] in
                 guard let self, let anchor = row, let controller = self.controller else { return }
                 NameEditorPopover.present(
@@ -261,6 +264,10 @@ final class WorkspaceColumnView: NSView {
         paneRow.onClose = { [weak pane] in
             pane?.terminal.requestCloseFromUser()
         }
+        paneRow.onPaneDrop = { [weak self, weak pane] sourceID in
+            guard let self, let pane else { return false }
+            return self.controller?.movePane(withID: sourceID, to: pane, zone: .right) ?? false
+        }
         paneRows[pane.dragIdentifier] = paneRow
         return paneRow
     }
@@ -285,6 +292,8 @@ private final class WorkspaceRowView: NSView {
     var onRename: (() -> Void)?
     var onMenu: (() -> Void)?
     var onClose: (() -> Void)?
+    /// pane 拖到工作区行：移进该工作区。返回是否接受。
+    var onPaneDrop: ((UUID) -> Bool)?
 
     private let isActive: Bool
     private let disclosureButton = NSButton()
@@ -304,6 +313,7 @@ private final class WorkspaceRowView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
+        registerForDraggedTypes([.lighttyPaneID])
 
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: isActive ? .semibold : .medium)
@@ -415,6 +425,34 @@ private final class WorkspaceRowView: NSView {
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { onRename?() } else { onSelect?() }
     }
+
+    // MARK: - pane 落点
+
+    private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {
+        guard let raw = sender.draggingPasteboard.string(forType: .lighttyPaneID),
+              let id = UUID(uuidString: raw) else { return nil }
+        return id
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard acceptedPaneID(sender) != nil else { return [] }
+        setDropTargeted(true)
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropTargeted(false) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setDropTargeted(false)
+        guard let id = acceptedPaneID(sender) else { return false }
+        return onPaneDrop?(id) ?? false
+    }
+
+    private func setDropTargeted(_ on: Bool) {
+        layer?.borderWidth = on ? 1.5 : 0
+        layer?.borderColor =
+            on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
+    }
 }
 
 enum WorkspacePaneStatusPresentation {
@@ -456,9 +494,11 @@ enum WorkspacePaneStatusPresentation {
 /// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
 /// 内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
-private final class PaneRowView: NSView {
+private final class PaneRowView: NSView, NSDraggingSource {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    /// 别的 pane 拖到本行：移到本 pane 右侧。返回是否接受。
+    var onPaneDrop: ((UUID) -> Bool)?
 
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
     /// 存 id 而不是 pane 引用：行只需要向 store 取状态，不需要够到 pane 本体，
@@ -501,6 +541,7 @@ private final class PaneRowView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
+        registerForDraggedTypes([.lighttyPaneID])
 
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3
@@ -726,5 +767,90 @@ private final class PaneRowView: NSView {
         addCursorRect(bounds, cursor: .pointingHand)
     }
 
-    override func mouseDown(with event: NSEvent) { onSelect?() }
+    // MARK: - 拖拽（源 + 落点）
+
+    /// 与 PaneHeaderView 同款 click/drag 分流：3pt 内是点击，超出启动 pane 拖拽。
+    override func mouseDown(with event: NSEvent) {
+        let origin = event.locationInWindow
+        let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+        while let next = NSApp.nextEvent(
+            matching: mask, until: .distantFuture, inMode: .eventTracking, dequeue: true
+        ) {
+            switch next.type {
+            case .leftMouseDragged:
+                let dx = next.locationInWindow.x - origin.x
+                let dy = next.locationInWindow.y - origin.y
+                guard hypot(dx, dy) >= 3 else { continue }
+                beginPaneDrag(with: next)
+                return
+            case .leftMouseUp:
+                onSelect?()
+                return
+            default:
+                continue
+            }
+        }
+    }
+
+    private func beginPaneDrag(with event: NSEvent) {
+        let item = NSPasteboardItem()
+        item.setString(paneID.uuidString, forType: .lighttyPaneID)
+        let dragItem = NSDraggingItem(pasteboardWriter: item)
+        let preview = rowSnapshot()
+        let location = convert(event.locationInWindow, from: nil)
+        dragItem.setDraggingFrame(
+            NSRect(
+                x: location.x - preview.size.width / 2,
+                y: location.y - preview.size.height / 2,
+                width: preview.size.width,
+                height: preview.size.height),
+            contents: preview)
+        let session = beginDraggingSession(with: [dragItem], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+
+    private func rowSnapshot() -> NSImage {
+        guard bounds.width > 0, bounds.height > 0,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else {
+            return NSImage(size: NSSize(width: 120, height: 24))
+        }
+        cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+
+    // 落点：把别的 pane 拖到本行 = 移到本 pane 所在处（右侧分屏）
+    private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {
+        guard let raw = sender.draggingPasteboard.string(forType: .lighttyPaneID),
+              let id = UUID(uuidString: raw), id != paneID else { return nil }
+        return id
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard acceptedPaneID(sender) != nil else { return [] }
+        setDropTargeted(true)
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropTargeted(false) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setDropTargeted(false)
+        guard let id = acceptedPaneID(sender) else { return false }
+        return onPaneDrop?(id) ?? false
+    }
+
+    private func setDropTargeted(_ on: Bool) {
+        layer?.borderWidth = on ? 1.5 : 0
+        layer?.borderColor =
+            on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
+    }
 }

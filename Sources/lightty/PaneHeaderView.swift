@@ -42,6 +42,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private let nameLabel = NSTextField(labelWithString: "")
     private let taskHintLabel = NSTextField(labelWithString: "")
     private var capsuleTracking: NSTrackingArea?
+    private var headerTracking: NSTrackingArea?
     private var capsuleHovered = false {
         didSet {
             applyCapsuleFill()
@@ -289,10 +290,40 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             owner: self)
         addTrackingArea(area)
         capsuleTracking = area
+
+        if let headerTracking { removeTrackingArea(headerTracking) }
+        // .activeAlways：app 未激活时第一下点击也可能直接是拖 pane
+        let header = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self)
+        addTrackingArea(header)
+        headerTracking = header
     }
 
-    override func mouseEntered(with event: NSEvent) { capsuleHovered = true }
-    override func mouseExited(with event: NSEvent) { capsuleHovered = false }
+    override func mouseEntered(with event: NSEvent) {
+        if event.trackingArea === headerTracking {
+            window?.isMovable = false
+        } else {
+            capsuleHovered = true
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if event.trackingArea === headerTracking {
+            // 按住鼠标期间（pane 拖拽进行中）绝不放闸：实测服务器会在手势
+            // 中途读到 true 立刻接管成窗口拖动。恢复交给 draggingSession 结束。
+            if NSEvent.pressedMouseButtons == 0 { window?.isMovable = true }
+        } else {
+            capsuleHovered = false
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        // pane 在 hover 期间被关闭/移走时 mouseExited 不再送达，闸必须在此归位
+        if newWindow !== window { window?.isMovable = true }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     // MARK: - 颜色
 
@@ -501,6 +532,14 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     // MARK: - 点击 / 拖拽
 
+    /// 顶行 pane 的 header 与 titlebar 区重叠。titlebar 区的窗口拖动由窗口服务器
+    /// 侧执行，既不理会 content 视图的 mouseDownCanMoveWindow，也不理会 mouseDown
+    /// 之后才改的 isMovable（两者均实测无效）——窗口会跟着光标位移，光标相对窗口
+    /// 静止，pane 拖拽的落点永远停在源 pane 上。服务器在 mouseDown 派发时刻读取
+    /// isMovable，所以闸必须提前拉：hover 进 header 就置 false，离开恢复。
+    /// 窗口其余区域（titlebar 空白、侧栏上方）的拖动行为不受影响。
+    override var mouseDownCanMoveWindow: Bool { false }
+
     /// 胶囊/空白都属于可拖 header；hover 态的关闭钮保留自己的点击语义。
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
@@ -581,6 +620,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         operation: NSDragOperation
     ) {
         isDraggingPane = false
+        // 拖拽期间跳过了 mouseExited 的放闸；此刻按光标真实位置归位——
+        // 仍悬在本 header 上就保持锁定（随后拖拽仍需闸是关的）。
+        if let window {
+            let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            window.isMovable = !bounds.contains(local)
+        }
         onDragEnded?()
     }
 

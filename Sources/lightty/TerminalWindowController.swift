@@ -619,10 +619,57 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         refreshTabStrip()
     }
 
+    /// 侧栏跨工作区拖拽：把 pane 挪进指定工作区（tab），插到其最后一个 pane
+    /// 右侧；空工作区直接作树根。与分屏 drag/drop 共用 detach/install 路径，
+    /// PTY、cwd 与 scrollback 全保留。不跟随切换工作区——拖动是整理动作，
+    /// 不该把用户从当前上下文拽走。
+    @discardableResult
+    func movePane(withID sourceID: UUID, toWorkspaceAt index: Int) -> Bool {
+        guard tabs.indices.contains(index),
+              let sourceLocation = AppState.shared.runningPanes().first(where: {
+                  $0.pane.dragIdentifier == sourceID
+              }) else { return false }
+        let targetTab = tabs[index]
+        let sourceController = sourceLocation.controller
+        let source = sourceLocation.pane
+        // 同工作区且只有它一个 pane：无事可做
+        if sourceController === self, tab(hosting: source) === targetTab,
+            panes(in: targetTab).count == 1 { return false }
+
+        restoreSplitZoomIfNeeded()
+        if sourceController !== self { sourceController.restoreSplitZoomIfNeeded() }
+        guard sourceController.detach(pane: source) else { return false }
+
+        install(pane: source)
+        if let anchor = panes(in: targetTab).last {
+            insert(source, nextTo: anchor, direction: .right)
+        } else {
+            setRoot(source, in: targetTab)
+        }
+        if index == activeTabIndex {
+            lastFocusedPane = source
+            source.focusTerminal()
+            updateWindowTitle(for: source)
+        }
+
+        pruneEmptyTabs()
+        if sourceController !== self {
+            sourceController.pruneEmptyTabs()
+            sourceController.lastFocusedPane = sourceController.panes().first
+            if let remaining = sourceController.activePane {
+                sourceController.updateWindowTitle(for: remaining)
+            }
+        }
+        refreshTabStrip()
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        return true
+    }
+
     /// 对齐 Ghostty `splitDidDrop`：先从原树移除 source，再按目标四边插入；
     /// PaneView/TerminalSurfaceView 本体不重建，所以 PTY、cwd 与 scrollback 全保留。
+    /// internal：PaneView 落点与侧栏 pane 行落点共用。
     @discardableResult
-    private func movePane(
+    func movePane(
         withID sourceID: UUID,
         to destination: PaneView,
         zone: PaneDropZone
