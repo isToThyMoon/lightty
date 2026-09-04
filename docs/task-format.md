@@ -63,10 +63,12 @@ sessions:
 
 ### cwd：创建现场，恢复时的起始目录（2026-09-04）
 
-写入端只有「pane 内新建任务」一处：agent 在跑（thinking/tool/attention）取
-agent 上报的 cwd——agent 全屏期间 shell 不出提示符，OSC PWD 停在启动目录，
-agent 的目录才是真实工作现场；否则取 shell 的 OSC PWD；都拿不到回退 home。
-侧栏「新任务」按钮建档无 pane 上下文，写 home。
+写入端只有「pane 内新建任务」一处，首选 shell 的 OSC PWD：agent 全屏期间它
+停在最后一次提示符的目录——正是用户启动 agent 的地方，即 agent 继承的出生
+目录，不是过期数据。刻意不优先 agent 上报的 cwd：那是 agent 自己填的，探查
+或在别的目录跑命令时可能跟着漂，会记下瞬时的错误目录；它只做 shell 没发
+OSC 7（未配 shell-integration）时的兜底，最后回退 home。侧栏「新任务」按钮
+建档无 pane 上下文，写 home。
 
 之后任何一方都不再改写它：**绑定已有任务不覆盖**（可能是在无关目录的临时
 pane 里绑的）、改名/解绑原样搬运、agent 写回 handoff 按协议不碰 frontmatter

@@ -191,21 +191,21 @@ final class PaneView: NSView {
         return nil
     }
 
-    /// 建档写入的 `cwd` = 任务创建现场。取值分叉：agent 在跑（thinking/tool/
-    /// attention）用它上报的 cwd——agent 全屏期间 shell 不出提示符，OSC PWD
-    /// 停在启动目录；否则用 shell 的 OSC PWD；都拿不到回退 home。
+    /// 建档写入的 `cwd` = 任务创建现场。首选 shell 的 OSC PWD：agent 全屏期间
+    /// 它「停」在最后一次提示符的目录——正是用户敲 `claude` 的地方，即 agent
+    /// 继承的出生目录，不是过期数据。刻意不优先 agent 上报的 cwd：那个值是
+    /// agent 自己填的，探查/在别的目录跑命令时可能跟着漂，会记下瞬时的错误
+    /// 目录；它只做 shell 没发 OSC 7（未配 shell-integration）时的兜底。
     /// 只有「新建任务」走这里：绑定已有任务不覆盖其 cwd（你可能在 home 的
     /// 临时 pane 里绑一个项目任务），改名/解绑/agent 写回也都不碰它。
     private func taskCreationWorkingDirectory() -> String {
-        let status = PaneStatusStore.shared.status(for: dragIdentifier)
-        if let state = status?.state, [.thinking, .tool, .attention].contains(state),
-            let agentCWD = status?.cwd, !agentCWD.isEmpty {
-            return agentCWD
-        }
         if let shellCWD = terminal.currentWorkingDirectory, !shellCWD.isEmpty {
             return shellCWD
         }
-        if let agentCWD = status?.cwd, !agentCWD.isEmpty { return agentCWD }
+        if let agentCWD = PaneStatusStore.shared.status(for: dragIdentifier)?.cwd,
+            !agentCWD.isEmpty {
+            return agentCWD
+        }
         return FileManager.default.homeDirectoryForCurrentUser.path
     }
 
