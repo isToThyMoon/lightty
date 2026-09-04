@@ -13,8 +13,12 @@ enum RestoreFlow {
         in controller: TerminalWindowController
     ) {
         popover?.close()
+        // 打开时重读磁盘：调用方传来的 task 是列表缓存的快照，agent 直接写
+        // 文件不触发内部通知，快照可能停在写入前（正文为空 → 摘要空白）。
+        // 气泡是「看一眼现状」的动作，以磁盘为准；读不了再用快照兜底。
+        let freshTask = (try? AppState.shared.taskStore.load(at: fileURL)) ?? task
         let content = RestorePopoverController(
-            fileURL: fileURL, task: task, controller: controller)
+            fileURL: fileURL, task: freshTask, controller: controller)
         let pop = NSPopover()
         pop.contentViewController = content
         pop.behavior = .transient
@@ -41,7 +45,14 @@ enum RestoreFlow {
         }
         let result = lines.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return result.isEmpty ? L("No handoff summary yet") : result
+        if !result.isEmpty { return result }
+        // 兜底：agent 写的节头不在协议集合里时，展示正文开头——有内容
+        // 就不该显示「暂无摘要」
+        let head = body.split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix(12)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return head.isEmpty ? L("No handoff summary yet") : head
     }
 }
 
