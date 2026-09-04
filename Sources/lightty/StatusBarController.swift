@@ -159,7 +159,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             // 必须同色，否则用户得学两套配色。
             tint = ShellStyle.statusColor(for: .done)
         case .attention:
-            names = ["exclamationmark.circle.fill", "exclamationmark.circle"]
+            // 问号而非叹号：这个状态是「agent 在问你」（等批准/等回答），
+            // 不是警告或出错，叹号的语义不对
+            names = ["questionmark.circle.fill", "questionmark.circle"]
             tint = ShellStyle.statusColor(for: .attention)
         }
 
@@ -186,7 +188,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .thinking, .tool: count = store.activeCount > 1 ? store.activeCount : 0
         case .idle: count = 0
         }
-        button.title = count > 0 ? " \(count)" : ""
+        // 计数用 attributed title 钉住字体与基线：裸 title 的默认字号/基线
+        // 与 14pt 符号图标各走各的，数字看起来悬在圆底旁边没对齐
+        if count > 0 {
+            button.attributedTitle = NSAttributedString(
+                string: " \(count)",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                    .baselineOffset: -1,
+                ])
+        } else {
+            button.title = ""
+        }
         button.toolTip = Self.summaryTooltip(store: store)
     }
 
