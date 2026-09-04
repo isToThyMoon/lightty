@@ -156,11 +156,11 @@ final class TaskFileParseTests: XCTestCase {
         assertParseError(input, line: 6, messageContains: "workdir")
     }
 
-    func testWorkdirWinsOverLegacyCWD() throws {
-        // 双键并存（新版本写出的文件）：workdir 是规范值
+    func testWorkdirAndLegacyCWDTogetherIsDuplicateKey() {
+        // cwd 是 workdir 的别名（入口归一），双键并存 = 键重复；
+        // 没有任何已发布版本写过双键，这种文件只能来自手改
         let input = "---\nname: a\nstatus: active\nworkdir: /new\ncwd: /old\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        let file = try TaskFile.parse(td(input))
-        XCTAssertEqual(file.workdir, "/new")
+        assertParseError(input, line: 5, messageContains: "键重复")
     }
 
     func testLegacyCWDOnlyStillParses() throws {

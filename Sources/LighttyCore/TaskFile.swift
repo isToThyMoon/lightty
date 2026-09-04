@@ -119,7 +119,6 @@ public struct TaskFile: Equatable {
         var name: String?
         var status: TaskStatus?
         var workdir: String?
-        var legacyCWD: String?
         var tool: String?
         var created: Date?
         var updated: Date?
@@ -158,9 +157,9 @@ public struct TaskFile: Equatable {
             guard let colon = text.firstIndex(of: ":") else {
                 throw TaskParseError(line: line, message: "缺少冒号分隔的键值行")
             }
-            let key = String(text[..<colon])
-            guard !key.isEmpty, !key.contains(where: { $0.isWhitespace }) else {
-                throw TaskParseError(line: line, message: "非法键名: \(key)")
+            let rawKey = String(text[..<colon])
+            guard !rawKey.isEmpty, !rawKey.contains(where: { $0.isWhitespace }) else {
+                throw TaskParseError(line: line, message: "非法键名: \(rawKey)")
             }
             let afterColon = text.index(after: colon)
             guard afterColon < text.endIndex, text[afterColon] == " " else {
@@ -170,6 +169,9 @@ public struct TaskFile: Equatable {
             guard !value.isEmpty, !value.hasPrefix(" ") else {
                 throw TaskParseError(line: line, message: "冒号后须恰好一个空格起值")
             }
+            // 2026-09-04 格式升版：cwd 是 workdir 的旧名，入口处归一。
+            // 此后整条流水线只认识 workdir——双键并存按键重复报错。
+            let key = (rawKey == "cwd") ? "workdir" : rawKey
             guard seenKeys.insert(key).inserted else {
                 throw TaskParseError(line: line, message: "键重复: \(key)")
             }
@@ -184,8 +186,6 @@ public struct TaskFile: Equatable {
                 status = s
             case "workdir":
                 workdir = value
-            case "cwd":
-                legacyCWD = value
             case "tool":
                 tool = value
             case "created":
@@ -205,9 +205,8 @@ public struct TaskFile: Equatable {
 
         guard let name else { throw TaskParseError(line: closingLine, message: "缺少必填键: name") }
         guard let status else { throw TaskParseError(line: closingLine, message: "缺少必填键: status") }
-        // 2026-09-04 起规范键为 workdir；cwd 是 ≤v0.3.0 的旧键，读取兼容
-        guard let workdir = workdir ?? legacyCWD else {
-            throw TaskParseError(line: closingLine, message: "缺少必填键: workdir（或旧键 cwd）")
+        guard let workdir else {
+            throw TaskParseError(line: closingLine, message: "缺少必填键: workdir")
         }
         guard let created else { throw TaskParseError(line: closingLine, message: "缺少必填键: created") }
         guard let updated else { throw TaskParseError(line: closingLine, message: "缺少必填键: updated") }
