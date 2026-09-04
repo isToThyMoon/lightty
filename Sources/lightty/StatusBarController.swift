@@ -158,11 +158,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             names = ["questionmark.circle.fill", "questionmark.circle"]
         }
 
-        // 16pt 对齐第三方菜单栏图标的普遍视觉尺寸（14pt 在一排里明显偏小）
+        // 标准做法：模板 symbol 原样交给按钮，由系统垂直居中——symbol 图片
+        // 内嵌基线与对齐元数据，任何自定义 padding 重绘都会破坏它们（曾因此
+        // 陷入图标/计数交替错位的手调循环）。16pt 是用户拍板的视觉尺寸。
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        let image = (Self.symbol(names, accessibility: L("Pane status"))?
-            .withSymbolConfiguration(config))
-            .map(Self.opticallyAligned)
+        let image = Self.symbol(names, accessibility: L("Pane status"))?
+            .withSymbolConfiguration(config)
+        image?.isTemplate = true
         button.image = image
 
         // 计数跟着档位换语义：要人 = 卡住数、跑完 = 未读数；
@@ -174,39 +176,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .thinking, .tool: count = store.activeCount > 1 ? store.activeCount : 0
         case .idle: count = 0
         }
-        // 计数用 attributed title 钉住字体与基线：裸 title 的默认字号/基线
-        // 与符号图标各走各的。+0.5 与图标的光学抬升配套（逐像素校准：
-        // 图标字形中心 32.0，数字在 -1 时中心 35.0，差 1.5pt）
-        if count > 0 {
-            button.attributedTitle = NSAttributedString(
-                string: " \(count)",
-                attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-                    .baselineOffset: 0.5,
-                ])
-        } else {
-            button.title = ""
-        }
+        // 计数走标准图文对齐：给按钮设 font + 普通 title，NSButton 按 symbol
+        // 内嵌基线对齐文字基线——这正是 symbol 携带基线元数据的用途，
+        // 不要用 attributedTitle 手调 baselineOffset。
+        button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        button.title = count > 0 ? " \(count)" : ""
         button.toolTip = Self.summaryTooltip(store: store)
         if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil,
             let frame = button.window?.frame {
             NSLog("[DEBUG-sb] item frame %@", NSStringFromRect(frame))
         }
-    }
-
-    /// 菜单栏图标的行规是光学中心略高于几何中心：symbol 图片带字体度规
-    /// （基线下方的 descender 空间），直接居中会比邻居沉约 1pt——逐像素量过
-    /// 一排第三方图标，字形中心普遍在栏几何中心上方 0.5-1.5px（2x）。
-    /// 底部垫 1pt 把字形抬高 0.5pt，对齐邻居的光学中心线（2pt 实测抬过头）。
-    private static func opticallyAligned(_ symbol: NSImage) -> NSImage {
-        let size = NSSize(width: symbol.size.width, height: symbol.size.height + 1)
-        let padded = NSImage(size: size, flipped: false) { _ in
-            symbol.draw(in: NSRect(
-                x: 0, y: 1, width: symbol.size.width, height: symbol.size.height))
-            return true
-        }
-        padded.isTemplate = true
-        return padded
     }
 
     /// 悬停即知全局：如「2 running · 1 needs you」。全空闲退回静态名。
