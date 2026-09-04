@@ -215,9 +215,9 @@ final class PaneView: NSView {
     static func restoring(task: TaskFile, fileURL: URL) -> PaneView {
         var configuration = TerminalSurfaceConfiguration()
         var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: task.cwd, isDirectory: &isDirectory),
+        if FileManager.default.fileExists(atPath: task.workdir, isDirectory: &isDirectory),
             isDirectory.boolValue {
-            configuration.workingDirectory = task.cwd
+            configuration.workingDirectory = task.workdir
         }
         let pane = PaneView(surfaceConfiguration: configuration)
         pane.bind(to: fileURL, name: task.name)
@@ -280,7 +280,7 @@ final class PaneView: NSView {
             do {
                 let created = try AppState.shared.taskStore.create(
                     name: name,
-                    cwd: self.taskCreationWorkingDirectory(),
+                    workdir: self.taskCreationWorkingDirectory(),
                     tool: nil)
                 self.bind(to: created.fileURL, name: name)
             } catch {

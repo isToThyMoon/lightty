@@ -51,10 +51,10 @@ public final class TaskStore {
     // MARK: - 写
 
     @discardableResult
-    public func create(name: String, cwd: String, tool: String? = nil) throws -> (fileURL: URL, task: TaskFile) {
+    public func create(name: String, workdir: String, tool: String? = nil) throws -> (fileURL: URL, task: TaskFile) {
         let timestamp = now()
         let task = TaskFile(
-            name: name, status: .active, cwd: cwd, tool: tool,
+            name: name, status: .active, workdir: workdir, tool: tool,
             created: timestamp, updated: timestamp
         )
         let url = uniqueURL(for: name)

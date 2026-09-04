@@ -241,7 +241,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             do {
                 _ = try AppState.shared.taskStore.create(
                     name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    workdir: FileManager.default.homeDirectoryForCurrentUser.path,
                     tool: nil)
                 NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
             } catch {

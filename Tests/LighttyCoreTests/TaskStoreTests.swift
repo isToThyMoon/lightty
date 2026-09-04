@@ -26,7 +26,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testCreateWritesSanitizedFile() throws {
         let store = makeStore()
-        let created = try store.create(name: "修 a/b: 会话  管理", cwd: "/Users/me/p", tool: "claude")
+        let created = try store.create(name: "修 a/b: 会话  管理", workdir: "/Users/me/p", tool: "claude")
         XCTAssertEqual(created.fileURL.lastPathComponent, "修 ab 会话 管理.md")
         XCTAssertEqual(created.task.name, "修 a/b: 会话  管理")
         XCTAssertEqual(created.task.status, .active)
@@ -41,9 +41,9 @@ final class TaskStoreTests: XCTestCase {
 
     func testCreateDuplicateNamesAppendSuffix() throws {
         let store = makeStore()
-        let a = try store.create(name: "同名", cwd: "/x")
-        let b = try store.create(name: "同名", cwd: "/x")
-        let c = try store.create(name: "同/名", cwd: "/x") // 净化后同名
+        let a = try store.create(name: "同名", workdir: "/x")
+        let b = try store.create(name: "同名", workdir: "/x")
+        let c = try store.create(name: "同/名", workdir: "/x") // 净化后同名
         XCTAssertEqual(a.fileURL.lastPathComponent, "同名.md")
         XCTAssertEqual(b.fileURL.lastPathComponent, "同名-2.md")
         XCTAssertEqual(c.fileURL.lastPathComponent, "同名-3.md")
@@ -51,7 +51,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testCreateEmptyNameUsesTaskFallback() throws {
         let store = makeStore()
-        let a = try store.create(name: "/:", cwd: "/x")
+        let a = try store.create(name: "/:", workdir: "/x")
         XCTAssertEqual(a.fileURL.lastPathComponent, "task.md")
     }
 
@@ -59,8 +59,8 @@ final class TaskStoreTests: XCTestCase {
 
     func testListIgnoresDotfilesAndNonMarkdown() throws {
         let store = makeStore()
-        try store.create(name: "甲", cwd: "/x")
-        try store.create(name: "乙", cwd: "/x")
+        try store.create(name: "甲", workdir: "/x")
+        try store.create(name: "乙", workdir: "/x")
         try td("junk").write(to: store.directory.appendingPathComponent(".hidden.md"))
         try td("junk").write(to: store.directory.appendingPathComponent("notes.txt"))
         let result = store.list()
@@ -70,7 +70,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testListIsolatesInvalidFiles() throws {
         let store = makeStore()
-        try store.create(name: "好的", cwd: "/x")
+        try store.create(name: "好的", workdir: "/x")
         let bad = store.directory.appendingPathComponent("坏的.md")
         try td("not frontmatter").write(to: bad)
         let result = store.list()
@@ -84,7 +84,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testUpdateWritesBackAndRefreshesUpdated() throws {
         let store = makeStore()
-        let created = try store.create(name: "a", cwd: "/x")
+        let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
         task.status = .done
         task.body = "收工记录\n"
@@ -98,7 +98,8 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testUpdatePreservesUnknownKeysAndBodyBytes() throws {
-        // 手写一个带未知键、正文无结尾换行的文件，load → update 后须字节保真
+        // 手写一个带未知键、正文无结尾换行的旧格式（cwd 键）文件，
+        // load → update 后未知键与正文字节保真；cwd 升级为 workdir（干净切换）
         let store = makeStore()
         let url = store.directory.appendingPathComponent("外部.md")
         let raw = "---\nname: 外部\nstatus: active\ncwd: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T09:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
@@ -108,7 +109,7 @@ final class TaskStoreTests: XCTestCase {
         let updated = try store.update(at: url, task: task)
         XCTAssertEqual(updated.unknownLines, ["x-hook: v1"])
         XCTAssertEqual(updated.body, "正文无换行结尾")
-        let expected = "---\nname: 外部\nstatus: stuck\ncwd: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
+        let expected = "---\nname: 外部\nstatus: stuck\nworkdir: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
         XCTAssertEqual(try Data(contentsOf: url), td(expected))
     }
 
@@ -116,7 +117,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testRenameMovesFileAndUpdatesName() throws {
         let store = makeStore()
-        let created = try store.create(name: "旧名", cwd: "/x")
+        let created = try store.create(name: "旧名", workdir: "/x")
         now = utc("2026-08-22T11:00:00Z")
         let newURL = try store.rename(at: created.fileURL, to: "新/名: 字")
         XCTAssertEqual(newURL.lastPathComponent, "新名 字.md")
@@ -129,15 +130,15 @@ final class TaskStoreTests: XCTestCase {
 
     func testRenameCollisionAppendsSuffix() throws {
         let store = makeStore()
-        try store.create(name: "占位", cwd: "/x")
-        let created = try store.create(name: "自己", cwd: "/x")
+        try store.create(name: "占位", workdir: "/x")
+        let created = try store.create(name: "自己", workdir: "/x")
         let newURL = try store.rename(at: created.fileURL, to: "占位")
         XCTAssertEqual(newURL.lastPathComponent, "占位-2.md")
     }
 
     func testRenameToSameSanitizedNameKeepsFile() throws {
         let store = makeStore()
-        let created = try store.create(name: "同名", cwd: "/x")
+        let created = try store.create(name: "同名", workdir: "/x")
         // "同名:" 净化后与现文件同名 → 原地写回，不产生 -2 后缀
         let newURL = try store.rename(at: created.fileURL, to: "同名:")
         XCTAssertEqual(newURL, created.fileURL)
@@ -149,7 +150,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testAppendSessionAppendsAndDedupes() throws {
         let store = makeStore()
-        let created = try store.create(name: "a", cwd: "/x")
+        let created = try store.create(name: "a", workdir: "/x")
         now = utc("2026-08-22T11:00:00Z")
         let one = try store.appendSession(at: created.fileURL, tool: "claude", id: "s1")
         XCTAssertEqual(one.sessions, [TaskSession(tool: "claude", id: "s1")])
@@ -172,7 +173,7 @@ final class TaskStoreTests: XCTestCase {
 
     func testNoTempFileResidue() throws {
         let store = makeStore()
-        let created = try store.create(name: "a", cwd: "/x")
+        let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
         task.status = .done
         try store.update(at: created.fileURL, task: task)
@@ -191,7 +192,7 @@ final class TaskStoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
         let store = TaskStore(directory: link) { self.now }
         XCTAssertEqual(store.directory.path, store.directory.resolvingSymlinksInPath().path)
-        let created = try store.create(name: "a", cwd: "/x")
+        let created = try store.create(name: "a", workdir: "/x")
         XCTAssertTrue(created.fileURL.path.hasPrefix(store.directory.path))
         // list 返回的路径与 create 一致（不受 /var vs /private/var 影响）
         XCTAssertEqual(store.list().tasks.map { $0.fileURL }, [created.fileURL])

@@ -35,7 +35,8 @@ public struct TaskParseError: Error, Equatable, CustomStringConvertible {
 public struct TaskFile: Equatable {
     public var name: String
     public var status: TaskStatus
-    public var cwd: String
+    /// 任务创建现场的工作目录（规范键 `workdir`；旧键 `cwd` 仅读取兼容，写入不再输出）
+    public var workdir: String
     public var tool: String?
     public var created: Date
     public var updated: Date
@@ -48,7 +49,7 @@ public struct TaskFile: Equatable {
     public init(
         name: String,
         status: TaskStatus,
-        cwd: String,
+        workdir: String,
         tool: String? = nil,
         created: Date,
         updated: Date,
@@ -58,7 +59,7 @@ public struct TaskFile: Equatable {
     ) {
         self.name = name
         self.status = status
-        self.cwd = cwd
+        self.workdir = workdir
         self.tool = tool
         self.created = created
         self.updated = updated
@@ -117,7 +118,8 @@ public struct TaskFile: Equatable {
         // 逐行解析键值
         var name: String?
         var status: TaskStatus?
-        var cwd: String?
+        var workdir: String?
+        var legacyCWD: String?
         var tool: String?
         var created: Date?
         var updated: Date?
@@ -180,8 +182,10 @@ public struct TaskFile: Equatable {
                     throw TaskParseError(line: line, message: "status 取值非法: \(value)")
                 }
                 status = s
+            case "workdir":
+                workdir = value
             case "cwd":
-                cwd = value
+                legacyCWD = value
             case "tool":
                 tool = value
             case "created":
@@ -201,12 +205,15 @@ public struct TaskFile: Equatable {
 
         guard let name else { throw TaskParseError(line: closingLine, message: "缺少必填键: name") }
         guard let status else { throw TaskParseError(line: closingLine, message: "缺少必填键: status") }
-        guard let cwd else { throw TaskParseError(line: closingLine, message: "缺少必填键: cwd") }
+        // 2026-09-04 起规范键为 workdir；cwd 是 ≤v0.3.0 的旧键，读取兼容
+        guard let workdir = workdir ?? legacyCWD else {
+            throw TaskParseError(line: closingLine, message: "缺少必填键: workdir（或旧键 cwd）")
+        }
         guard let created else { throw TaskParseError(line: closingLine, message: "缺少必填键: created") }
         guard let updated else { throw TaskParseError(line: closingLine, message: "缺少必填键: updated") }
 
         return TaskFile(
-            name: name, status: status, cwd: cwd, tool: tool,
+            name: name, status: status, workdir: workdir, tool: tool,
             created: created, updated: updated,
             sessions: sessions, unknownLines: unknownLines, body: body
         )
@@ -214,12 +221,12 @@ public struct TaskFile: Equatable {
 
     // MARK: - 序列化
 
-    /// 按规范固定键序输出：name、status、cwd、tool（有值）、created、updated、未知键、sessions（非空）
+    /// 按规范固定键序输出：name、status、workdir、tool（有值）、created、updated、未知键、sessions（非空）
     public func serialize() -> Data {
         var s = "---\n"
         s += "name: \(name)\n"
         s += "status: \(status.rawValue)\n"
-        s += "cwd: \(cwd)\n"
+        s += "workdir: \(workdir)\n"
         if let tool {
             s += "tool: \(tool)\n"
         }

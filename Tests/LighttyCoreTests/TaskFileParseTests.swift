@@ -34,7 +34,7 @@ final class TaskFileParseTests: XCTestCase {
     ---
     name: 修会话管理方案
     status: active
-    cwd: /Users/me/project/foo
+    workdir: /Users/me/project/foo
     tool: claude
     created: 2026-08-22T10:00:00Z
     updated: 2026-08-22T12:30:00Z
@@ -52,7 +52,7 @@ final class TaskFileParseTests: XCTestCase {
         let file = try TaskFile.parse(td(fullSample))
         XCTAssertEqual(file.name, "修会话管理方案")
         XCTAssertEqual(file.status, .active)
-        XCTAssertEqual(file.cwd, "/Users/me/project/foo")
+        XCTAssertEqual(file.workdir, "/Users/me/project/foo")
         XCTAssertEqual(file.tool, "claude")
         XCTAssertEqual(file.created, utc("2026-08-22T10:00:00Z"))
         XCTAssertEqual(file.updated, utc("2026-08-22T12:30:00Z"))
@@ -151,8 +151,22 @@ final class TaskFileParseTests: XCTestCase {
     }
 
     func testErrorMissingRequiredKey() {
-        // 缺 cwd，报错落在闭合行
+        // workdir 与旧键 cwd 都缺，报错落在闭合行
         let input = "---\nname: a\nstatus: active\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        assertParseError(input, line: 6, messageContains: "cwd")
+        assertParseError(input, line: 6, messageContains: "workdir")
+    }
+
+    func testWorkdirWinsOverLegacyCWD() throws {
+        // 双键并存（新版本写出的文件）：workdir 是规范值
+        let input = "---\nname: a\nstatus: active\nworkdir: /new\ncwd: /old\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.workdir, "/new")
+    }
+
+    func testLegacyCWDOnlyStillParses() throws {
+        // ≤v0.3.0 的旧文件只有 cwd，必须继续可读
+        let input = "---\nname: a\nstatus: active\ncwd: /legacy\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.workdir, "/legacy")
     }
 }

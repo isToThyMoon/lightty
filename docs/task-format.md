@@ -25,7 +25,7 @@ lightty 任务数据的唯一持久化格式。`Sources/LighttyCore` 与将来�
 ---
 name: 修会话管理方案
 status: active
-cwd: /Users/me/project/foo
+workdir: /Users/me/project/foo
 tool: claude
 created: 2026-08-22T10:00:00Z
 updated: 2026-08-22T12:30:00Z
@@ -55,13 +55,20 @@ sessions:
 |---|---|---|---|
 | `name` | 是 | 任意单行文本 | 任务名原文（未净化） |
 | `status` | 是 | `active` \| `stuck` \| `done` | **已弃用**（仅兼容保留），见下节 |
-| `cwd` | 是 | 绝对路径 | 任务创建现场的工作目录，见下节 |
+| `workdir` | 是* | 绝对路径 | 任务创建现场的工作目录，见下节；旧键 `cwd` 读取兼容 |
 | `tool` | 否 | 工具名（如 `claude`） | 缺省时序列化不写该键 |
 | `created` | 是 | ISO8601 UTC，如 `2026-08-22T10:00:00Z` | 创建时间 |
 | `updated` | 是 | ISO8601 UTC | 最后修改时间；每次写入必须刷新 |
 | `sessions` | 否 | 列表，条目 `<tool>:<session-id>` | 关联会话，追加时去重（tool+id 相同视为重复） |
 
-### cwd：创建现场，恢复时的起始目录（2026-09-04）
+### workdir：创建现场，恢复时的起始目录（2026-09-04）
+
+原键名 `cwd`，2026-09-04 更名：字段既非「当前」也不随时间更新，*current*
+的时间性暗示不准。迁移是干净切换：**写入只写 `workdir`**；**读取兼容旧键
+`cwd`**（`workdir` 优先，两者都缺才报「缺少必填键」）；旧文件重写时自动
+升级键名。已知代价：v0.3.0 及更早版本的解析器视 `cwd` 为必填，读不了新版
+写出的文件（会从列表剔除）——只影响降级或多机共享任务目录且版本不一的
+场景，升级单向，可接受。
 
 写入端只有「pane 内新建任务」一处，首选 shell 的 OSC PWD：agent 全屏期间它
 停在最后一次提示符的目录——正是用户启动 agent 的地方，即 agent 继承的出生
@@ -76,8 +83,8 @@ pane 里绑的）、改名/解绑原样搬运、agent 写回 handoff 按协议�
 「创建现场」，项目搬家手改此键即可。
 
 读取端是恢复任务（气泡三目的地、⇧⇧ 搜索打开）：新 pane 的 shell 直接以
-`cwd` 为起始目录（走 libghostty 的 `working_directory`）；目录已不存在则
-不传、回退内核默认，不让 spawn 失败。
+`workdir` 为起始目录（走 libghostty 的 `working_directory`）；目录已不存在
+则不传、回退内核默认，不让 spawn 失败。
 
 ### status：已弃用（2026-08-30）
 
@@ -100,7 +107,7 @@ pane 里绑的）、改名/解绑原样搬运、agent 写回 handoff 按协议�
 
 ### 序列化顺序
 
-写文件时已知键按固定顺序输出：`name`、`status`、`cwd`、`tool`（有值时）、`created`、`updated`、未知键原始行（按读取顺序）、`sessions`（非空时）。
+写文件时已知键按固定顺序输出：`name`、`status`、`workdir`、`tool`（有值时）、`created`、`updated`、未知键原始行（按读取顺序）、`sessions`（非空时）。
 
 ### 错误处理
 
