@@ -134,9 +134,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     // MARK: - 图标
 
-    /// 三档观感，按「值不值得打断用户」递增：
-    /// 全空闲 = 空心虚线圈（几乎看不见）；有 agent 在跑 = 省略号（有动静）；
-    /// 有 done/attention = 实心彩色符号 + 未读数（这是"快看我"档）。
+    /// 全部单色模板（menu bar 规范：第三方彩色图标在一排系统单色项里必然突兀），
+    /// 档位靠形状轻重表达：全空闲 = 虚线圈（几乎看不见）；在跑 = 省略号线框；
+    /// done/attention = 实心圆 + 镂空勾/问号 + 计数（最重的"快看我"档）。
+    /// 状态的颜色语义保留在下拉菜单的行内圆点里——自绘区域用色是正常的。
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
         let store = PaneStatusStore.shared
@@ -144,39 +145,24 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let unread = store.unreadCount
 
         let names: [String]
-        let tint: NSColor?
         switch aggregate {
         case .idle:
             names = ["circle.dashed", "circle.dotted", "circle"]
-            tint = nil
         case .thinking, .tool:
             names = ["ellipsis.circle", "circle"]
-            tint = nil
         case .done:
             names = ["checkmark.circle.fill", "checkmark.circle"]
-            // 走 ShellStyle 而不是 .systemGreen：绿色已经是「已绑定任务」的常驻色，
-            // 用绿色表示「跑完了」会被读成「没变化」。同一状态在菜单栏与 pane 头
-            // 必须同色，否则用户得学两套配色。
-            tint = ShellStyle.statusColor(for: .done)
         case .attention:
             // 问号而非叹号：这个状态是「agent 在问你」（等批准/等回答），
             // 不是警告或出错，叹号的语义不对
             names = ["questionmark.circle.fill", "questionmark.circle"]
-            tint = ShellStyle.statusColor(for: .attention)
         }
 
-        let weight: NSFont.Weight = tint == nil ? .regular : .semibold
-        var config = NSImage.SymbolConfiguration(pointSize: 14, weight: weight)
-        if let tint {
-            // `X.circle.fill` 是多层符号：第一层是勾/叹号、第二层是圆底。
-            // 单色 palette 会把两层涂成同色，符号退化成一个纯色团（勾被吞掉）。
-            config = config.applying(NSImage.SymbolConfiguration(paletteColors: [.white, tint]))
-        }
+        // 16pt 对齐第三方菜单栏图标的普遍视觉尺寸（14pt 在一排里明显偏小）
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
         let image = Self.symbol(names, accessibility: L("Pane status"))?
             .withSymbolConfiguration(config)
-        // 未上色的档次走 template，跟随菜单栏明暗/强调反色；
-        // 上了色的档次必须关掉 template，否则调色板会被系统抹平成单色。
-        image?.isTemplate = (tint == nil)
+        image?.isTemplate = true
         button.image = image
 
         // 计数跟着档位换语义：要人 = 卡住数、跑完 = 未读数；
@@ -201,6 +187,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.title = ""
         }
         button.toolTip = Self.summaryTooltip(store: store)
+        if ProcessInfo.processInfo.environment["LIGHTTY_DEBUG_LAYOUT"] != nil,
+            let frame = button.window?.frame {
+            NSLog("[DEBUG-sb] item frame %@", NSStringFromRect(frame))
+        }
     }
 
     /// 悬停即知全局：如「2 running · 1 needs you」。全空闲退回静态名。
