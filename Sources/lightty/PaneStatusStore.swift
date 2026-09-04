@@ -282,11 +282,17 @@ final class PaneStatusStore {
 
     // MARK: - 已读
 
-    /// `done` → `idle`，**只改内存**：hook 是纯发方，没有反向通道，
+    /// `done`/`attention` → `idle`，**只改内存**：hook 是纯发方，没有反向通道，
     /// 而且下一发 hook 报文本来就会盖掉它。
+    ///
+    /// attention 也在此终结：它可能由 turn 结束后的「等你输入」提醒事件点亮，
+    /// 之后 agent 不再发任何事件——没有用户侧清除路径的话，用户跳进 pane
+    /// 亲眼看过了，问号还永远挂着。你看过，提醒的职责就完成了；若 agent
+    /// 仍在等而你切走，它的下一发提醒事件会重新点亮。
     func markRead(_ paneID: UUID) {
         assertMain()
-        guard let current = statuses[paneID], current.state == .done else { return }
+        guard let current = statuses[paneID],
+            current.state == .done || current.state == .attention else { return }
         statuses[paneID] = Self.markedRead(current)
         postChange(paneID)
     }
@@ -294,7 +300,8 @@ final class PaneStatusStore {
     func markAllRead() {
         assertMain()
         var changed = false
-        for (paneID, status) in statuses where status.state == .done {
+        for (paneID, status) in statuses
+        where status.state == .done || status.state == .attention {
             statuses[paneID] = Self.markedRead(status)
             changed = true
         }

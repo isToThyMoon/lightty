@@ -186,6 +186,20 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.aggregate, .idle)
     }
 
+    /// attention 也被已读终结：它可能由 turn 结束后的「等你输入」提醒点亮，
+    /// 此后 agent 不再发事件——没有用户侧清除路径的话问号永远挂着。
+    func testMarkReadClearsAttention() {
+        let pane = UUID()
+        attach(pane)
+        send(.attention, to: pane)
+        waitUntil("attention 到达") { self.received.count >= 1 }
+        XCTAssertEqual(store.aggregate, .attention)
+
+        store.markRead(pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .idle)
+        XCTAssertEqual(store.aggregate, .idle)
+    }
+
     func testStopUnlinksTheSocketFile() {
         XCTAssertTrue(FileManager.default.fileExists(atPath: socketPath.path))
         store.stop()
