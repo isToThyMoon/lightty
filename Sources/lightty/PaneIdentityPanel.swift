@@ -89,6 +89,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         island.layer?.shadowRadius = 14
         island.layer?.shadowOffset = NSSize(width: 0, height: -4)
         island.layer?.masksToBounds = false
+        // 下层 terminal 声明了整片 I-beam，岛体夺回箭头；可点行/按钮各自装手型
+        HoverCursor.installArrow(on: island)
         addSubview(island)
 
         for v in [fixedContent, extras] {
@@ -100,12 +102,21 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3.5
 
+        // 三个输入框都是单行编辑器：usesSingleLineMode 只管显示截断，编辑态
+        // 还要 wraps=false + isScrollable=true——否则长文本（尤其 CJK）在 20pt
+        // 行高里折成两行，每行都被竖向裁一半，两行都看不清。
+        for field in [nameField, taskEditor, searchField] {
+            guard let cell = field.cell as? NSTextFieldCell else { continue }
+            cell.usesSingleLineMode = true
+            cell.wraps = false
+            cell.isScrollable = true
+        }
+
         nameField.font = .systemFont(ofSize: 11, weight: .medium)
         nameField.isBordered = false
         nameField.drawsBackground = false
         nameField.focusRingType = .none
         nameField.delegate = self
-        (nameField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         // —— 扩展区
         separator.wantsLayer = true
@@ -130,6 +141,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             pointSize: 10, weight: .medium)
         taskRenameButton.target = self
         taskRenameButton.action = #selector(beginTaskRename)
+        HoverCursor.installPointingHand(on: taskRenameButton)
 
         taskEditor.font = .systemFont(ofSize: 11)
         taskEditor.isBordered = false
@@ -137,7 +149,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskEditor.focusRingType = .none
         taskEditor.isHidden = true
         taskEditor.delegate = self
-        (taskEditor.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         // —— 内联任务选择器（默认隐藏；打开时岛体向下生长露出）
         listContainer.isHidden = true
@@ -149,8 +160,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.drawsBackground = false
         searchField.focusRingType = .none
         searchField.delegate = self
-        (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
-        (searchField.cell as? NSTextFieldCell)?.lineBreakMode = .byTruncatingTail
 
         taskScrollView.drawsBackground = false
         taskScrollView.borderType = .noBorder
@@ -619,19 +628,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
     }
 
-    // MARK: - 光标
-
-    /// 下层 terminal 用 cursor rect 声明了整片 I-beam；岛体必须登记自己的
-    /// 光标矩形覆盖它：整体箭头，可点区域手型（输入框由 NSTextField 自带 I-beam）。
-    override func resetCursorRects() {
-        addCursorRect(island.frame, cursor: .arrow)
-        var clickables: [NSView] = rowViews
-        if !taskButton.isHidden { clickables.append(taskButton) }
-        if !taskRenameButton.isHidden { clickables.append(taskRenameButton) }
-        for view in clickables {
-            addCursorRect(view.convert(view.bounds, to: self), cursor: .pointingHand)
-        }
-    }
 }
 
 /// NSScrollView 的文档坐标从上向下增长，任务排序与键盘移动因此保持直观。
@@ -652,6 +648,7 @@ private final class TaskRowView: NSView {
          foreground: NSColor) {
         self.rowForeground = foreground
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = 5
 
@@ -721,6 +718,14 @@ private final class HoverRowButton: NSButton {
     var hoverFill: NSColor = .clear
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
+    private var cursorInstalled = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard !cursorInstalled else { return }
+        cursorInstalled = true
+        HoverCursor.installPointingHand(on: self)
+    }
 
     private func applyFill() {
         layer?.backgroundColor = hovered ? hoverFill.cgColor : NSColor.clear.cgColor
