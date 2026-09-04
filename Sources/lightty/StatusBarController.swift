@@ -175,13 +175,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .idle: count = 0
         }
         // 计数用 attributed title 钉住字体与基线：裸 title 的默认字号/基线
-        // 与 14pt 符号图标各走各的，数字看起来悬在圆底旁边没对齐
+        // 与符号图标各走各的。+0.5 与图标的光学抬升配套（逐像素校准：
+        // 图标字形中心 32.0，数字在 -1 时中心 35.0，差 1.5pt）
         if count > 0 {
             button.attributedTitle = NSAttributedString(
                 string: " \(count)",
                 attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-                    .baselineOffset: -1,
+                    .baselineOffset: 0.5,
                 ])
         } else {
             button.title = ""
