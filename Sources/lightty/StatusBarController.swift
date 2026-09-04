@@ -160,9 +160,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // 16pt 对齐第三方菜单栏图标的普遍视觉尺寸（14pt 在一排里明显偏小）
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        let image = Self.symbol(names, accessibility: L("Pane status"))?
-            .withSymbolConfiguration(config)
-        image?.isTemplate = true
+        let image = (Self.symbol(names, accessibility: L("Pane status"))?
+            .withSymbolConfiguration(config))
+            .map(Self.opticallyAligned)
         button.image = image
 
         // 计数跟着档位换语义：要人 = 卡住数、跑完 = 未读数；
@@ -191,6 +191,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let frame = button.window?.frame {
             NSLog("[DEBUG-sb] item frame %@", NSStringFromRect(frame))
         }
+    }
+
+    /// 菜单栏图标的行规是光学中心略高于几何中心：symbol 图片带字体度规
+    /// （基线下方的 descender 空间），直接居中会比邻居沉约 1pt——逐像素量过
+    /// 一排第三方图标，字形中心普遍在栏几何中心上方 0.5-1.5px（2x）。
+    /// 底部垫 1pt 把字形抬高 0.5pt，对齐邻居的光学中心线（2pt 实测抬过头）。
+    private static func opticallyAligned(_ symbol: NSImage) -> NSImage {
+        let size = NSSize(width: symbol.size.width, height: symbol.size.height + 1)
+        let padded = NSImage(size: size, flipped: false) { _ in
+            symbol.draw(in: NSRect(
+                x: 0, y: 1, width: symbol.size.width, height: symbol.size.height))
+            return true
+        }
+        padded.isTemplate = true
+        return padded
     }
 
     /// 悬停即知全局：如「2 running · 1 needs you」。全空闲退回静态名。
