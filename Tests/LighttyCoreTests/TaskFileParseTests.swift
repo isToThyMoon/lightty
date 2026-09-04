@@ -51,7 +51,7 @@ final class TaskFileParseTests: XCTestCase {
     func testParseFullFile() throws {
         let file = try TaskFile.parse(td(fullSample))
         XCTAssertEqual(file.name, "修会话管理方案")
-        XCTAssertEqual(file.status, .active)
+        XCTAssertEqual(file.status, "active")
         XCTAssertEqual(file.workdir, "/Users/me/project/foo")
         XCTAssertEqual(file.tool, "claude")
         XCTAssertEqual(file.created, utc("2026-08-22T10:00:00Z"))
@@ -79,7 +79,7 @@ final class TaskFileParseTests: XCTestCase {
         XCTAssertNil(file.tool)
         XCTAssertEqual(file.sessions, [])
         XCTAssertEqual(file.unknownLines, [])
-        XCTAssertEqual(file.status, .done)
+        XCTAssertEqual(file.status, "done")
         // 多行字面量闭合前的末尾空行只贡献闭合 --- 的换行，正文为空
         XCTAssertEqual(file.body, "")
     }
@@ -124,9 +124,13 @@ final class TaskFileParseTests: XCTestCase {
         assertParseError(input, line: 4, messageContains: "重复")
     }
 
-    func testErrorBadStatus() {
-        let input = "---\nname: a\nstatus: paused\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        assertParseError(input, line: 3, messageContains: "status")
+    func testArbitraryStatusValueIsPreserved() throws {
+        // status 已弃用：agent 手写的 completed/paused 等值不再毙掉整个文件，
+        // 读写原样保留
+        let input = "---\nname: a\nstatus: completed\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.status, "completed")
+        XCTAssertTrue(String(data: file.serialize(), encoding: .utf8)!.contains("status: completed"))
     }
 
     func testErrorBadTimestamp() {

@@ -1,11 +1,6 @@
 import Foundation
 
-/// 任务状态，取值集合由 docs/task-format.md 固定
-public enum TaskStatus: String, CaseIterable, Equatable {
-    case active
-    case stuck
-    case done
-}
+
 
 /// 关联会话条目，序列化为 `<tool>:<session-id>`
 public struct TaskSession: Equatable, Hashable {
@@ -34,7 +29,11 @@ public struct TaskParseError: Error, Equatable, CustomStringConvertible {
 /// 单个任务文件的内存表示。格式规范见 docs/task-format.md。
 public struct TaskFile: Equatable {
     public var name: String
-    public var status: TaskStatus
+    /// 已弃用字段（docs/task-format.md）：任何一方不读其语义。原为
+    /// active|stuck|done 枚举；agent 手写文件常用 completed 等自然词，
+    /// 为死字段的取值校验把整个文件从列表毙掉不成比例，2026-09-04 起
+    /// 改为原样保留的字符串，读写不校验取值。
+    public var status: String
     /// 任务创建现场的工作目录（规范键 `workdir`；旧键 `cwd` 仅读取兼容，写入不再输出）
     public var workdir: String
     public var tool: String?
@@ -48,7 +47,7 @@ public struct TaskFile: Equatable {
 
     public init(
         name: String,
-        status: TaskStatus,
+        status: String,
         workdir: String,
         tool: String? = nil,
         created: Date,
@@ -117,7 +116,7 @@ public struct TaskFile: Equatable {
 
         // 逐行解析键值
         var name: String?
-        var status: TaskStatus?
+        var status: String?
         var workdir: String?
         var tool: String?
         var created: Date?
@@ -180,10 +179,7 @@ public struct TaskFile: Equatable {
             case "name":
                 name = value
             case "status":
-                guard let s = TaskStatus(rawValue: value) else {
-                    throw TaskParseError(line: line, message: "status 取值非法: \(value)")
-                }
-                status = s
+                status = value
             case "workdir":
                 workdir = value
             case "tool":
@@ -224,7 +220,7 @@ public struct TaskFile: Equatable {
     public func serialize() -> Data {
         var s = "---\n"
         s += "name: \(name)\n"
-        s += "status: \(status.rawValue)\n"
+        s += "status: \(status)\n"
         s += "workdir: \(workdir)\n"
         if let tool {
             s += "tool: \(tool)\n"

@@ -6,7 +6,7 @@ final class TaskFileSerializeTests: XCTestCase {
     func testSerializeFixedKeyOrder() {
         let file = TaskFile(
             name: "修会话",
-            status: .stuck,
+            status: "stuck",
             workdir: "/Users/me/p",
             tool: "claude",
             created: utc("2026-08-22T10:00:00Z"),
@@ -35,7 +35,7 @@ final class TaskFileSerializeTests: XCTestCase {
 
     func testSerializeOmitsToolAndEmptySessions() {
         let file = TaskFile(
-            name: "a", status: .active, workdir: "/x",
+            name: "a", status: "active", workdir: "/x",
             created: utc("2026-08-22T10:00:00Z"), updated: utc("2026-08-22T10:00:00Z")
         )
         let expected = "---\nname: a\nstatus: active\nworkdir: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"

@@ -54,7 +54,7 @@ public final class TaskStore {
     public func create(name: String, workdir: String, tool: String? = nil) throws -> (fileURL: URL, task: TaskFile) {
         let timestamp = now()
         let task = TaskFile(
-            name: name, status: .active, workdir: workdir, tool: tool,
+            name: name, status: "active", workdir: workdir, tool: tool,
             created: timestamp, updated: timestamp
         )
         let url = uniqueURL(for: name)

@@ -29,7 +29,7 @@ final class TaskStoreTests: XCTestCase {
         let created = try store.create(name: "修 a/b: 会话  管理", workdir: "/Users/me/p", tool: "claude")
         XCTAssertEqual(created.fileURL.lastPathComponent, "修 ab 会话 管理.md")
         XCTAssertEqual(created.task.name, "修 a/b: 会话  管理")
-        XCTAssertEqual(created.task.status, .active)
+        XCTAssertEqual(created.task.status, "active")
         XCTAssertEqual(created.task.tool, "claude")
         XCTAssertEqual(created.task.created, now)
         XCTAssertEqual(created.task.updated, now)
@@ -86,11 +86,11 @@ final class TaskStoreTests: XCTestCase {
         let store = makeStore()
         let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
-        task.status = .done
+        task.status = "done"
         task.body = "收工记录\n"
         now = utc("2026-08-22T12:00:00Z")
         let updated = try store.update(at: created.fileURL, task: task)
-        XCTAssertEqual(updated.status, .done)
+        XCTAssertEqual(updated.status, "done")
         XCTAssertEqual(updated.updated, utc("2026-08-22T12:00:00Z"))
         XCTAssertEqual(updated.created, utc("2026-08-22T10:00:00Z"))
         let onDisk = try store.load(at: created.fileURL)
@@ -105,7 +105,7 @@ final class TaskStoreTests: XCTestCase {
         let raw = "---\nname: 外部\nstatus: active\ncwd: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T09:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
         try td(raw).write(to: url)
         var task = try store.load(at: url)
-        task.status = .stuck
+        task.status = "stuck"
         let updated = try store.update(at: url, task: task)
         XCTAssertEqual(updated.unknownLines, ["x-hook: v1"])
         XCTAssertEqual(updated.body, "正文无换行结尾")
@@ -175,7 +175,7 @@ final class TaskStoreTests: XCTestCase {
         let store = makeStore()
         let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
-        task.status = .done
+        task.status = "done"
         try store.update(at: created.fileURL, task: task)
         try store.appendSession(at: created.fileURL, tool: "t", id: "i")
         try store.rename(at: created.fileURL, to: "b")
