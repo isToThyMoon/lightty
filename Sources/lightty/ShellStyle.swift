@@ -171,9 +171,12 @@ final class HoverCursor: NSResponder {
     static func installArrow(on view: NSView) { install(arrow, on: view) }
 
     private static func install(_ owner: HoverCursor, on view: NSView) {
+        // .activeAlways：光标反馈不依赖 key 状态。气泡（NSPopover）弹出时
+        // 主窗口让出 key，.activeInKeyWindow 的区域会集体停摆——点一下行
+        // 之后整个列表的手型就没了。
         view.addTrackingArea(NSTrackingArea(
             rect: .zero,
-            options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            options: [.cursorUpdate, .activeAlways, .inVisibleRect],
             owner: owner))
     }
 }
@@ -332,6 +335,17 @@ final class ShellTextButton: NSButton {
 final class ShellTableRowView: NSTableRowView {
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { needsDisplay = true } }
+    private var cursorInstalled = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // 手型装在每一行而不是整个 tableView：cursorUpdate 只在跨区域边界时
+        // 触发，表级单一大区域在「点击弹气泡把光标重置成箭头」之后，行间移动
+        // 不再产生任何事件，手型一去不返；按行分区，换行即重触发。
+        guard !cursorInstalled else { return }
+        cursorInstalled = true
+        HoverCursor.installPointingHand(on: self)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
