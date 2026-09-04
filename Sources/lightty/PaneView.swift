@@ -191,6 +191,39 @@ final class PaneView: NSView {
         return nil
     }
 
+    /// 建档写入的 `cwd` = 任务创建现场。取值分叉：agent 在跑（thinking/tool/
+    /// attention）用它上报的 cwd——agent 全屏期间 shell 不出提示符，OSC PWD
+    /// 停在启动目录；否则用 shell 的 OSC PWD；都拿不到回退 home。
+    /// 只有「新建任务」走这里：绑定已有任务不覆盖其 cwd（你可能在 home 的
+    /// 临时 pane 里绑一个项目任务），改名/解绑/agent 写回也都不碰它。
+    private func taskCreationWorkingDirectory() -> String {
+        let status = PaneStatusStore.shared.status(for: dragIdentifier)
+        if let state = status?.state, [.thinking, .tool, .attention].contains(state),
+            let agentCWD = status?.cwd, !agentCWD.isEmpty {
+            return agentCWD
+        }
+        if let shellCWD = terminal.currentWorkingDirectory, !shellCWD.isEmpty {
+            return shellCWD
+        }
+        if let agentCWD = status?.cwd, !agentCWD.isEmpty { return agentCWD }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    /// 恢复任务用的 pane 工厂：新 shell 直接生在任务的 `cwd`（创建现场），
+    /// agent 起来就在项目里，退出 agent 后 shell 也还在。目录已不存在则不传，
+    /// 回退内核默认目录——不能让 spawn 失败。气泡三目的地与 ⇧⇧ 搜索共用。
+    static func restoring(task: TaskFile, fileURL: URL) -> PaneView {
+        var configuration = TerminalSurfaceConfiguration()
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: task.cwd, isDirectory: &isDirectory),
+            isDirectory.boolValue {
+            configuration.workingDirectory = task.cwd
+        }
+        let pane = PaneView(surfaceConfiguration: configuration)
+        pane.bind(to: fileURL, name: task.name)
+        return pane
+    }
+
     // MARK: - 身份面板（灵动岛式展开）
 
     private var identityPanel: PaneIdentityPanel?
@@ -243,12 +276,13 @@ final class PaneView: NSView {
             self?.bind(to: entry.fileURL, name: entry.task.name)
         }
         panel.onCreateTask = { [weak self] name in
+            guard let self else { return }
             do {
                 let created = try AppState.shared.taskStore.create(
                     name: name,
-                    cwd: FileManager.default.homeDirectoryForCurrentUser.path,
+                    cwd: self.taskCreationWorkingDirectory(),
                     tool: nil)
-                self?.bind(to: created.fileURL, name: name)
+                self.bind(to: created.fileURL, name: name)
             } catch {
                 NSSound.beep()
                 NSLog("task create failed: \(error)")

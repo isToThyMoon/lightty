@@ -423,8 +423,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         _ place: (TerminalWindowController, PaneView) -> Void
     ) {
         guard let controller, let result = results[safe: selectedIndex] else { return }
-        let pane = PaneView()
-        pane.bind(to: result.fileURL, name: result.task.name)
+        let pane = PaneView.restoring(task: result.task, fileURL: result.fileURL)
         place(controller, pane)
         pane.focusTerminal()
         onDismiss?()

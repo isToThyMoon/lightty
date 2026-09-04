@@ -55,11 +55,27 @@ sessions:
 |---|---|---|---|
 | `name` | 是 | 任意单行文本 | 任务名原文（未净化） |
 | `status` | 是 | `active` \| `stuck` \| `done` | **已弃用**（仅兼容保留），见下节 |
-| `cwd` | 是 | 绝对路径 | 任务工作目录 |
+| `cwd` | 是 | 绝对路径 | 任务创建现场的工作目录，见下节 |
 | `tool` | 否 | 工具名（如 `claude`） | 缺省时序列化不写该键 |
 | `created` | 是 | ISO8601 UTC，如 `2026-08-22T10:00:00Z` | 创建时间 |
 | `updated` | 是 | ISO8601 UTC | 最后修改时间；每次写入必须刷新 |
 | `sessions` | 否 | 列表，条目 `<tool>:<session-id>` | 关联会话，追加时去重（tool+id 相同视为重复） |
+
+### cwd：创建现场，恢复时的起始目录（2026-09-04）
+
+写入端只有「pane 内新建任务」一处：agent 在跑（thinking/tool/attention）取
+agent 上报的 cwd——agent 全屏期间 shell 不出提示符，OSC PWD 停在启动目录，
+agent 的目录才是真实工作现场；否则取 shell 的 OSC PWD；都拿不到回退 home。
+侧栏「新任务」按钮建档无 pane 上下文，写 home。
+
+之后任何一方都不再改写它：**绑定已有任务不覆盖**（可能是在无关目录的临时
+pane 里绑的）、改名/解绑原样搬运、agent 写回 handoff 按协议不碰 frontmatter
+（只刷 `updated`）。绑定期间也不跟随 agent 的 cd 漂移回写——语义钉为
+「创建现场」，项目搬家手改此键即可。
+
+读取端是恢复任务（气泡三目的地、⇧⇧ 搜索打开）：新 pane 的 shell 直接以
+`cwd` 为起始目录（走 libghostty 的 `working_directory`）；目录已不存在则
+不传、回退内核默认，不让 spawn 失败。
 
 ### status：已弃用（2026-08-30）
 

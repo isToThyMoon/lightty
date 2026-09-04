@@ -160,9 +160,7 @@ private final class RestorePopoverController: NSViewController {
     }
 
     private func makeBoundPane() -> PaneView {
-        let pane = PaneView()
-        pane.bind(to: fileURL, name: task.name)
-        return pane
+        PaneView.restoring(task: task, fileURL: fileURL)
     }
 
     @objc private func restoreInPane() {
