@@ -314,6 +314,7 @@ private final class WorkspaceRowView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 7
         registerForDraggedTypes([.lighttyPaneID])
+        HoverCursor.installPointingHand(on: self)
 
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: isActive ? .semibold : .medium)
@@ -417,10 +418,6 @@ private final class WorkspaceRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { onRename?() } else { onSelect?() }
@@ -542,6 +539,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
         wantsLayer = true
         layer?.cornerRadius = 6
         registerForDraggedTypes([.lighttyPaneID])
+        HoverCursor.installPointingHand(on: self)
 
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3
@@ -762,10 +760,6 @@ private final class PaneRowView: NSView, NSDraggingSource {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
 
     // MARK: - 拖拽（源 + 落点）
 

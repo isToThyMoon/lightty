@@ -186,6 +186,7 @@ private final class RestoreRowButton: NSButton {
 
     init(_ label: String, target: AnyObject?, action: Selector) {
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         self.target = target
         self.action = action
         isBordered = false

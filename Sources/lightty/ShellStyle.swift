@@ -148,6 +148,36 @@ extension NSColor {
     }
 }
 
+/// 悬停光标。cursor rects（addCursorRect）在本工程 layer-backed + autolayout +
+/// 动态重建行的组合下系统性失效（实测全 app 无手型），改用 .cursorUpdate
+/// tracking area：owner 收事件设光标，.inVisibleRect 让命中区自动跟随布局，
+/// 行重建后无需手动 invalidate。视图持有 tracking area，owner 为共享单例。
+final class HoverCursor: NSResponder {
+    private let cursor: NSCursor
+    private init(_ cursor: NSCursor) {
+        self.cursor = cursor
+        super.init()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func cursorUpdate(with event: NSEvent) { cursor.set() }
+
+    private static let pointingHand = HoverCursor(.pointingHand)
+    private static let resizeLeftRight = HoverCursor(.resizeLeftRight)
+    private static let arrow = HoverCursor(.arrow)
+
+    static func installPointingHand(on view: NSView) { install(pointingHand, on: view) }
+    static func installResizeLeftRight(on view: NSView) { install(resizeLeftRight, on: view) }
+    /// 覆盖在 terminal（整片 I-beam）之上的浮层用：夺回箭头
+    static func installArrow(on view: NSView) { install(arrow, on: view) }
+
+    private static func install(_ owner: HoverCursor, on view: NSView) {
+        view.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            owner: owner))
+    }
+}
+
 /// Codex 风格的无边框图标按钮：默认安静，hover/按下时才出现圆角底。
 final class ShellIconButton: NSButton {
     private var tracking: NSTrackingArea?
@@ -167,6 +197,7 @@ final class ShellIconButton: NSButton {
         focusRingType = .none
         toolTip = accessibilityLabel
         wantsLayer = true
+        HoverCursor.installPointingHand(on: self)
         layer?.cornerRadius = ShellStyle.controlCornerRadius
         contentTintColor = ShellStyle.secondaryText
         symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .medium)

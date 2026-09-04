@@ -134,6 +134,7 @@ private final class MenuRowButton: NSView {
     init(item: ShellMenuPopover.Item) {
         self.item = item
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.controlCornerRadius
 

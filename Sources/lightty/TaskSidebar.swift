@@ -177,6 +177,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let column = NSTableColumn(identifier: .init("task"))
         tableView.addTableColumn(column)
         tableView.headerView = nil
+        HoverCursor.installPointingHand(on: tableView)
         tableView.dataSource = self
         tableView.delegate = self
         tableView.rowHeight = 48

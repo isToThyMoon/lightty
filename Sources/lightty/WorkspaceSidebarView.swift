@@ -116,6 +116,7 @@ final class EdgeToggleControl: NSView {
     init(pointing: Pointing) {
         self.pointing = pointing
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         alphaValue = 0.65  // 静息常驻低存在感：可发现但不打扰
 
         // 系统磨砂材质：精致半透明的正解（平涂低透明度灰块会显得廉价）
@@ -231,10 +232,6 @@ final class EdgeToggleControl: NSView {
         return expanded.contains(convert(point, from: superview)) ? self : nil
     }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds.insetBy(dx: -10, dy: -6), cursor: .pointingHand)
-    }
-
     override func mouseDown(with event: NSEvent) { onTap?() }
 }
 
@@ -266,6 +263,13 @@ final class EdgeRevealStrip: NSView {
 /// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽；到达最小宽后继续
 /// 向左拖过阈值即关闭。同时保留边缘 hover 感应。
 private final class EdgeDragStrip: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        HoverCursor.installResizeLeftRight(on: self)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
     var onDragClose: (() -> Void)?
     var onResizeBegan: (() -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
@@ -287,10 +291,6 @@ private final class EdgeDragStrip: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeLeftRight)
-    }
 
     override func mouseDown(with event: NSEvent) {
         let initialWidth = superview?.bounds.width ?? WorkspaceSidebarSizing.minimumWidth

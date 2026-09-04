@@ -498,6 +498,7 @@ private final class PaletteRowView: NSView {
 
     init(name: String, tag: String, tagColor: NSColor, snippet: NSAttributedString?) {
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = 7
 
@@ -570,10 +571,6 @@ private final class PaletteRowView: NSView {
         applyFill()  // 挂窗时 backing layer 重建，选中态底色需重涂
     }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { onDoubleTap?() } else { onTap?() }
     }
@@ -588,6 +585,7 @@ private final class PaletteActionButton: NSView {
 
     init(_ title: String) {
         super.init(frame: .zero)
+        HoverCursor.installPointingHand(on: self)
         wantsLayer = true
         layer?.cornerRadius = 6
 
@@ -630,10 +628,6 @@ private final class PaletteActionButton: NSView {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
 
     override func mouseDown(with event: NSEvent) { onTap?() }
 }

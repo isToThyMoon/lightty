@@ -167,6 +167,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         applyTerminalColors()
 
+        // header 整条被 terminal 的 I-beam 光标区覆盖；胶囊与 ✕ 是可点对象
+        HoverCursor.installPointingHand(on: capsule)
+        HoverCursor.installPointingHand(on: closeButton)
+
         addSubview(capsule)
         for v in [dotView, closeButton, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
