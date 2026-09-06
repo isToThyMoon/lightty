@@ -127,8 +127,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     var titleOfBoundTask: String? { boundTaskName }
 
     /// core 通过 CONFIG_CHANGE / COLOR_CHANGE 报告的当前 terminal 颜色；
-    /// 启动值来自全局 config。
-    private var terminalBackground: NSColor
+    /// 启动值来自全局 config。背景色对外暴露给聚光灯纱取色：
+    /// 纱必须跟 pane 当前实际主题走（明暗切换、per-surface 条件主题）。
+    private(set) var terminalBackground: NSColor
     private(set) var terminalForeground: NSColor
 
     init() {
