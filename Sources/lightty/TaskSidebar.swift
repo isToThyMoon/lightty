@@ -1,6 +1,25 @@
 import AppKit
 import LighttyCore
 
+extension NSPasteboard.PasteboardType {
+    /// 任务列表行内重排（进程内私有；载荷 = 源行号）。
+    static let lighttyTaskRow = NSPasteboard.PasteboardType("com.lightty.task-row")
+}
+
+/// 任务列表的手动序（拖拽排序的持久层）。存 UserDefaults 的文件名列表，
+/// 不写进任务文件：frontmatter 保持纯任务语义，一次拖动也不该重写一串 md。
+/// 空列表 = 用户从未手动排过 → 列表维持派生序（活跃置顶 + 最近更新）；
+/// 拖过一次即整列入序、手动序接管。改名后文件名变化的任务视同新任务浮顶。
+enum TaskManualOrder {
+    private static let key = "lightty.taskOrder"
+    static func load() -> [String] {
+        UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+    static func save(_ fileNames: [String]) {
+        UserDefaults.standard.set(fileNames, forKey: key)
+    }
+}
+
 /// 任务浮层卡片（Ulysses 式悬浮面板）：标题栏侧栏按钮控制开合。
 /// 与工作区侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
 /// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
@@ -129,12 +148,31 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 }
                 return Entry(fileURL: entry.fileURL, task: entry.task, running: bound)
             }
-            .sorted {
-                // 活跃置顶，其余按最近更新
+            .sorted(by: entryOrdering())
+        applyFilter("")
+    }
+
+    /// 排序谓词。没有手动序时维持派生序：活跃置顶、其余按最近更新。
+    /// 有手动序后它整个接管——状态变化不再重排（刚排好的列表不能因为
+    /// 某个任务被激活又跳回顶上），未入序的新任务按最近更新浮在顶部。
+    private func entryOrdering() -> (Entry, Entry) -> Bool {
+        let rank = Dictionary(
+            uniqueKeysWithValues: TaskManualOrder.load().enumerated()
+                .map { ($1, $0) })
+        if rank.isEmpty {
+            return {
                 if ($0.running != nil) != ($1.running != nil) { return $0.running != nil }
                 return $0.task.updated > $1.task.updated
             }
-        applyFilter("")
+        }
+        return {
+            switch (rank[$0.fileURL.lastPathComponent], rank[$1.fileURL.lastPathComponent]) {
+            case let (a?, b?): return a < b
+            case (nil, nil): return $0.task.updated > $1.task.updated
+            case (nil, _): return true
+            case (_, nil): return false
+            }
+        }
     }
 
     private func applyFilter(_ query: String) {
@@ -186,6 +224,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.target = self
         tableView.action = #selector(rowClicked)
         tableView.doubleAction = #selector(jumpOrRestore)
+        tableView.registerForDraggedTypes([.lighttyTaskRow])
+        tableView.setDraggingSourceOperationMask(.move, forLocal: true)
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -255,6 +295,43 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
+
+    // MARK: - 拖拽排序
+
+    func tableView(
+        _ tableView: NSTableView, pasteboardWriterForRow row: Int
+    ) -> NSPasteboardWriting? {
+        // 过滤/搜索态的展示序 ≠ 真实序，此时排序无意义也不可保存
+        guard filtered.count == allEntries.count else { return nil }
+        let item = NSPasteboardItem()
+        item.setString(String(row), forType: .lighttyTaskRow)
+        return item
+    }
+
+    func tableView(
+        _ tableView: NSTableView, validateDrop info: NSDraggingInfo,
+        proposedRow row: Int, proposedDropOperation operation: NSTableView.DropOperation
+    ) -> NSDragOperation {
+        guard info.draggingSource as? NSTableView === tableView else { return [] }
+        // 只在行间插入；落在行上时改判到该行上缘
+        if operation == .on { tableView.setDropRow(row, dropOperation: .above) }
+        return .move
+    }
+
+    func tableView(
+        _ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
+        row: Int, dropOperation: NSTableView.DropOperation
+    ) -> Bool {
+        guard let raw = info.draggingPasteboard.string(forType: .lighttyTaskRow),
+              let source = Int(raw), filtered.indices.contains(source) else { return false }
+        var names = filtered.map { $0.fileURL.lastPathComponent }
+        let moved = names.remove(at: source)
+        names.insert(moved, at: row > source ? row - 1 : row)
+        // 一次拖动即把当前整列固化为手动序（此后派生重排全部退位）
+        TaskManualOrder.save(names)
+        reload()
+        return true
+    }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         ShellTableRowView()
