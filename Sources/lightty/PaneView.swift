@@ -428,14 +428,16 @@ final class PaneView: NSView {
     }
 
     /// 聚光灯的「暗」侧：盖一层终端背景色纱再淡出。用背景色而非黑色，
-    /// 是把内容往各自底色方向压对比，明暗主题都成立（黑纱在浅色主题发脏）。
+    /// 是把内容往各自底色方向压对比，明暗主题都成立（黑纱在浅色主题发脏）；
+    /// 取本 pane 的实况背景（header 跟踪的 per-surface 值）而非全局 config，
+    /// 明暗切换后、各 pane 主题不同时都各自取对。
     func dimForSpotlight() {
         spotlightVeil?.removeFromSuperview()
         let veil = ShellPassthroughView(frame: bounds)
         veil.autoresizingMask = [.width, .height]
         veil.wantsLayer = true
-        veil.layer?.backgroundColor = GhosttyRuntime.shared.configValues
-            .backgroundColor.withAlphaComponent(0.4).cgColor
+        veil.layer?.backgroundColor = header.terminalBackground
+            .withAlphaComponent(0.6).cgColor
         addSubview(veil, positioned: .above, relativeTo: nil)
         spotlightVeil = veil
         // 纱先停住给视线定位，再收走；直接一条 ease 曲线会淡得太早，
