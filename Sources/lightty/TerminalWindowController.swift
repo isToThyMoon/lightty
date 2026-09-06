@@ -43,6 +43,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private var workspaceSidebarWidth = WorkspaceSidebarWidthPreference.width()
     private var workspaceSidebarResizeActive = false
     private var taskPanel: TaskSidebar?
+    /// 全部工作区关闭后的空态视图（task 为核心，不退出软件）。
+    private var emptyStateView: EmptyWorkspaceView?
     private var taskPanelLeadingConstraint: NSLayoutConstraint?
     private var edgeExpandButton: EdgeToggleControl?
     private var edgeExpandStrip: EdgeRevealStrip?
@@ -314,6 +316,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// core `new_tab`：当前窗口追加一个 tab（工作区 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
+        emptyStateView?.isHidden = true  // 有工作区了，收起空态占位
         if installPane { install(pane: initialPane) }
         let tab = TerminalTab()
         Self.workspaceCounter += 1
@@ -353,12 +356,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 关一个 tab：释放其全部 pane（surface 随引用释放）。最后一个 tab 关窗口。
     func closeTab(at index: Int) {
         guard tabs.indices.contains(index) else { return }
-        guard tabs.count > 1 else {
-            window?.close()
-            return
-        }
         let tab = tabs.remove(at: index)
         tab.container.removeFromSuperview()
+        // 关掉最后一个工作区不退出软件：task 是核心，回到空态等待再次派发。
+        if tabs.isEmpty {
+            activeTabIndex = 0
+            enterEmptyState()
+            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+            return
+        }
         if activeTabIndex >= tabs.count {
             activeTabIndex = tabs.count - 1
         } else if index < activeTabIndex {
@@ -367,6 +373,32 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         selectTab(at: activeTabIndex)
         // tab 里可能有绑定任务的 pane，侧栏活跃态需要跟着退
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+    }
+
+    /// 进入“无工作区”空态：终端区放引导占位，并把任务卡片带出来（task 为核心）。
+    private func enterEmptyState() {
+        let view: EmptyWorkspaceView
+        if let existing = emptyStateView {
+            view = existing
+        } else {
+            view = EmptyWorkspaceView()
+            view.onNewWorkspace = { [weak self] in self?.addTab(initialPane: PaneView()) }
+            view.translatesAutoresizingMaskIntoConstraints = false
+            contentHost.addSubview(view, positioned: .below, relativeTo: nil)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: contentHost.topAnchor),
+                view.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            ])
+            emptyStateView = view
+        }
+        view.isHidden = false
+        lastFocusedPane = nil
+        updateWindowTitle(for: nil)
+        refreshTabStrip()
+        workspaceSidebar?.reload()
+        if taskPanel == nil { openTaskPanel() }
     }
 
     enum CloseTabMode { case this, other, right }
@@ -615,6 +647,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 恢复流程「当前 tab 新 pane」：把外部构造好的 pane（已绑定任务）
     /// 插到活跃 pane 右侧；空 tab 时直接作树根。
     func addPaneToActiveTab(_ pane: PaneView) {
+        // 空态下“开到当前工作区”无处可去：直接新建一个工作区承载它。
+        guard activeTab != nil else { addTab(initialPane: pane); return }
         restoreSplitZoomIfNeeded()
         install(pane: pane)
         if let active = activePane {
