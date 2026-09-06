@@ -1184,9 +1184,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         return fromTop > 0 ? fromTop : 26
     }
 
-    /// 标签页侧栏（docked）的顶部避让：红绿灯行之下。
+    /// 标签页侧栏（docked）的顶部避让：表头行中线对齐 task 卡片的「任务」小节
+    /// 标签（卡片顶 6 + 头部行 28 高居中于红绿灯行 + 标签上距 14 + 标签半高 7），
+    /// 两栏并排时是一排表头；不与红绿灯同行，卡片收起后侧栏贴窗左缘也不会撞三键。
     private func tabSidebarTopInset(in window: NSWindow) -> CGFloat {
-        trafficLightRowCenterFromTop(in: window) + 12
+        trafficLightRowCenterFromTop(in: window) + 21
     }
 
     /// 红绿灯所在的私有标题栏容器（themeFrame 直属子视图），侧栏 chrome 必须垫在
