@@ -1,11 +1,6 @@
 import AppKit
 import LighttyCore
 
-extension NSPasteboard.PasteboardType {
-    /// 任务列表行内重排（进程内私有；载荷 = 源行号）。
-    static let lighttyTaskRow = NSPasteboard.PasteboardType("com.lightty.task-row")
-}
-
 /// 任务列表的手动序（拖拽排序的持久层）。存 UserDefaults 的文件名列表，
 /// 不写进任务文件：frontmatter 保持纯任务语义，一次拖动也不该重写一串 md。
 /// 空列表 = 用户从未手动排过 → 列表维持派生序（活跃置顶 + 最近更新）；
@@ -42,7 +37,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let searchButton = ShellIconButton(
         symbol: "magnifyingglass", accessibilityLabel: L("Search tasks"),
         target: nil, action: nil)
-    private let tableView = NSTableView()
+    private let tableView = ReorderingTableView()
     private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
     private let newTaskButton = ShellIconButton(
         symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
@@ -221,13 +216,26 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
-        tableView.target = self
-        tableView.action = #selector(rowClicked)
-        tableView.doubleAction = #selector(jumpOrRestore)
-        tableView.registerForDraggedTypes([.lighttyTaskRow])
-        tableView.setDraggingSourceOperationMask(.move, forLocal: true)
-        // 让位式反馈（iOS 重排手感）：行分开腾出落点，比插入线更跟手
-        tableView.draggingDestinationFeedbackStyle = .gap
+        // 单击/双击与拖拽重排都走 ReorderingTableView 的自建循环（跟手、无脱手图）。
+        tableView.onRowClick = { [weak self] row in
+            guard let self, self.filtered.indices.contains(row) else { return }
+            self.tableView.selectRowIndexes([row], byExtendingSelection: false)
+            self.presentTaskPopover(for: self.filtered[row], at: row)
+        }
+        tableView.onRowDoubleClick = { [weak self] row in
+            guard let self, self.filtered.indices.contains(row) else { return }
+            self.tableView.selectRowIndexes([row], byExtendingSelection: false)
+            self.jumpOrRestoreSelected()
+        }
+        // 过滤/搜索态展示序 ≠ 真实序，禁止重排
+        tableView.canReorder = { [weak self] in
+            guard let self else { return false }
+            return self.filtered.count == self.allEntries.count
+        }
+        tableView.previewMove = { [weak self] from, to in
+            self?.previewReorderMove(from: from, to: to)
+        }
+        tableView.commitReorder = { [weak self] _ in self?.commitReorder() }
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -298,49 +306,21 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
-    // MARK: - 拖拽排序
+    // MARK: - 拖拽排序（手动跟手循环，机件见 ReorderDrag / ReorderingTableView）
 
-    func tableView(
-        _ tableView: NSTableView, pasteboardWriterForRow row: Int
-    ) -> NSPasteboardWriting? {
-        // 过滤/搜索态的展示序 ≠ 真实序，此时排序无意义也不可保存
-        guard filtered.count == allEntries.count else { return nil }
-        let item = NSPasteboardItem()
-        item.setString(String(row), forType: .lighttyTaskRow)
-        return item
-    }
-
-    func tableView(
-        _ tableView: NSTableView, validateDrop info: NSDraggingInfo,
-        proposedRow row: Int, proposedDropOperation operation: NSTableView.DropOperation
-    ) -> NSDragOperation {
-        guard info.draggingSource as? NSTableView === tableView else { return [] }
-        // 只在行间插入；落在行上时改判到该行上缘
-        if operation == .on { tableView.setDropRow(row, dropOperation: .above) }
-        return .move
-    }
-
-    func tableView(
-        _ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
-        row: Int, dropOperation: NSTableView.DropOperation
-    ) -> Bool {
-        guard let raw = info.draggingPasteboard.string(forType: .lighttyTaskRow),
-              let source = Int(raw), filtered.indices.contains(source) else { return false }
-        let dest = row > source ? row - 1 : row
-        guard dest != source else { return true }
-
-        // 原地移动，不走 reload：全量重建会拆掉 AppKit 的落位动画，
-        // 松手瞬间闪一下——就是「不跟手」的观感来源。
-        let entry = filtered.remove(at: source)
-        filtered.insert(entry, at: dest)
+    /// 逐帧让位：把第 from 行落到第 to 行，模型与视图同步（视图移动由表自身做）。
+    private func previewReorderMove(from: Int, to: Int) {
+        guard filtered.indices.contains(from) else { return }
+        let entry = filtered.remove(at: from)
+        filtered.insert(entry, at: min(max(to, 0), filtered.count))
         allEntries = filtered  // 拖拽仅在未过滤态开放，两者此刻同序
-        tableView.beginUpdates()
-        tableView.moveRow(at: source, to: dest)
-        tableView.endUpdates()
+    }
 
+    /// 释放落定：模型已随 preview 同步，这里只固化手动序并重建行（复原隐藏 + 干净态）。
+    private func commitReorder() {
         // 一次拖动即把当前整列固化为手动序（此后派生重排全部退位）
         TaskManualOrder.save(filtered.map { $0.fileURL.lastPathComponent })
-        return true
+        tableView.reloadData()
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
@@ -521,14 +501,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// 单击：统一弹任务气泡（已打开的列跳转行 + 打开到三目的地），侧栏保持展开。
-    @objc private func rowClicked() {
-        let row = tableView.clickedRow
-        guard row >= 0, row < filtered.count else { return }
-        presentTaskPopover(for: filtered[row], at: row)
-    }
 
     /// 双击 / Enter 快捷路径：运行中直接跳最近绑定 pane；休眠同单击弹气泡。
-    @objc private func jumpOrRestore() {
+    /// 双击/Enter：运行中直接跳最近绑定 pane；休眠弹恢复气泡。
+    private func jumpOrRestoreSelected() {
         guard let entry = selectedEntry else { return }
         if let running = entry.running {
             running.controller.window?.makeKeyAndOrderFront(nil)
