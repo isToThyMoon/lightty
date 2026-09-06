@@ -163,7 +163,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let window else { return }
             self.installTitlebarAccessory(on: window)
             self.updateWindowTitle(for: self.activePane)
-            self.openWorkspaceSidebar(animated: false)
+            // 默认布局：task 侧栏（核心）打开，工作区侧栏收起。
+            self.openTaskPanel()
             self.updateEdgeExpandButton()
         }
     }

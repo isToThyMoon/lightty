@@ -118,7 +118,7 @@ private final class RestorePopoverController: NSViewController {
         rows.append(destinations)
         sectionLabels.append(destinations)
         let paneButton = RestoreRowButton(
-            L("Split in current workspace"), target: self,
+            L("New terminal"), target: self,
             action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
             L("New workspace"), target: self,
