@@ -397,6 +397,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
                     .running[safe: index] else { return }
                 target.controller.window?.makeKeyAndOrderFront(nil)
                 target.controller.reveal(pane: target.pane)
+                target.pane.flashReveal()
                 self.onDismiss?()
             }
         }
@@ -435,6 +436,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         if let target = result.running.first {
             target.controller.window?.makeKeyAndOrderFront(nil)
             target.controller.reveal(pane: target.pane)
+            target.pane.flashReveal()
             onDismiss?()
         } else {
             open { controller, pane in controller.addPaneToActiveTab(pane) }

@@ -446,6 +446,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         if let running = entry.running {
             running.controller.window?.makeKeyAndOrderFront(nil)
             running.controller.reveal(pane: running.pane)
+            running.pane.flashReveal()
         } else {
             presentTaskPopover(for: entry, at: tableView.selectedRow)
         }
