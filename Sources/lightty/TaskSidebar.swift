@@ -226,6 +226,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.doubleAction = #selector(jumpOrRestore)
         tableView.registerForDraggedTypes([.lighttyTaskRow])
         tableView.setDraggingSourceOperationMask(.move, forLocal: true)
+        // 让位式反馈（iOS 重排手感）：行分开腾出落点，比插入线更跟手
+        tableView.draggingDestinationFeedbackStyle = .gap
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -324,12 +326,20 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     ) -> Bool {
         guard let raw = info.draggingPasteboard.string(forType: .lighttyTaskRow),
               let source = Int(raw), filtered.indices.contains(source) else { return false }
-        var names = filtered.map { $0.fileURL.lastPathComponent }
-        let moved = names.remove(at: source)
-        names.insert(moved, at: row > source ? row - 1 : row)
+        let dest = row > source ? row - 1 : row
+        guard dest != source else { return true }
+
+        // 原地移动，不走 reload：全量重建会拆掉 AppKit 的落位动画，
+        // 松手瞬间闪一下——就是「不跟手」的观感来源。
+        let entry = filtered.remove(at: source)
+        filtered.insert(entry, at: dest)
+        allEntries = filtered  // 拖拽仅在未过滤态开放，两者此刻同序
+        tableView.beginUpdates()
+        tableView.moveRow(at: source, to: dest)
+        tableView.endUpdates()
+
         // 一次拖动即把当前整列固化为手动序（此后派生重排全部退位）
-        TaskManualOrder.save(names)
-        reload()
+        TaskManualOrder.save(filtered.map { $0.fileURL.lastPathComponent })
         return true
     }
 
