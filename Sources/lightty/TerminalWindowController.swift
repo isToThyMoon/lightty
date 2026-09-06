@@ -464,6 +464,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         pane.focusTerminal()
     }
 
+    /// 跳转落点提示的聚光灯：目标 pane 不动，同工作区其余 pane 短暂压暗。
+    /// 单 pane 工作区自然无事发生——本来也不存在「落在哪」的疑问。
+    func spotlight(on pane: PaneView) {
+        guard let hostTab = tab(hosting: pane) else { return }
+        for other in panes(in: hostTab) where other !== pane {
+            other.dimForSpotlight()
+        }
+    }
+
     /// 拖拽移走 pane 后清理空 tab；tab 清空即关（最后一个 tab 关窗口）。
     func pruneEmptyTabs() {
         for (i, tab) in tabs.enumerated().reversed() where panes(in: tab).isEmpty {
