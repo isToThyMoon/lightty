@@ -527,8 +527,10 @@ enum WorkspacePaneStatusPresentation {
     }
 }
 
-/// pane 行（叶子级）：单行 = 圆点 + pane 名 [· 任务名] + 行尾轻量状态文字。
-/// cwd 不再占第二行（同项目多开时六行同一路径是纯噪音），挪进整行 tooltip。
+/// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 行尾轻量状态文字；
+/// 第二行 = 绑定任务 + cwd（路径从头截断，优先保留末级目录）。
+/// 曾试过砍掉第二行、cwd 挪 tooltip：悬浮气泡的观感和延迟都不如常驻
+/// 次要色一行，用户点名要回来。
 /// 当前 pane 用强调色淡底——全侧栏唯一的填充高亮；hover 时行尾出 ✕
 /// （与工作区行的关闭位统一；内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
@@ -549,6 +551,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
     private let bound: Bool
     private let taskName: String?
     private let taskLabel = NSTextField(labelWithString: "")
+    private let directoryLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var terminalWorkingDirectory: String?
@@ -601,18 +604,26 @@ private final class PaneRowView: NSView, NSDraggingSource {
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.toolTip = name
-        // 空间不足时任务名先让（730 < 740），pane 名尽量保全
-        nameLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(740), for: .horizontal)
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        taskLabel.font = .systemFont(ofSize: 11)
+        taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.toolTip = taskName
-        taskLabel.stringValue = taskName.map { "· \($0)" } ?? ""
-        taskLabel.isHidden = taskName == nil
         taskLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(730), for: .horizontal)
+            NSLayoutConstraint.Priority(740), for: .horizontal)
+
+        directoryLabel.font = .systemFont(ofSize: 10)
+        directoryLabel.textColor = ShellStyle.tertiaryText
+        directoryLabel.lineBreakMode = .byTruncatingHead
+        directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        directoryLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(750), for: .horizontal)
+
+        let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
+        secondaryStack.orientation = .horizontal
+        secondaryStack.alignment = .firstBaseline
+        secondaryStack.spacing = 4
 
         statusLabel.isHidden = true
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
@@ -621,19 +632,19 @@ private final class PaneRowView: NSView, NSDraggingSource {
         statusLabel.setContentHuggingPriority(.required, for: .horizontal)
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        for v in [dotView, closeButton, nameLabel, taskLabel, statusLabel] {
+        for v in [dotView, closeButton, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
+            heightAnchor.constraint(equalToConstant: 42),
 
-            // 嵌进工作区标题的文字轴之下再退一步，属地关系靠缩进本身表达
+            // 嵌进工作区标题的文字轴之下再退一步，属地关系靠缩进本身表达；
+            // 圆点跟第一行对齐，不悬在两行中间。
             dotView.leadingAnchor.constraint(
                 equalTo: leadingAnchor, constant: indented ? 26 : 10),
             dotView.widthAnchor.constraint(equalToConstant: 6),
             dotView.heightAnchor.constraint(equalToConstant: 6),
-            dotView.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -641,22 +652,28 @@ private final class PaneRowView: NSView, NSDraggingSource {
             closeButton.heightAnchor.constraint(equalToConstant: 18),
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
-            taskLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 4),
-            taskLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-
-            // 状态固定在行尾且保持完整；名字/任务吃掉中间弹性空间，过长先截断。
+            // 状态固定在行尾且保持完整；pane 名吃掉中间弹性空间，过长时先截断。
             // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
-            taskLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: statusLabel.leadingAnchor, constant: -6),
+            statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
             statusLabel.trailingAnchor.constraint(
                 equalTo: closeButton.leadingAnchor, constant: -4),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
+
+            // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
+            // 路径也能多拿到 13pt 的有效宽度。
+            secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
+            secondaryStack.trailingAnchor.constraint(
+                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+            secondaryStack.bottomAnchor.constraint(
+                lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
         applyDotColor()
         applyStatusLabel()
-        applyTooltip()
+        applyMetadataLine()
         applyFill()
     }
 
@@ -673,7 +690,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
     func applyWorkingDirectory(_ directory: String?) {
         guard terminalWorkingDirectory != directory else { return }
         terminalWorkingDirectory = directory
-        applyTooltip()
+        applyMetadataLine()
     }
 
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
@@ -698,7 +715,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
             applyStatusLabel()
         }
         if previousCWD != status?.cwd {
-            applyTooltip()
+            applyMetadataLine()
         }
     }
 
@@ -721,11 +738,20 @@ private final class PaneRowView: NSView, NSDraggingSource {
         }
     }
 
-    /// cwd（OSC PWD，退而 status.cwd）只进整行 tooltip：同项目多开时它对每行
-    /// 都一样，占一行版面是纯噪音，但按行悬停查询仍然要答得上来。
-    private func applyTooltip() {
+    /// 第二行同时保留任务映射和 cwd。空间不足时任务名从尾部截断、cwd 从头部
+    /// 截断，因此最有辨识度的任务前缀和路径末级目录都尽量留下。
+    private func applyMetadataLine() {
         let rawDirectory = terminalWorkingDirectory ?? status?.cwd
-        toolTip = rawDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
+        let displayDirectory = rawDirectory.map {
+            ($0 as NSString).abbreviatingWithTildeInPath
+        }
+        taskLabel.isHidden = taskName == nil
+        taskLabel.stringValue = taskName.map {
+            displayDirectory == nil ? $0 : "\($0) ·"
+        } ?? ""
+        directoryLabel.isHidden = displayDirectory == nil
+        directoryLabel.stringValue = displayDirectory ?? ""
+        directoryLabel.toolTip = rawDirectory
     }
 
     private func applyDotColor() {
