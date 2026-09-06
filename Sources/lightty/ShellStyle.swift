@@ -181,6 +181,35 @@ final class HoverCursor: NSResponder {
     }
 }
 
+/// hover 自愈哨兵：视图随侧栏滑动从静止指针下经过时，AppKit 会连发 mouseEntered
+/// 却不补 mouseExited（之后指针真正移走也不再发），hover 底就永久卡住。
+/// hover 期间低频自查指针是否仍在视图内，不在就宣告失去 hover。只在 hover 时跑。
+final class HoverSentinel {
+    private var timer: Timer?
+
+    func watch(_ view: NSView, onLost: @escaping () -> Void) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) {
+            [weak view] timer in
+            guard let view, let window = view.window else {
+                timer.invalidate()
+                onLost()
+                return
+            }
+            let local = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if !view.bounds.contains(local) {
+                timer.invalidate()
+                onLost()
+            }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
 /// Codex 风格的无边框图标按钮：默认安静，hover/按下时才出现圆角底。
 /// 命中区是完整 bounds（28pt 模数），但底色只画在字形周围的内嵌块上
 /// （四边各缩 fillInset）：整块铺灰会让小字形显得被一大片灰底吞掉。
@@ -188,6 +217,7 @@ final class ShellIconButton: NSButton {
     private static let fillInset: CGFloat = 3
     private let fillLayer = CALayer()
     private var tracking: NSTrackingArea?
+    private let sentinel = HoverSentinel()
     private var isHovered = false { didSet { updateAppearance() } }
 
     var isActive = false { didSet { updateAppearance() } }
@@ -249,13 +279,19 @@ final class ShellIconButton: NSButton {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        onHoverChange?(true)
+        setHovered(true)
+        sentinel.watch(self) { [weak self] in self?.setHovered(false) }
     }
 
     override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        onHoverChange?(false)
+        sentinel.stop()
+        setHovered(false)
+    }
+
+    private func setHovered(_ hovered: Bool) {
+        guard isHovered != hovered else { return }
+        isHovered = hovered
+        onHoverChange?(hovered)
     }
 
     override func mouseDown(with event: NSEvent) {

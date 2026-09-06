@@ -110,6 +110,7 @@ final class EdgeToggleControl: NSView {
     private let hoverTint = NSView()
     private let chevron = NSImageView()
     private var tracking: NSTrackingArea?
+    private let sentinel = HoverSentinel()
     private var hovered = false { didSet { applyLook() } }
     private var revealed = false
 
@@ -219,9 +220,16 @@ final class EdgeToggleControl: NSView {
     override func mouseEntered(with event: NSEvent) {
         hovered = true
         reveal(true)
+        // 吸边钮随让位滑动，同样会漏 mouseExited（见 HoverSentinel）
+        sentinel.watch(self) { [weak self] in
+            guard let self, self.hovered else { return }
+            self.hovered = false
+            self.reveal(self.revealed)
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
+        sentinel.stop()
         hovered = false
         reveal(revealed)
     }

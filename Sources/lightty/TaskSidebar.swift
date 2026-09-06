@@ -31,7 +31,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private let listPage = NSView()
     // 头部行 = 红绿灯行（Notes 同式）：卡片从窗口顶边起，三键落在头部行左侧，
-    // 右侧依次 搜索 / 建档 / 工作区侧栏开关 三枚图标按钮，与三键同一水平线。
+    // 右侧依次 搜索 / 建档 / 收起卡片 三枚图标按钮，与三键同一水平线。
     // 搜索走全文浮层（⇧⇧ 或点按钮），侧栏不再有常驻输入框。
     // 头部行之下是功能性小节标签「Tasks」（Finder「个人收藏」的角色，非品牌）。
     private let headerCenterY: CGFloat
@@ -39,8 +39,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let searchButton = ShellIconButton(
         symbol: "magnifyingglass", accessibilityLabel: L("Search tasks"),
         target: nil, action: nil)
-    private let workspaceToggleButton = ShellIconButton(
-        symbol: "sidebar.left", accessibilityLabel: L("Workspace Sidebar"),
+    private let collapseButton = ShellIconButton(
+        symbol: "sidebar.left", accessibilityLabel: L("Task Sidebar"),
         target: nil, action: nil)
     private let tableView = ReorderingTableView()
     private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
@@ -50,23 +50,14 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private var filtered: [Entry] = []
 
 
+    /// 收起卡片：头部行 sidebar.left 按钮（与标题栏那枚同语义，卡片开着时它接管）
+    /// 与 Esc 都走这里。
     var onRequestClose: (() -> Void)?
-    /// 头部行的工作区侧栏开关（与标题栏那枚同语义，卡片开着时它接管）。
-    var onToggleWorkspaceSidebar: (() -> Void)?
-    var workspaceSidebarActive = false {
-        didSet { workspaceToggleButton.isActive = workspaceSidebarActive }
-    }
-
-    /// 卡片右缘贴边吸附的关闭钮（与窗口左缘展开钮同形镜像）。不作为子视图：
-    /// 由 controller 挂到 themeFrame——命中区向右溢出卡片 bounds，做子视图会被裁断，
-    /// 且卡片 layer 有圆角遮罩。
-    let closeControl = EdgeToggleControl(pointing: .left)
 
     /// - Parameter headerCenterY: 头部行中线距卡片顶边的距离（= 红绿灯行中线）。
     init(headerCenterY: CGFloat = 16) {
         self.headerCenterY = headerCenterY
         super.init(frame: .zero)
-        closeControl.onTap = { [weak self] in self?.onRequestClose?() }
 
         clipsToBounds = false
         wantsLayer = true
@@ -219,8 +210,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         searchButton.target = self
         searchButton.action = #selector(openSearchPalette)
 
-        workspaceToggleButton.target = self
-        workspaceToggleButton.action = #selector(toggleWorkspaceSidebar)
+        collapseButton.target = self
+        collapseButton.action = #selector(collapse)
 
         let column = NSTableColumn(identifier: .init("task"))
         tableView.addTableColumn(column)
@@ -264,24 +255,24 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
 
-        for v in [titleLabel, searchButton, newTaskButton, workspaceToggleButton, scroll, emptyLabel] {
+        for v in [titleLabel, searchButton, newTaskButton, collapseButton, scroll, emptyLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listPage.addSubview(v)
         }
 
         NSLayoutConstraint.activate([
-            // 头部行：中线对齐红绿灯行；右起 工作区开关 / 建档 / 搜索，
+            // 头部行：中线对齐红绿灯行；右起 收起卡片 / 建档 / 搜索，
             // 横向统一 10 的边缘线。
-            workspaceToggleButton.centerYAnchor.constraint(
+            collapseButton.centerYAnchor.constraint(
                 equalTo: listPage.topAnchor, constant: headerCenterY),
-            workspaceToggleButton.trailingAnchor.constraint(
+            collapseButton.trailingAnchor.constraint(
                 equalTo: listPage.trailingAnchor, constant: -10),
-            workspaceToggleButton.widthAnchor.constraint(equalToConstant: 28),
-            workspaceToggleButton.heightAnchor.constraint(equalToConstant: 28),
+            collapseButton.widthAnchor.constraint(equalToConstant: 28),
+            collapseButton.heightAnchor.constraint(equalToConstant: 28),
 
             newTaskButton.trailingAnchor.constraint(
-                equalTo: workspaceToggleButton.leadingAnchor, constant: -4),
-            newTaskButton.centerYAnchor.constraint(equalTo: workspaceToggleButton.centerYAnchor),
+                equalTo: collapseButton.leadingAnchor, constant: -4),
+            newTaskButton.centerYAnchor.constraint(equalTo: collapseButton.centerYAnchor),
             newTaskButton.widthAnchor.constraint(equalToConstant: 28),
             newTaskButton.heightAnchor.constraint(equalToConstant: 28),
 
@@ -305,8 +296,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ])
     }
 
-    @objc private func toggleWorkspaceSidebar() {
-        onToggleWorkspaceSidebar?()
+    @objc private func collapse() {
+        onRequestClose?()
     }
 
     /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
