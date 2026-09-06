@@ -3,8 +3,14 @@ import LighttyCore
 
 /// 双栏侧栏的左栏：工作区 › pane 两级树（cmux 形态的窗口活地图）。
 /// spec: docs/specs/double-sidebar.md。工作区可折叠，折叠状态仅当前侧栏会话内保留。
-/// 工作区行：单击切换、点 disclosure 折叠、双击改名、hover ⋯ 菜单；
-/// pane 行：双行展示任务/cwd，单击跨工作区聚焦并保持激活底色，hover 出现 ✕。
+///
+/// 层级表达（Safari 侧栏标签页组同款）：工作区行 = 容器图标 + semibold 标题 +
+/// pane 计数，活跃时图标/标题染强调色但**不给填充**；pane 行 = 缩进的圆点 +
+/// 常规字重单行。全侧栏唯一的填充高亮是当前 pane（强调色淡底）——当前工作区
+/// 必然包含当前 pane，两级选中不需要两块底色。
+///
+/// 工作区行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
+/// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
 final class WorkspaceColumnView: NSView {
     private let sectionLabel = NSTextField(labelWithString: L("Workspaces"))
@@ -184,6 +190,7 @@ final class WorkspaceColumnView: NSView {
             let isCollapsed = collapsedWorkspaceIDs.contains(entry.id)
             let row = WorkspaceRowView(
                 title: entry.title,
+                count: entry.panes.count,
                 isActive: entry.isActive,
                 isCollapsed: isCollapsed)
             row.onSelect = { [weak self] in
@@ -220,6 +227,10 @@ final class WorkspaceColumnView: NSView {
                 ])
             }
             row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
+            // 组与组之间加一档呼吸：紧凑单行 pane 后，块的边界靠这 8pt 成立
+            if let last = rowsStack.arrangedSubviews.last {
+                rowsStack.setCustomSpacing(8, after: last)
+            }
             add(row)
 
             guard !isCollapsed else { continue }
@@ -286,6 +297,8 @@ private final class ColumnFlippedView: NSView {
 /// 工作区行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
 /// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
 /// 关闭不在菜单里重复出现。
+///
+/// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
 private final class WorkspaceRowView: NSView {
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
@@ -296,20 +309,26 @@ private final class WorkspaceRowView: NSView {
     var onPaneDrop: ((UUID) -> Bool)?
 
     private let isActive: Bool
+    private let isCollapsed: Bool
     private let disclosureButton = NSButton()
+    private let countLabel = NSTextField(labelWithString: "")
     private let menuButton = NSButton()
     private let closeButton = NSButton()
     private var tracking: NSTrackingArea?
     private var hovered = false {
         didSet {
             applyFill()
+            applyGlyph()
             menuButton.isHidden = !hovered
             closeButton.isHidden = !hovered
+            // 计数与 ⋯/✕ 共用行尾，hover 时让位
+            countLabel.isHidden = hovered
         }
     }
 
-    init(title: String, isActive: Bool, isCollapsed: Bool) {
+    init(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {
         self.isActive = isActive
+        self.isCollapsed = isCollapsed
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
@@ -317,22 +336,22 @@ private final class WorkspaceRowView: NSView {
         HoverCursor.installPointingHand(on: self)
 
         let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 12, weight: isActive ? .semibold : .medium)
-        label.textColor = ShellStyle.primaryText
+        label.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        label.textColor = isActive ? .controlAccentColor : ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
 
-        let disclosureTitle = isCollapsed ? L("Expand workspace") : L("Collapse workspace")
-        disclosureButton.image = NSImage(
-            systemSymbolName: isCollapsed ? "chevron.right" : "chevron.down",
-            accessibilityDescription: disclosureTitle)?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
         disclosureButton.isBordered = false
         disclosureButton.imagePosition = .imageOnly
         disclosureButton.focusRingType = .none
-        disclosureButton.contentTintColor = ShellStyle.secondaryText
         disclosureButton.target = self
         disclosureButton.action = #selector(toggleCollapse)
-        disclosureButton.toolTip = disclosureTitle
+        disclosureButton.toolTip =
+            isCollapsed ? L("Expand workspace") : L("Collapse workspace")
+        applyGlyph()
+
+        countLabel.stringValue = "\(count)"
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        countLabel.textColor = ShellStyle.tertiaryText
 
         menuButton.image = NSImage(
             systemSymbolName: "ellipsis", accessibilityDescription: L("More actions"))?
@@ -357,7 +376,7 @@ private final class WorkspaceRowView: NSView {
         closeButton.action = #selector(closeTapped)
         closeButton.toolTip = L("Close workspace")
 
-        for v in [disclosureButton, label, menuButton, closeButton] {
+        for v in [disclosureButton, label, countLabel, menuButton, closeButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -367,10 +386,12 @@ private final class WorkspaceRowView: NSView {
             disclosureButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             disclosureButton.widthAnchor.constraint(equalToConstant: 18),
             disclosureButton.heightAnchor.constraint(equalToConstant: 22),
-            label.leadingAnchor.constraint(equalTo: disclosureButton.trailingAnchor, constant: 1),
+            label.leadingAnchor.constraint(equalTo: disclosureButton.trailingAnchor, constant: 3),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.trailingAnchor.constraint(
                 lessThanOrEqualTo: menuButton.leadingAnchor, constant: -6),
+            countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 20),
@@ -389,9 +410,29 @@ private final class WorkspaceRowView: NSView {
     @objc private func menuTapped() { onMenu?() }
     @objc private func closeTapped() { onClose?() }
 
+    /// Safari 标签页组同款：常态显示容器图标（与「新工作区」按钮同族的
+    /// rectangle 组合），hover 换成折叠 chevron——同一个 18pt 插槽，不吃行宽。
+    /// 折叠态在常态下不单独表达：pane 行消失 + 计数仍在，信息已经够了。
+    private func applyGlyph() {
+        if hovered {
+            disclosureButton.image = NSImage(
+                systemSymbolName: isCollapsed ? "chevron.right" : "chevron.down",
+                accessibilityDescription: disclosureButton.toolTip)?
+                .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+            disclosureButton.contentTintColor = ShellStyle.secondaryText
+        } else {
+            disclosureButton.image = NSImage(
+                systemSymbolName: "rectangle.on.rectangle",
+                accessibilityDescription: L("Workspace"))?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+            disclosureButton.contentTintColor =
+                isActive ? .controlAccentColor : ShellStyle.secondaryText
+        }
+    }
+
     private func applyFill() {
-        let fill: NSColor =
-            isActive ? ShellStyle.pressedFill : (hovered ? ShellStyle.selectionFill : .clear)
+        // 活跃工作区不给填充（标题/图标已染强调色）；填充只表达 hover
+        let fill: NSColor = hovered ? ShellStyle.selectionFill : .clear
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
 
@@ -486,10 +527,10 @@ enum WorkspacePaneStatusPresentation {
     }
 }
 
-/// pane 行（叶子级）：第一行 = 圆点 + pane 名 + 轻量状态文字；
-/// 第二行 = 绑定任务 + cwd（路径从头截断，优先保留末级目录）。
-/// 当前 pane 保持 hover 同款底色，hover 时行尾出 ✕（与工作区行的关闭位统一；
-/// 内核关闭同路）。
+/// pane 行（叶子级）：单行 = 圆点 + pane 名 [· 任务名] + 行尾轻量状态文字。
+/// cwd 不再占第二行（同项目多开时六行同一路径是纯噪音），挪进整行 tooltip。
+/// 当前 pane 用强调色淡底——全侧栏唯一的填充高亮；hover 时行尾出 ✕
+/// （与工作区行的关闭位统一；内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
 private final class PaneRowView: NSView, NSDraggingSource {
     var onSelect: (() -> Void)?
@@ -508,7 +549,6 @@ private final class PaneRowView: NSView, NSDraggingSource {
     private let bound: Bool
     private let taskName: String?
     private let taskLabel = NSTextField(labelWithString: "")
-    private let directoryLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private var status: PaneStatus?
     private var terminalWorkingDirectory: String?
@@ -557,30 +597,22 @@ private final class PaneRowView: NSView, NSDraggingSource {
         closeButton.toolTip = L("Close pane")
 
         let nameLabel = NSTextField(labelWithString: name)
-        nameLabel.font = .systemFont(ofSize: 11.5)
+        nameLabel.font = .systemFont(ofSize: 12)
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.toolTip = name
-        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // 空间不足时任务名先让（730 < 740），pane 名尽量保全
+        nameLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(740), for: .horizontal)
 
-        taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        taskLabel.font = .systemFont(ofSize: 11)
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.toolTip = taskName
+        taskLabel.stringValue = taskName.map { "· \($0)" } ?? ""
+        taskLabel.isHidden = taskName == nil
         taskLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(740), for: .horizontal)
-
-        directoryLabel.font = .systemFont(ofSize: 10)
-        directoryLabel.textColor = ShellStyle.tertiaryText
-        directoryLabel.lineBreakMode = .byTruncatingHead
-        directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        directoryLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(750), for: .horizontal)
-
-        let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
-        secondaryStack.orientation = .horizontal
-        secondaryStack.alignment = .firstBaseline
-        secondaryStack.spacing = 4
+            NSLayoutConstraint.Priority(730), for: .horizontal)
 
         statusLabel.isHidden = true
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
@@ -589,18 +621,19 @@ private final class PaneRowView: NSView, NSDraggingSource {
         statusLabel.setContentHuggingPriority(.required, for: .horizontal)
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        for v in [dotView, closeButton, nameLabel, statusLabel, secondaryStack] {
+        for v in [dotView, closeButton, nameLabel, taskLabel, statusLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 44),
+            heightAnchor.constraint(equalToConstant: 28),
 
-            // 嵌套态缩进一级；圆点跟第一行对齐，不悬在两行中间。
+            // 嵌进工作区标题的文字轴之下再退一步，属地关系靠缩进本身表达
             dotView.leadingAnchor.constraint(
-                equalTo: leadingAnchor, constant: indented ? 20 : 10),
+                equalTo: leadingAnchor, constant: indented ? 26 : 10),
             dotView.widthAnchor.constraint(equalToConstant: 6),
             dotView.heightAnchor.constraint(equalToConstant: 6),
+            dotView.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -608,28 +641,22 @@ private final class PaneRowView: NSView, NSDraggingSource {
             closeButton.heightAnchor.constraint(equalToConstant: 18),
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
-            nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            // 状态固定在行尾且保持完整；pane 名吃掉中间弹性空间，过长时先截断。
+            taskLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 4),
+            taskLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
+
+            // 状态固定在行尾且保持完整；名字/任务吃掉中间弹性空间，过长先截断。
             // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
-            statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
+            taskLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: statusLabel.leadingAnchor, constant: -6),
             statusLabel.trailingAnchor.constraint(
                 equalTo: closeButton.leadingAnchor, constant: -4),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-
-            // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
-            // 路径也能多拿到 13pt 的有效宽度。
-            secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
-            secondaryStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
-            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
-            secondaryStack.bottomAnchor.constraint(
-                lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
         applyDotColor()
         applyStatusLabel()
-        applyMetadataLine()
+        applyTooltip()
         applyFill()
     }
 
@@ -646,7 +673,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
     func applyWorkingDirectory(_ directory: String?) {
         guard terminalWorkingDirectory != directory else { return }
         terminalWorkingDirectory = directory
-        applyMetadataLine()
+        applyTooltip()
     }
 
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
@@ -671,7 +698,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
             applyStatusLabel()
         }
         if previousCWD != status?.cwd {
-            applyMetadataLine()
+            applyTooltip()
         }
     }
 
@@ -694,20 +721,11 @@ private final class PaneRowView: NSView, NSDraggingSource {
         }
     }
 
-    /// 第二行同时保留任务映射和 cwd。空间不足时任务名从尾部截断、cwd 从头部
-    /// 截断，因此最有辨识度的任务前缀和路径末级目录都尽量留下。
-    private func applyMetadataLine() {
+    /// cwd（OSC PWD，退而 status.cwd）只进整行 tooltip：同项目多开时它对每行
+    /// 都一样，占一行版面是纯噪音，但按行悬停查询仍然要答得上来。
+    private func applyTooltip() {
         let rawDirectory = terminalWorkingDirectory ?? status?.cwd
-        let displayDirectory = rawDirectory.map {
-            ($0 as NSString).abbreviatingWithTildeInPath
-        }
-        taskLabel.isHidden = taskName == nil
-        taskLabel.stringValue = taskName.map {
-            displayDirectory == nil ? $0 : "\($0) ·"
-        } ?? ""
-        directoryLabel.isHidden = displayDirectory == nil
-        directoryLabel.stringValue = displayDirectory ?? ""
-        directoryLabel.toolTip = rawDirectory
+        toolTip = rawDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
     }
 
     private func applyDotColor() {
@@ -717,10 +735,14 @@ private final class PaneRowView: NSView, NSDraggingSource {
     }
 
     private func applyFill() {
-        // hover 优先：指针反馈不能被状态底色吃掉。
+        // 当前 pane 的强调色淡底是全侧栏唯一的填充高亮，压过 hover 与状态底。
         // `done` 给一层极淡的同色底——侧栏是"哪个 pane 完事了"的扫读面，
         // 一个 6pt 的点在满屏行里不够抓眼，整行透一点色才扫得出来。
-        if hovered || isActive {
+        if isActive {
+            layer?.backgroundColor = NSColor.controlAccentColor
+                .shellResolvedCGColor(for: effectiveAppearance)
+                .copy(alpha: 0.16)
+        } else if hovered {
             layer?.backgroundColor = ShellStyle.controlFill
                 .shellResolvedCGColor(for: effectiveAppearance)
         } else if activity == .done {
