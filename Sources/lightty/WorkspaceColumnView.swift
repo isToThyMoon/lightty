@@ -163,9 +163,13 @@ final class WorkspaceColumnView: NSView {
     }
 
     @objc private func newWorkspace() {
-        // 保留原标题栏按钮的 Ghostty action 通路：新工作区继承当前 pane 的
-        // cwd/font/context，而不是在侧栏层直接造一个默认 PaneView。
-        controller?.activePane?.terminal.performBindingAction("new_tab")
+        // 有活跃 pane 时走 Ghostty action 通路：新工作区继承当前 pane 的
+        // cwd/font/context。空态（全部工作区已关）没有活跃 pane，直接建一个。
+        if let active = controller?.activePane {
+            active.terminal.performBindingAction("new_tab")
+        } else {
+            controller?.addTab(initialPane: PaneView())
+        }
     }
 
     @objc private func splitRight() {
