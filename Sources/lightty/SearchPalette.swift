@@ -92,7 +92,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         previewActions.alignment = .leading
         previewActions.spacing = 4
 
-        hintLabel.stringValue = L("↩ Jump / open in current workspace · esc Close")
+        hintLabel.stringValue = L("↩ Jump / new terminal · esc Close")
         hintLabel.font = .systemFont(ofSize: 10.5)
         hintLabel.textColor = ShellStyle.tertiaryText
 
@@ -401,7 +401,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
                 self.onDismiss?()
             }
         }
-        addAction(L("Split in current workspace")) { [weak self] in
+        addAction(L("New terminal")) { [weak self] in
             self?.open { controller, pane in controller.addPaneToActiveTab(pane) }
         }
         addAction(L("New workspace")) { [weak self] in
