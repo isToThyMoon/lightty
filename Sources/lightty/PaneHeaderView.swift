@@ -275,6 +275,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             taskHintLabel.stringValue = want
         }
         syncAttentionRingFrame()
+        // 胶囊宽度随文案变，手型矩形要跟着重算
+        window?.invalidateCursorRects(for: self)
     }
 
     private func applyCapsuleFill() {
@@ -282,12 +284,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .withAlphaComponent(capsuleHovered ? 0.10 : 0.05).cgColor
     }
 
-    /// 整条 header 都可点/可拖（点击选中 pane、胶囊展开面板、拖动移 pane）。
+    /// 手型只给胶囊（含其中的关闭钮）：它是"可点开面板"的东西；header 其余
+    /// 空白只是选中/拖动区，保持箭头。
     /// 这里不用 HoverCursor：header 与 terminal 的 I-beam 光标区相邻，跨界时
     /// cursor rect 的「离开还原箭头」晚于 tracking area 的设置，手型会被盖掉
     /// （探针实测）。加入同一套 cursor rect 机制后，交接由窗口原子完成。
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
+        addCursorRect(convert(capsule.frame, from: capsule.superview), cursor: .pointingHand)
     }
 
     override func updateTrackingAreas() {
