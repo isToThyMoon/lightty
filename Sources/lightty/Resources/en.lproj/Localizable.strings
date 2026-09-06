@@ -174,3 +174,21 @@
 "Working" = "Working";
 "Needs you" = "Needs you";
 "Finished" = "Finished";
+
+/* 设置页 */
+"Settings…" = "Settings…";
+"Back to app" = "Back to app";
+"Search settings…" = "Search settings…";
+"Personal" = "Personal";
+"General" = "General";
+"Appearance" = "Appearance";
+"Theme" = "Theme";
+"System" = "System";
+"Light" = "Light";
+"Dark" = "Dark";
+"Language" = "Language";
+"System language" = "System language";
+"Language changes apply to menus and sidebars right away; a few labels refresh after relaunch." = "Language changes apply to menus and sidebars right away; a few labels refresh after relaunch.";
+"Terminal" = "Terminal";
+"Use the built-in Lightty terminal theme" = "Use the built-in Lightty terminal theme";
+"No matching settings" = "No matching settings";

@@ -43,6 +43,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private var workspaceSidebarWidth = WorkspaceSidebarWidthPreference.width()
     private var workspaceSidebarResizeActive = false
     private var taskPanel: TaskSidebar?
+    /// 设置页（整窗覆盖，垫在标题栏容器之下）
+    private var settingsView: SettingsView?
+    private var settingsWidthConstraint: NSLayoutConstraint?
     /// 全部工作区关闭后的空态视图（task 为核心，不退出软件）。
     private var emptyStateView: EmptyWorkspaceView?
     private var taskPanelLeadingConstraint: NSLayoutConstraint?
@@ -149,6 +152,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let expectsInitialSize = initialPane.terminal.surface == nil
         super.init(window: window)
         window.delegate = self
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(preferencesDidChange),
+            name: .lighttyPreferencesDidChange, object: nil)
         window.center()
         if expectsInitialSize {
             window.alphaValue = 0
@@ -238,7 +244,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 侧栏按钮 = task 卡片开关。卡片开着时它挪进卡片头部行（点了收起），
     /// 标题栏那一枚隐藏（否则会落在卡片里的红绿灯旁边、与头部行按钮重复）。
     private func updateSidebarButtonState() {
-        sidebarButton?.isHidden = taskPanel != nil
+        sidebarButton?.isHidden = taskPanel != nil || settingsView != nil
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -1300,7 +1306,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     // —— 任务浮空卡片（布局占位、视觉悬浮）——
 
-    private func openTaskPanel() {
+    private func openTaskPanel(animated: Bool = true) {
         guard taskPanel == nil, let window,
               let contentView = window.contentView,
               let themeFrame = contentView.superview else { return }
@@ -1340,6 +1346,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         if let workspaceEdgeLeadingConstraint {
             targets.append((workspaceEdgeLeadingConstraint, workspaceSidebarOpenX))
+        }
+        guard animated else {
+            targets.forEach { $0.0.constant = $0.1 }
+            themeFrame.layoutSubtreeIfNeeded()
+            return
         }
         animateSidebarLayout(targets)
     }
@@ -1424,6 +1435,85 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         workspaceEdgeControl = button
         workspaceEdgeStrip = strip
         workspaceEdgeLeadingConstraint = leading
+    }
+
+    // MARK: - 设置页（整窗覆盖）
+
+    func showSettings(page: SettingsView.Page = .appearance) {
+        guard settingsView == nil, let window,
+              let themeFrame = window.contentView?.superview else { return }
+        let view = SettingsView(page: page)
+        view.onDismiss = { [weak self] in self?.hideSettings() }
+        // 垫在标题栏容器之下：红绿灯仍在页面左上；盖住其余一切（侧栏、终端）
+        if let titlebar = titlebarContainer(in: window, themeFrame: themeFrame) {
+            themeFrame.addSubview(view, positioned: .below, relativeTo: titlebar)
+        } else {
+            themeFrame.addSubview(view)
+        }
+        pinSettingsView(view, in: themeFrame)
+        settingsView = view
+        updateSidebarButtonState()
+        window.makeFirstResponder(view)
+    }
+
+    /// 只钉左缘 + 上下，宽度给常量并随窗口同步。**不能把右缘也钉到 themeFrame**：
+    /// 两侧钉死后页面内容的最小宽（一行"标签 + 开关"）就成了窗口宽度的下界，
+    /// 引擎把这个自由变量取到最小值，窗口会被内容缩窄（切页时窗宽跳变）。
+    private func pinSettingsView(_ view: SettingsView, in themeFrame: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        let width = view.widthAnchor.constraint(equalToConstant: themeFrame.bounds.width)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: themeFrame.topAnchor),
+            view.bottomAnchor.constraint(equalTo: themeFrame.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: themeFrame.leadingAnchor),
+            width,
+        ])
+        settingsWidthConstraint = width
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let themeFrame = window?.contentView?.superview else { return }
+        settingsWidthConstraint?.constant = themeFrame.bounds.width
+    }
+
+    func hideSettings() {
+        guard let view = settingsView else { return }
+        settingsView = nil
+        settingsWidthConstraint = nil
+        view.removeFromSuperview()
+        updateSidebarButtonState()
+        activePane?.focusTerminal()
+    }
+
+    /// 语言变更：屏上的壳层 chrome 文案是建视图时定死的，原地重建
+    /// task 卡片 / 工作区侧栏 / 标题栏按钮（无动画，位置不变）。设置页若开着，
+    /// 重建后要重新提到最上层（新建的卡片会插在它之上）。
+    @objc private func preferencesDidChange(_ note: Notification) {
+        guard PreferenceKind.from(note) == .language,
+              let window, let themeFrame = window.contentView?.superview else { return }
+        let hadTask = taskPanel != nil
+        let hadWorkspace = workspaceSidebar != nil
+        stopSidebarAnimationDriver()
+        taskPanel?.removeFromSuperview()
+        taskPanel = nil
+        taskPanelLeadingConstraint = nil
+        workspaceSidebar?.removeFromSuperview()
+        workspaceSidebar = nil
+        workspaceSidebarLeadingConstraint = nil
+        workspaceSidebarWidthConstraint = nil
+        titlebarChrome?.removeFromSuperview()
+        titlebarChrome = nil
+        if hadWorkspace { openWorkspaceSidebar(animated: false) }
+        if hadTask { openTaskPanel(animated: false) }
+        installWorkspaceEdgeControl()
+        installTitlebarAccessory(on: window)
+        rootLeadingConstraint?.constant = mainAreaInset
+        if let settingsView, let titlebar = titlebarContainer(in: window, themeFrame: themeFrame) {
+            themeFrame.addSubview(settingsView, positioned: .below, relativeTo: titlebar)
+            pinSettingsView(settingsView, in: themeFrame)  // 摘下再挂上，与父视图的约束已失效
+        }
+        themeFrame.layoutSubtreeIfNeeded()
+        updateSidebarButtonState()
     }
 
     // MARK: - 全文搜索浮层（⇧⇧）

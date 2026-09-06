@@ -178,3 +178,21 @@
 "Working" = "工作中";
 "Needs you" = "需要你";
 "Finished" = "已完成";
+
+/* 设置页 */
+"Settings…" = "设置…";
+"Back to app" = "返回应用";
+"Search settings…" = "搜索设置…";
+"Personal" = "个人";
+"General" = "通用";
+"Appearance" = "外观";
+"Theme" = "主题";
+"System" = "跟随系统";
+"Light" = "浅色";
+"Dark" = "深色";
+"Language" = "语言";
+"System language" = "跟随系统";
+"Language changes apply to menus and sidebars right away; a few labels refresh after relaunch." = "语言切换立即作用于菜单与侧栏；个别文案重启后刷新。";
+"Terminal" = "终端";
+"Use the built-in Lightty terminal theme" = "终端使用 Lightty 内置主题";
+"No matching settings" = "没有匹配的设置项";

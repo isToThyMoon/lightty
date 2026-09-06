@@ -15,9 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFontDownloadPreviewMode = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppearancePreference.apply()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
         installShiftTapMonitor()
+        // 语言 / 终端主题在设置页改了之后菜单文案与勾选态要跟上：整份重建。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(rebuildMenuForPreferences),
+            name: .lighttyPreferencesDidChange, object: nil)
         if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
             updaterController = SPUStandardUpdaterController(
                 startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
@@ -116,6 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appMenu.addItem(check)
         }
         appMenu.addItem(.separator())
+        appMenu.addItem(makeItem(L("Settings…"), #selector(showSettings)))
+        appMenu.addItem(.separator())
         appMenu.addItem(makeItem(L("Agent status hooks"), #selector(showHookSetup)))
         let themeToggle = NSMenuItem(
             title: L("Use Lightty Theme"),
@@ -208,6 +215,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppState.shared.keyWindowController?.activePane?.terminal
             .performBindingAction("close_surface")
     }
+
+    @objc private func showSettings() {
+        guard let controller = AppState.shared.keyWindowController else {
+            AppState.shared.newWindow().showSettings()
+            return
+        }
+        controller.showSettings()
+    }
+
+    @objc private func rebuildMenuForPreferences() { buildMenu() }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
     @objc private func toggleWorkspaceSidebar() {
