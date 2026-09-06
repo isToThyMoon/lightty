@@ -281,8 +281,60 @@ final class WorkspaceColumnView: NSView {
             guard let self, let pane else { return false }
             return self.controller?.movePane(withID: sourceID, to: pane, zone: .right) ?? false
         }
+        paneRow.onBeginDrag = { [weak self, weak paneRow] event in
+            guard let self, let paneRow else { return }
+            self.beginPaneRowDrag(source: paneRow, paneID: pane.dragIdentifier, event: event)
+        }
         paneRows[pane.dragIdentifier] = paneRow
         return paneRow
+    }
+
+    // MARK: - pane 行拖拽（手动跟手循环，与任务列表同一套机件）
+
+    /// 接管一条 pane 行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，不被
+    /// scroll 裁剪），逐帧命中兄弟行（pane 行 / 工作区行）并高亮落点；释放时
+    /// 走既有的移动通路（落在 pane 行 = 移到其右侧分屏，落在工作区行 = 移入该
+    /// 工作区）。与任务列表的重排共用 ReorderDrag，手感一致。
+    private func beginPaneRowDrag(source: PaneRowView, paneID: UUID, event: NSEvent) {
+        guard let image = ReorderDrag.snapshot(of: source) else { return }
+        let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
+        let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
+        addSubview(snap)
+        source.alphaValue = 0  // 真行隐身，浮层代它出镜
+
+        let cursorInSelf = convert(event.locationInWindow, from: nil)
+        let grabOffsetY = cursorInSelf.y - startFrame.minY
+
+        // 命中候选：所有可接落点的兄弟行（排除源行自身）。
+        func rows() -> [SidebarPaneDropRow] {
+            rowsStack.arrangedSubviews.compactMap { $0 as? SidebarPaneDropRow }
+                .filter { $0 !== source }
+        }
+        var current: SidebarPaneDropRow?
+
+        ReorderDrag.run(
+            host: self,
+            snapshotView: snap,
+            startEvent: event,
+            grabOffsetY: grabOffsetY,
+            onMove: { [weak self] c in
+                guard let self else { return }
+                let hit = rows().first {
+                    self.convert($0.bounds, from: $0).contains(c) && $0.acceptsPaneDrop(paneID)
+                }
+                if hit !== current {
+                    current?.setDropHighlighted(false)
+                    current = hit
+                    hit?.setDropHighlighted(true)
+                }
+            },
+            dropFrame: { current == nil ? startFrame : nil },  // 无落点则弹回原位
+            onCommit: { current?.setDropHighlighted(false); _ = current?.performPaneDrop(paneID) },
+            onEnd: { [weak self, weak source] in
+                source?.alphaValue = 1
+                self?.reload()
+            }
+        )
     }
 
     private func add(_ row: NSView) {
@@ -301,7 +353,15 @@ private final class ColumnFlippedView: NSView {
 /// 关闭不在菜单里重复出现。
 ///
 /// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
-private final class WorkspaceRowView: NSView {
+/// 侧栏里可接收 pane 拖拽落点的行（工作区行 + pane 行）。手动拖拽循环
+/// （见 ReorderDrag）据此统一命中与高亮，与任务列表同一套跟手机件。
+private protocol SidebarPaneDropRow: NSView {
+    func acceptsPaneDrop(_ id: UUID) -> Bool
+    func performPaneDrop(_ id: UUID) -> Bool
+    func setDropHighlighted(_ on: Bool)
+}
+
+private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
@@ -466,6 +526,10 @@ private final class WorkspaceRowView: NSView {
         if event.clickCount == 2 { onRename?() } else { onSelect?() }
     }
 
+    // MARK: - SidebarPaneDropRow
+    func acceptsPaneDrop(_ id: UUID) -> Bool { true }   // 任何 pane 都能移进工作区
+    func performPaneDrop(_ id: UUID) -> Bool { onPaneDrop?(id) ?? false }
+
     // MARK: - pane 落点
 
     private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {
@@ -476,19 +540,19 @@ private final class WorkspaceRowView: NSView {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard acceptedPaneID(sender) != nil else { return [] }
-        setDropTargeted(true)
+        setDropHighlighted(true)
         return .move
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) { setDropTargeted(false) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropHighlighted(false) }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        setDropTargeted(false)
+        setDropHighlighted(false)
         guard let id = acceptedPaneID(sender) else { return false }
         return onPaneDrop?(id) ?? false
     }
 
-    private func setDropTargeted(_ on: Bool) {
+    func setDropHighlighted(_ on: Bool) {
         layer?.borderWidth = on ? 1.5 : 0
         layer?.borderColor =
             on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
@@ -536,11 +600,13 @@ enum WorkspacePaneStatusPresentation {
 /// 当前 pane 用强调色淡底——全侧栏唯一的填充高亮；hover 时行尾出 ✕
 /// （与工作区行的关闭位统一；内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
-private final class PaneRowView: NSView, NSDraggingSource {
+private final class PaneRowView: NSView, SidebarPaneDropRow {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
     /// 别的 pane 拖到本行：移到本 pane 右侧。返回是否接受。
     var onPaneDrop: ((UUID) -> Bool)?
+    /// 起手拖拽本行（由所属 WorkspaceColumnView 接管跟手循环，与任务列表同款）。
+    var onBeginDrag: ((NSEvent) -> Void)?
 
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
     /// 存 id 而不是 pane 引用：行只需要向 store 取状态，不需要够到 pane 本体，
@@ -825,7 +891,7 @@ private final class PaneRowView: NSView, NSDraggingSource {
                 let dx = next.locationInWindow.x - origin.x
                 let dy = next.locationInWindow.y - origin.y
                 guard hypot(dx, dy) >= 3 else { continue }
-                beginPaneDrag(with: next)
+                onBeginDrag?(next)
                 return
             case .leftMouseUp:
                 onSelect?()
@@ -836,40 +902,9 @@ private final class PaneRowView: NSView, NSDraggingSource {
         }
     }
 
-    private func beginPaneDrag(with event: NSEvent) {
-        let item = NSPasteboardItem()
-        item.setString(paneID.uuidString, forType: .lighttyPaneID)
-        let dragItem = NSDraggingItem(pasteboardWriter: item)
-        let preview = rowSnapshot()
-        let location = convert(event.locationInWindow, from: nil)
-        dragItem.setDraggingFrame(
-            NSRect(
-                x: location.x - preview.size.width / 2,
-                y: location.y - preview.size.height / 2,
-                width: preview.size.width,
-                height: preview.size.height),
-            contents: preview)
-        let session = beginDraggingSession(with: [dragItem], event: event, source: self)
-        session.animatesToStartingPositionsOnCancelOrFail = true
-    }
-
-    private func rowSnapshot() -> NSImage {
-        guard bounds.width > 0, bounds.height > 0,
-              let rep = bitmapImageRepForCachingDisplay(in: bounds) else {
-            return NSImage(size: NSSize(width: 120, height: 24))
-        }
-        cacheDisplay(in: bounds, to: rep)
-        let image = NSImage(size: bounds.size)
-        image.addRepresentation(rep)
-        return image
-    }
-
-    func draggingSession(
-        _ session: NSDraggingSession,
-        sourceOperationMaskFor context: NSDraggingContext
-    ) -> NSDragOperation {
-        context == .withinApplication ? .move : []
-    }
+    // MARK: - SidebarPaneDropRow
+    func acceptsPaneDrop(_ id: UUID) -> Bool { id != paneID }
+    func performPaneDrop(_ id: UUID) -> Bool { onPaneDrop?(id) ?? false }
 
     // 落点：把别的 pane 拖到本行 = 移到本 pane 所在处（右侧分屏）
     private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {
@@ -880,19 +915,19 @@ private final class PaneRowView: NSView, NSDraggingSource {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard acceptedPaneID(sender) != nil else { return [] }
-        setDropTargeted(true)
+        setDropHighlighted(true)
         return .move
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) { setDropTargeted(false) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropHighlighted(false) }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        setDropTargeted(false)
+        setDropHighlighted(false)
         guard let id = acceptedPaneID(sender) else { return false }
         return onPaneDrop?(id) ?? false
     }
 
-    private func setDropTargeted(_ on: Bool) {
+    func setDropHighlighted(_ on: Bool) {
         layer?.borderWidth = on ? 1.5 : 0
         layer?.borderColor =
             on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
