@@ -38,6 +38,18 @@ final class SidebarControlsTests: XCTestCase {
             taskPanel.closeControl.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
         let closeControlMidY = taskPanel.closeControl.frame.midY
 
+        // 卡片从窗口顶边起（只留 panelInset），把红绿灯收进自己的头部行；
+        // 头部行右端带工作区侧栏开关，标题栏那枚开关随之隐藏。
+        XCTAssertEqual(
+            taskPanel.frame.maxY, themeFrame.bounds.maxY - ShellStyle.panelInset, accuracy: 0.5)
+        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Workspace Sidebar")))
+        let titlebarToggles = themeFrame.subviews
+            .filter { !($0 is TaskSidebar) }
+            .flatMap { descendantIconButtons(of: $0) }
+            .filter { $0.toolTip == L("Workspace Sidebar") }
+        XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有工作区开关（只是隐藏）")
+        XCTAssertTrue(titlebarToggles.allSatisfy(\.isHidden), "task 开着时标题栏开关应隐藏")
+
         // 默认工作区侧栏收起。
         XCTAssertNil(
             themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first,
@@ -59,6 +71,12 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
         XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
         XCTAssertTrue(sidebarToolTips.contains(L("New workspace")))
+    }
+
+    private func descendantIconButtons(of view: NSView) -> [ShellIconButton] {
+        view.subviews.flatMap { child in
+            [child as? ShellIconButton].compactMap { $0 } + descendantIconButtons(of: child)
+        }
     }
 
     private func descendantToolTips(of view: NSView) -> [String] {
