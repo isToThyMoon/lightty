@@ -162,7 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         taskMenu.addItem(.separator())
         // 任务侧栏由标题栏按钮的 hover / click 驱动。不得占用 cmd+K：它属于
         // Ghostty 默认 keybind `super+k=clear_screen`，必须直达 surface/core。
-        taskMenu.addItem(makeItem(L("Workspace Sidebar"), #selector(toggleSidebar)))
+        taskMenu.addItem(makeItem(L("Task Sidebar"), #selector(toggleSidebar)))
+        taskMenu.addItem(makeItem(L("Workspace Sidebar"), #selector(toggleWorkspaceSidebar)))
 
         NSApp.mainMenu = mainMenu
     }
@@ -209,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
+    @objc private func toggleWorkspaceSidebar() {
+        AppState.shared.keyWindowController?.toggleWorkspaceSidebar()
+    }
 
     @objc private func toggleBuiltInTheme(_ sender: NSMenuItem) {
         let enabled = !TerminalThemePreference.usesBuiltInTheme()

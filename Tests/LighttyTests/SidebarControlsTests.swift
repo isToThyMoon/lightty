@@ -29,40 +29,36 @@ final class SidebarControlsTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         themeFrame.layoutSubtreeIfNeeded()
 
-        // 默认打开 task 侧栏，其关闭钮以窗口边界中线为纵向基准。
+        // 默认打开 task 侧栏。
         let taskPanel = try XCTUnwrap(
             themeFrame.subviews.compactMap { $0 as? TaskSidebar }.first,
             "默认应打开 task 侧栏")
-        XCTAssertTrue(taskPanel.closeControl.superview === themeFrame)
-        XCTAssertEqual(
-            taskPanel.closeControl.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
-        let closeControlMidY = taskPanel.closeControl.frame.midY
 
         // 卡片从窗口顶边起（只留 panelInset），把红绿灯收进自己的头部行；
-        // 头部行右端带工作区侧栏开关，标题栏那枚开关随之隐藏。
+        // 头部行右端是收起卡片的 sidebar.left 按钮，标题栏那枚随之隐藏。
         XCTAssertEqual(
             taskPanel.frame.maxY, themeFrame.bounds.maxY - ShellStyle.panelInset, accuracy: 0.5)
-        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Workspace Sidebar")))
+        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Task Sidebar")))
         let titlebarToggles = themeFrame.subviews
             .filter { !($0 is TaskSidebar) }
             .flatMap { descendantIconButtons(of: $0) }
-            .filter { $0.toolTip == L("Workspace Sidebar") }
-        XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有工作区开关（只是隐藏）")
+            .filter { $0.toolTip == L("Task Sidebar") }
+        XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有 task 开关（只是隐藏）")
         XCTAssertTrue(titlebarToggles.allSatisfy(\.isHidden), "task 开着时标题栏开关应隐藏")
 
-        // 默认工作区侧栏收起。
+        // 默认工作区侧栏收起；其展开钮吸在主区左缘（task 卡片让位线）中点。
         XCTAssertNil(
             themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first,
             "默认工作区侧栏应关闭")
+        let expandControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
+        XCTAssertEqual(expandControls.count, 1, "应只有一枚工作区展开钮")
+        let expand = try XCTUnwrap(expandControls.first)
+        XCTAssertEqual(
+            expand.frame.minX, ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2,
+            accuracy: 0.5)
+        XCTAssertEqual(expand.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
 
-        _ = closeControlMidY
-        // task 开着时不应再有左缘展开钮（它只在 task 关闭时出现）。
-        let extraEdgeControls = themeFrame.subviews
-            .compactMap { $0 as? EdgeToggleControl }
-            .filter { $0 !== taskPanel.closeControl }
-        XCTAssertTrue(extraEdgeControls.isEmpty, "task 开着时不应有左缘展开钮")
-
-        // 工作区侧栏按需打开后，分屏 / 新建工作区按钮齐备。
+        // 工作区侧栏打开后：分屏 / 新建工作区按钮齐备，关闭钮吸在侧栏右边线。
         controller.openWorkspaceSidebar(animated: false)
         themeFrame.layoutSubtreeIfNeeded()
         let sidebar = try XCTUnwrap(
@@ -71,6 +67,10 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
         XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
         XCTAssertTrue(sidebarToolTips.contains(L("New workspace")))
+        let closeControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
+        XCTAssertEqual(closeControls.count, 1, "侧栏开着时应只剩一枚关闭钮")
+        XCTAssertEqual(
+            try XCTUnwrap(closeControls.first).frame.maxX, sidebar.frame.maxX, accuracy: 0.5)
     }
 
     private func descendantIconButtons(of view: NSView) -> [ShellIconButton] {
