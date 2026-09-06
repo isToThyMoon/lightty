@@ -10,8 +10,8 @@ import LighttyCore
 enum ShellStyle {
     // MARK: Geometry
 
-    /// 双面板侧栏体系：工作区侧栏（docked）+ 任务浮层卡片（overlay）
-    static let workspaceColumnWidth: CGFloat = 200
+    /// 双面板侧栏体系：标签页侧栏（docked）+ 任务浮层卡片（overlay）
+    static let tabColumnWidth: CGFloat = 200
     static let taskPanelWidth: CGFloat = 270
     static let panelInset: CGFloat = 6
     static let sidebarHorizontalInset: CGFloat = 10
@@ -73,7 +73,7 @@ enum ShellStyle {
 
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
-    // 圆点配色以前在 5 个地方各写各的（pane 头、工作区侧栏行、任务侧栏、搜索浮层、
+    // 圆点配色以前在 5 个地方各写各的（pane 头、标签页侧栏行、任务侧栏、搜索浮层、
     // 灵动岛），加状态色时必须先收敛成一处，否则每加一个态就要改五遍、必漏。
 
     /// 已绑定任务 / 任务处于活跃状态的强调色。沿用系统绿——收敛不改观感。

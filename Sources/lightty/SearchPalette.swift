@@ -389,8 +389,8 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
 
         // 全文搜索保留显式目的地：用户已经进入详情预览，选择位置是有意动作。
         for (index, entry) in result.running.enumerated() {
-            let workspace = entry.controller.workspaceName(of: entry.pane)
-            let label = workspace.map { "\($0) › \(entry.pane.header.title)" }
+            let tab = entry.controller.tabName(of: entry.pane)
+            let label = tab.map { "\($0) › \(entry.pane.header.title)" }
                 ?? entry.pane.header.title
             addAction(L("Jump · %@", label)) { [weak self] in
                 guard let self, let target = self.results[safe: self.selectedIndex]?
@@ -404,7 +404,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         addAction(L("New terminal")) { [weak self] in
             self?.open { controller, pane in controller.addPaneToActiveTab(pane) }
         }
-        addAction(L("New workspace")) { [weak self] in
+        addAction(L("New tab")) { [weak self] in
             self?.open { controller, pane in controller.addTab(initialPane: pane) }
         }
         addAction(L("New window")) { [weak self] in
@@ -430,7 +430,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         onDismiss?()
     }
 
-    /// 回车默认动作：活跃跳转（首个绑定 pane），休眠在当前工作区分屏打开
+    /// 回车默认动作：活跃跳转（首个绑定 pane），休眠在当前标签页分屏打开
     private func commitDefault() {
         guard let result = results[safe: selectedIndex] else { return }
         if let target = result.running.first {

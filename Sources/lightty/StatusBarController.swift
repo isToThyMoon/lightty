@@ -3,7 +3,7 @@ import LighttyCore
 
 /// pane 聚焦的唯一入口：菜单栏菜单项与系统通知点击共用一份实现。
 ///
-/// 放在这里而不是各自复制一份，是因为「激活 app → 还原最小化 → 切工作区 →
+/// 放在这里而不是各自复制一份，是因为「激活 app → 还原最小化 → 切标签页 →
 /// 交还终端焦点 → 标记已读」这串顺序有讲究（后台 tab 的 pane 成不了
 /// first responder，必须先 `selectTab` 再 `focusTerminal`），两处走岔会出
 /// 难查的焦点 bug。
@@ -114,7 +114,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - 刷新
 
     /// `PreToolUse` 每次工具调用都触发一次状态变更，高频。这里照
-    /// `WorkspaceColumnView.scheduleReload()` 的写法压到下一个 runloop tick，
+    /// `TabColumnView.scheduleReload()` 的写法压到下一个 runloop tick，
     /// 一串连续事件只重建一次。
     ///
     /// 标志位没加锁：契约规定 `lighttyPaneStatusDidChange` 由 store 在主线程 post。
@@ -239,14 +239,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         var listed = 0
 
         for (windowIndex, controller) in controllers.enumerated() {
-            let overview = controller.workspaceOverview().filter { !$0.panes.isEmpty }
+            let overview = controller.tabOverview().filter { !$0.panes.isEmpty }
             guard !overview.isEmpty else { continue }
             if multiWindow { addSectionHeader(L("Window %d", windowIndex + 1)) }
-            // 菜单栏空间更紧：单工作区时仍直接平铺；侧栏则始终保留可折叠容器行。
-            let showWorkspaces = overview.count > 1
+            // 菜单栏空间更紧：单标签页时仍直接平铺；侧栏则始终保留可折叠容器行。
+            let showTabs = overview.count > 1
             for entry in overview {
-                if showWorkspaces { addSectionHeader(entry.title) }
-                let indent = (multiWindow ? 1 : 0) + (showWorkspaces ? 1 : 0)
+                if showTabs { addSectionHeader(entry.title) }
+                let indent = (multiWindow ? 1 : 0) + (showTabs ? 1 : 0)
                 for pane in entry.panes {
                     menu.addItem(paneItem(for: pane, indent: indent))
                     listed += 1
@@ -302,7 +302,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         item.indentationLevel = indent
         item.attributedTitle = paneTitle(for: pane, status: status)
         // 完整信息（工具名 + detail）走 tooltip，与 pane 头同一份文案
-        item.toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
+        item.toolTip = TabPaneStatusPresentation.detailLine(for: status)
         return item
     }
 
@@ -313,7 +313,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             string: name.isEmpty ? L("Pane") : name, attributes: [.font: font])
         // 状态文字与侧栏同一套三档文案；上状态色而不是灰，与圆点互为呼应，
         // 也和后面灰色的任务名拉开层次。
-        if let status, let text = WorkspacePaneStatusPresentation.text(for: status) {
+        if let status, let text = TabPaneStatusPresentation.text(for: status) {
             title.append(NSAttributedString(
                 string: "  \(text)",
                 attributes: [

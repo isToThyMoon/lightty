@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class SidebarControlsTests: XCTestCase {
-    /// 默认布局：task 侧栏（核心）打开、工作区侧栏收起。
+    /// 默认布局：task 侧栏（核心）打开、标签页侧栏收起。
     func testInitialWindowOpensTaskPanel() throws {
         let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("sidebar-controls-\(UUID().uuidString)", isDirectory: true)
@@ -46,27 +46,27 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有 task 开关（只是隐藏）")
         XCTAssertTrue(titlebarToggles.allSatisfy(\.isHidden), "task 开着时标题栏开关应隐藏")
 
-        // 默认工作区侧栏收起；其展开钮吸在主区左缘（task 卡片让位线）中点。
+        // 默认标签页侧栏收起；其展开钮吸在主区左缘（task 卡片让位线）中点。
         XCTAssertNil(
-            themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first,
-            "默认工作区侧栏应关闭")
+            themeFrame.subviews.compactMap { $0 as? TabSidebarView }.first,
+            "默认标签页侧栏应关闭")
         let expandControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
-        XCTAssertEqual(expandControls.count, 1, "应只有一枚工作区展开钮")
+        XCTAssertEqual(expandControls.count, 1, "应只有一枚标签页展开钮")
         let expand = try XCTUnwrap(expandControls.first)
         XCTAssertEqual(
             expand.frame.minX, ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2,
             accuracy: 0.5)
         XCTAssertEqual(expand.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
 
-        // 工作区侧栏打开后：分屏 / 新建工作区按钮齐备，关闭钮吸在侧栏右边线。
-        controller.openWorkspaceSidebar(animated: false)
+        // 标签页侧栏打开后：分屏 / 新建标签页按钮齐备，关闭钮吸在侧栏右边线。
+        controller.openTabSidebar(animated: false)
         themeFrame.layoutSubtreeIfNeeded()
         let sidebar = try XCTUnwrap(
-            themeFrame.subviews.compactMap { $0 as? WorkspaceSidebarView }.first)
+            themeFrame.subviews.compactMap { $0 as? TabSidebarView }.first)
         let sidebarToolTips = descendantToolTips(of: sidebar)
         XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
         XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
-        XCTAssertTrue(sidebarToolTips.contains(L("New workspace")))
+        XCTAssertTrue(sidebarToolTips.contains(L("New tab")))
         let closeControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
         XCTAssertEqual(closeControls.count, 1, "侧栏开着时应只剩一枚关闭钮")
         XCTAssertEqual(

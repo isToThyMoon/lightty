@@ -1,7 +1,7 @@
 import AppKit
 
-enum WorkspaceSidebarSizing {
-    static let minimumWidth = ShellStyle.workspaceColumnWidth
+enum TabSidebarSizing {
+    static let minimumWidth = ShellStyle.tabColumnWidth
     static let maximumWidth = minimumWidth * 2
     /// 到达最小宽度后还要再拖一段才关闭，避免想调窄时误收起。
     static let closeOvershoot: CGFloat = 40
@@ -15,34 +15,34 @@ enum WorkspaceSidebarSizing {
     }
 }
 
-enum WorkspaceSidebarWidthPreference {
-    static let defaultsKey = "lightty.workspaceSidebar.width"
+enum TabSidebarWidthPreference {
+    static let defaultsKey = "lightty.workspaceSidebar.width"  // 历史键名，改了会丢已存宽度
 
     static func width(in defaults: UserDefaults = .standard) -> CGFloat {
         guard defaults.object(forKey: defaultsKey) != nil else {
-            return WorkspaceSidebarSizing.minimumWidth
+            return TabSidebarSizing.minimumWidth
         }
         let stored = CGFloat(defaults.double(forKey: defaultsKey))
-        guard stored.isFinite else { return WorkspaceSidebarSizing.minimumWidth }
-        return WorkspaceSidebarSizing.clampedWidth(stored)
+        guard stored.isFinite else { return TabSidebarSizing.minimumWidth }
+        return TabSidebarSizing.clampedWidth(stored)
     }
 
     static func setWidth(_ width: CGFloat, in defaults: UserDefaults = .standard) {
-        defaults.set(Double(WorkspaceSidebarSizing.clampedWidth(width)), forKey: defaultsKey)
+        defaults.set(Double(TabSidebarSizing.clampedWidth(width)), forKey: defaultsKey)
     }
 }
 
-/// 工作区侧栏（docked，默认展开）：承载 工作区›pane 两级树。
-/// 与 task 浮层卡片是两套独立面板——工作区↔pane 是严格层级，task↔pane
+/// 标签页侧栏（docked，默认展开）：承载 标签页›pane 两级树。
+/// 与 task 浮层卡片是两套独立面板——标签页↔pane 是严格层级，task↔pane
 /// 是绑定关系，UI 上不呈现并列/嵌套感。
 /// 开关在标题栏侧栏按钮；右边线可调宽，越过最小宽度继续左拖则关闭。
-final class WorkspaceSidebarView: NSView {
+final class TabSidebarView: NSView {
     var onCloseRequested: (() -> Void)?
     var onResizeBegan: (() -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
     var onResizeEnded: (() -> Void)?
 
-    private let column = WorkspaceColumnView()
+    private let column = TabColumnView()
     private let dragStrip = EdgeDragStrip()
 
     init(topInset: CGFloat) {
@@ -269,7 +269,7 @@ final class EdgeRevealStrip: NSView {
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
-    /// 只感应、不命中：它压在工作区栏最左一带上，吞点击会让行的左缘点不到。
+    /// 只感应、不命中：它压在标签页栏最左一带上，吞点击会让行的左缘点不到。
     /// tracking area 不依赖 hitTest，hover 照常。
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -307,7 +307,7 @@ private final class EdgeDragStrip: NSView {
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
     override func mouseDown(with event: NSEvent) {
-        let initialWidth = superview?.bounds.width ?? WorkspaceSidebarSizing.minimumWidth
+        let initialWidth = superview?.bounds.width ?? TabSidebarSizing.minimumWidth
         let origin = event.locationInWindow.x
         onResizeBegan?()
         while let next = NSApp.nextEvent(
@@ -317,15 +317,15 @@ private final class EdgeDragStrip: NSView {
             let rawWidth = initialWidth + next.locationInWindow.x - origin
             switch next.type {
             case .leftMouseDragged:
-                if WorkspaceSidebarSizing.shouldClose(rawWidth: rawWidth) {
-                    onWidthChange?(WorkspaceSidebarSizing.minimumWidth)
+                if TabSidebarSizing.shouldClose(rawWidth: rawWidth) {
+                    onWidthChange?(TabSidebarSizing.minimumWidth)
                     onResizeEnded?()
                     onDragClose?()
                     return
                 }
-                onWidthChange?(WorkspaceSidebarSizing.clampedWidth(rawWidth))
+                onWidthChange?(TabSidebarSizing.clampedWidth(rawWidth))
             case .leftMouseUp:
-                onWidthChange?(WorkspaceSidebarSizing.clampedWidth(rawWidth))
+                onWidthChange?(TabSidebarSizing.clampedWidth(rawWidth))
                 onResizeEnded?()
                 return
             default:

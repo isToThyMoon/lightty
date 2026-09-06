@@ -8,7 +8,7 @@ A macOS terminal built for running multiple AI agents in parallel. The core is [
 
 **Interrupted work carries over.** Each pane can be bound to a "task". Before ending a session, have the agent write its progress into the task's handoff document; open that task in any new session later and the new agent automatically receives the context and continues the work — no scrolling through chat history, no manual copying.
 
-**Still a full terminal.** Ghostty's rendering, configuration, and keybindings work as-is. Organize workspaces and splits freely; panes can be dragged and rearranged, and mistakes are undoable with cmd+Z. In-app updates via Sparkle; the UI is bilingual (English / Simplified Chinese, following the system language).
+**Still a full terminal.** Ghostty's rendering, configuration, and keybindings work as-is. Organize tabs and splits freely; panes can be dragged and rearranged, and mistakes are undoable with cmd+Z. In-app updates via Sparkle; the UI is bilingual (English / Simplified Chinese, following the system language).
 
 First-time setup: choose "Agent status hooks" from the menu to connect claude / codex status with one click. Installation goes through their own plugin mechanisms — your agent configuration is never modified.
 

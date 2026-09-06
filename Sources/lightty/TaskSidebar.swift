@@ -16,7 +16,7 @@ enum TaskManualOrder {
 }
 
 /// 任务浮层卡片（Ulysses 式悬浮面板）：标题栏侧栏按钮控制开合。
-/// 与工作区侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
+/// 与标签页侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
 /// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
 final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
@@ -409,7 +409,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// 任务行的圆点只表达「有没有 pane 绑着它」，不掺 agent 活动状态：
     /// 这张表是全量 reload 重建的（`lighttyTasksDidChange`），跟不上状态的频率，
-    /// 显示一个可能已经过期的状态比不显示更糟。实时状态在 pane 头和工作区侧栏。
+    /// 显示一个可能已经过期的状态比不显示更糟。实时状态在 pane 头和标签页侧栏。
     private func dotColor(for entry: Entry) -> NSColor {
         ShellStyle.dotColor(bound: entry.running != nil, activity: nil)
     }
@@ -459,15 +459,15 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard let anchor = sender ?? self else { return }
             // 列系统里注册可打开 md 的应用；勾选 = 当前系统默认（想全局换默认
             // 走 Finder 显示简介 →「全部更改」，此处只做单次选择不持久化）。
-            let workspace = NSWorkspace.shared
-            let defaultApp = workspace.urlForApplication(toOpen: entry.fileURL)
+            let tab = NSWorkspace.shared
+            let defaultApp = tab.urlForApplication(toOpen: entry.fileURL)
             var seenNames = Set<String>()
             var appItems: [ShellMenuPopover.Item] = []
-            for appURL in workspace.urlsForApplications(toOpen: entry.fileURL) {
+            for appURL in tab.urlsForApplications(toOpen: entry.fileURL) {
                 let name = FileManager.default.displayName(atPath: appURL.path)
                 guard seenNames.insert(name).inserted else { continue }
                 appItems.append(.action(name, checked: appURL == defaultApp) {
-                    workspace.open(
+                    tab.open(
                         [entry.fileURL], withApplicationAt: appURL,
                         configuration: NSWorkspace.OpenConfiguration(),
                         completionHandler: nil)

@@ -2,29 +2,29 @@ import XCTest
 import LighttyCore
 @testable import lightty
 
-final class WorkspacePaneStatusPresentationTests: XCTestCase {
+final class TabPaneStatusPresentationTests: XCTestCase {
     func testToolKeepsThinkingPresentation() {
         let thinking = status(.thinking)
         let tool = status(.tool, tool: "Edit")
 
         XCTAssertEqual(
-            WorkspacePaneStatusPresentation.text(for: tool),
-            WorkspacePaneStatusPresentation.text(for: thinking))
+            TabPaneStatusPresentation.text(for: tool),
+            TabPaneStatusPresentation.text(for: thinking))
     }
 
     func testActionableAndFinishedStatesRemainDistinct() {
         XCTAssertEqual(
-            WorkspacePaneStatusPresentation.text(for: status(.attention)),
+            TabPaneStatusPresentation.text(for: status(.attention)),
             L("Needs you"))
         XCTAssertEqual(
-            WorkspacePaneStatusPresentation.text(for: status(.done)),
+            TabPaneStatusPresentation.text(for: status(.done)),
             L("Finished"))
         XCTAssertNil(
-            WorkspacePaneStatusPresentation.text(for: status(.idle)))
+            TabPaneStatusPresentation.text(for: status(.idle)))
     }
 
     func testDetailLineCarriesToolAndTruncatedDetail() {
-        let line = WorkspacePaneStatusPresentation.detailLine(
+        let line = TabPaneStatusPresentation.detailLine(
             for: status(.tool, tool: "Bash", detail: String(repeating: "x", count: 500)))
         XCTAssertNotNil(line)
         XCTAssertTrue(line!.hasPrefix(L("Running %@", "Bash")))
@@ -33,8 +33,8 @@ final class WorkspacePaneStatusPresentationTests: XCTestCase {
     }
 
     func testDetailLineSilentForIdleAndNil() {
-        XCTAssertNil(WorkspacePaneStatusPresentation.detailLine(for: status(.idle)))
-        XCTAssertNil(WorkspacePaneStatusPresentation.detailLine(for: nil))
+        XCTAssertNil(TabPaneStatusPresentation.detailLine(for: status(.idle)))
+        XCTAssertNil(TabPaneStatusPresentation.detailLine(for: nil))
     }
 
     private func status(

@@ -1,10 +1,10 @@
 import AppKit
 
-/// 全部工作区关闭后的空态。lightty 以 task 为核心：关掉最后一个工作区不退出
-/// 软件，而是回到这个空态——提示从任务侧栏派发，或直接建一个新工作区。
-final class EmptyWorkspaceView: NSView {
-    /// 点“新建工作区”按钮。
-    var onNewWorkspace: (() -> Void)?
+/// 全部标签页关闭后的空态。lightty 以 task 为核心：关掉最后一个标签页不退出
+/// 软件，而是回到这个空态——提示从任务侧栏派发，或直接建一个新标签页。
+final class EmptyTabView: NSView {
+    /// 点“新建标签页”按钮。
+    var onNewTab: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -18,14 +18,14 @@ final class EmptyWorkspaceView: NSView {
             .withSymbolConfiguration(.init(pointSize: 42, weight: .regular))
         icon.contentTintColor = ShellStyle.tertiaryText
 
-        let title = NSTextField(labelWithString: L("No workspace open"))
+        let title = NSTextField(labelWithString: L("No tab open"))
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.textColor = ShellStyle.primaryText
         title.alignment = .center
 
         let subtitle = NSTextField(
             wrappingLabelWithString:
-                L("Open a task from the sidebar, or create a new workspace."))
+                L("Open a task from the sidebar, or create a new tab."))
         subtitle.font = .systemFont(ofSize: 12)
         subtitle.textColor = ShellStyle.secondaryText
         subtitle.alignment = .center
@@ -34,8 +34,8 @@ final class EmptyWorkspaceView: NSView {
         subtitle.preferredMaxLayoutWidth = 240
 
         let button = ShellTextButton(
-            L("New workspace"), emphasis: .primary, target: self,
-            action: #selector(newWorkspaceTapped))
+            L("New tab"), emphasis: .primary, target: self,
+            action: #selector(newTabTapped))
 
         let stack = NSStackView(views: [icon, title, subtitle, button])
         stack.orientation = .vertical
@@ -70,5 +70,5 @@ final class EmptyWorkspaceView: NSView {
         applyBackground()
     }
 
-    @objc private func newWorkspaceTapped() { onNewWorkspace?() }
+    @objc private func newTabTapped() { onNewTab?() }
 }

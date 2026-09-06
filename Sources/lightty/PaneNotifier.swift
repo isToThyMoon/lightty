@@ -9,7 +9,7 @@ import UserNotifications
 ///    授权框是伏击用户——他还没见过这个功能凭什么授权。改成第一次真的要发
 ///    通知的那一刻才申请。
 /// 2. **必须装 delegate**：不装 `UNUserNotificationCenterDelegate` 时，app 在
-///    前台通知根本不显示。而本功能恰好有「app 在前台但 pane 在别的窗口/工作区」
+///    前台通知根本不显示。而本功能恰好有「app 在前台但 pane 在别的窗口/标签页」
 ///    这一档，没有 delegate 那一档就静默失效了。
 /// 3. **合并**：多个 agent 同时收工必须并成一条，不能刷屏。
 final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
@@ -120,8 +120,8 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
               !window.isMiniaturized,
               window.occlusionState.contains(.visible)
         else { return false }
-        // 后台工作区（tab）里的 pane 没有渲染在屏幕上
-        return controller.workspaceOverview().contains { entry in
+        // 后台标签页（tab）里的 pane 没有渲染在屏幕上
+        return controller.tabOverview().contains { entry in
             entry.isActive && entry.panes.contains { $0 === pane }
         }
     }

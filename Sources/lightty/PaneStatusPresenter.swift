@@ -2,7 +2,7 @@ import AppKit
 import LighttyCore
 
 /// 把 `PaneStatusStore` 的通知分发到各呈现面（pane 头胶囊、展开中的灵动岛、
-/// 工作区侧栏行）。
+/// 标签页侧栏行）。
 ///
 /// 为什么是「推」而不是让每个 pane 自己订阅：pane 侧不需要任何订阅代码，
 /// `PaneView` 保持与本功能无关（S1 独占该文件），注销时序也不必每个 pane 各管一套。
@@ -25,7 +25,7 @@ final class PaneStatusPresenter {
     /// 收到过不带 pane 的通知（全量语义），本 tick 走全量分支。
     private var needsFullPass = false
     /// 侧栏列是随窗口生灭的视图，弱表省掉一套注销时序。
-    private let columns = NSHashTable<WorkspaceColumnView>.weakObjects()
+    private let columns = NSHashTable<TabColumnView>.weakObjects()
 
     private init() {}
 
@@ -40,14 +40,14 @@ final class PaneStatusPresenter {
         flush()
     }
 
-    /// 侧栏列挂上窗口时自报家门（列被夹在 WorkspaceSidebarView 里，
+    /// 侧栏列挂上窗口时自报家门（列被夹在 TabSidebarView 里，
     /// 外面没有稳定路径能遍历到）。
-    func register(column: WorkspaceColumnView) {
+    func register(column: TabColumnView) {
         columns.add(column)
         column.applyStatuses()
     }
 
-    /// 合流到下一个 runloop tick——与 `WorkspaceColumnView.scheduleReload()` 同一个写法。
+    /// 合流到下一个 runloop tick——与 `TabColumnView.scheduleReload()` 同一个写法。
     /// hook 的一次工具调用会连发 PreToolUse / PostToolUse，多个 pane 并行时更密；
     /// 不合流就是一帧内重复走完整套分发。
     @objc private func statusDidChange(_ notification: Notification) {

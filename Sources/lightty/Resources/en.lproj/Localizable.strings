@@ -4,12 +4,12 @@
 "Check for Updates…" = "Check for Updates…";
 "Tasks" = "Tasks";
 "New Task (New Window)" = "New Task (New Window)";
-"New Task (New Workspace)" = "New Task (New Workspace)";
+"New Task (New Tab)" = "New Task (New Tab)";
 "Split Pane Right" = "Split Pane Right";
 "Split Pane Down" = "Split Pane Down";
 "Close Pane" = "Close Pane";
 "Task Sidebar" = "Task Sidebar";
-"Workspace Sidebar" = "Workspace Sidebar";
+"Tab Sidebar" = "Tab Sidebar";
 "Use Lightty Theme" = "Use Lightty Theme";
 "Download Maple Mono NF CN…" = "Download Maple Mono NF CN…";
 "Preview Font Download…" = "Preview Font Download…";
@@ -40,17 +40,17 @@
 "Paste from clipboard?" = "Paste from clipboard?";
 "Allow terminal to write to the clipboard?" = "Allow terminal to write to the clipboard?";
 
-/* pane / 工作区 */
+/* pane / 标签页 */
 "Terminal %d" = "Terminal %d";
-"Workspace" = "Workspace";
-"Workspace %d" = "Workspace %d";
-"Rename workspace" = "Rename workspace";
-"Workspaces" = "Workspaces";
-"Close workspace" = "Close workspace";
-"Collapse workspace" = "Collapse workspace";
-"Expand workspace" = "Expand workspace";
+"Tab" = "Tab";
+"Tab %d" = "Tab %d";
+"Rename tab" = "Rename tab";
+"Tabs" = "Tabs";
+"Close tab" = "Close tab";
+"Collapse tab" = "Collapse tab";
+"Expand tab" = "Expand tab";
 "Close pane" = "Close pane";
-"New workspace" = "New workspace";
+"New tab" = "New tab";
 "New window" = "New window";
 "Open in" = "Open in";
 "Already open" = "Already open";
@@ -58,12 +58,12 @@
 "No handoff summary yet" = "No handoff summary yet";
 "Split right" = "Split right";
 "Split down" = "Split down";
-"Split in current workspace" = "Split in current workspace";
+"Split in current tab" = "Split in current tab";
 
 /* 侧栏 */
 "Search tasks" = "Search tasks";
 "Search task names and handoff content" = "Search task names and handoff content";
-"↩ Jump / open in current workspace · esc Close" = "↩ Jump / open in current workspace · esc Close";
+"↩ Jump / open in current tab · esc Close" = "↩ Jump / open in current tab · esc Close";
 "No matching tasks" = "No matching tasks";
 "No tasks yet" = "No tasks yet";
 "%d active · %d total" = "%d active · %d total";

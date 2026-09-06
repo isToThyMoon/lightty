@@ -4,12 +4,12 @@
 "Check for Updates…" = "检查更新…";
 "Tasks" = "任务";
 "New Task (New Window)" = "新任务（新窗口）";
-"New Task (New Workspace)" = "新任务（新工作区）";
+"New Task (New Tab)" = "新任务（新标签页）";
 "Split Pane Right" = "向右分 pane";
 "Split Pane Down" = "向下分 pane";
 "Close Pane" = "关闭 pane";
 "Task Sidebar" = "任务侧栏";
-"Workspace Sidebar" = "工作区侧栏";
+"Tab Sidebar" = "标签页侧栏";
 "Use Lightty Theme" = "使用 Lightty 内置主题";
 "Download Maple Mono NF CN…" = "下载 Maple Mono NF CN…";
 "Preview Font Download…" = "预览字体下载…";
@@ -40,17 +40,17 @@
 "Paste from clipboard?" = "粘贴剪贴板内容？";
 "Allow terminal to write to the clipboard?" = "允许终端写入剪贴板？";
 
-/* pane / 工作区 */
+/* pane / 标签页 */
 "Terminal %d" = "终端 %d";
-"Workspace" = "工作区";
-"Workspace %d" = "工作区 %d";
-"Rename workspace" = "重命名工作区";
-"Workspaces" = "工作区";
-"Close workspace" = "关闭工作区";
-"Collapse workspace" = "折叠工作区";
-"Expand workspace" = "展开工作区";
+"Tab" = "标签页";
+"Tab %d" = "标签页 %d";
+"Rename tab" = "重命名标签页";
+"Tabs" = "标签页";
+"Close tab" = "关闭标签页";
+"Collapse tab" = "折叠标签页";
+"Expand tab" = "展开标签页";
 "Close pane" = "关闭 pane";
-"New workspace" = "新工作区";
+"New tab" = "新标签页";
 "New window" = "新窗口";
 "Open in" = "打开到";
 "Already open" = "已打开";
@@ -58,12 +58,12 @@
 "No handoff summary yet" = "暂无 handoff 摘要";
 "Split right" = "向右分屏";
 "Split down" = "向下分屏";
-"Split in current workspace" = "当前工作区分屏";
+"Split in current tab" = "当前标签页分屏";
 
 /* 侧栏 */
 "Search tasks" = "搜索任务";
 "Search task names and handoff content" = "搜索任务名与 handoff 正文";
-"↩ Jump / open in current workspace · esc Close" = "↩ 跳转 / 在当前工作区打开 · esc 关闭";
+"↩ Jump / open in current tab · esc Close" = "↩ 跳转 / 在当前标签页打开 · esc 关闭";
 "No matching tasks" = "没有匹配的任务";
 "No tasks yet" = "还没有任务";
 "%d active · %d total" = "%d 个活跃 · 共 %d 个";

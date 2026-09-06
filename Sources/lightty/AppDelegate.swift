@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 两者都幂等、都不在这里申请通知权限（首次真要发通知时才问）。
         StatusBarController.shared.install()
         PaneNotifier.shared.install()
-        // 把状态推给 pane 头与工作区侧栏。做成外部推送而不是每个 pane 自己订阅，
+        // 把状态推给 pane 头与标签页侧栏。做成外部推送而不是每个 pane 自己订阅，
         // 是为了让 PaneView 不需要知道状态体系的存在。
         PaneStatusPresenter.shared.install()
         // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
@@ -161,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // keybind（含默认 cmd+N/T/D/W、cmd+[]、cmd+alt+方向等）匹配后经 action_cb 回来。
         // 菜单项仅供鼠标点选。
         taskMenu.addItem(makeItem(L("New Task (New Window)"), #selector(newTaskWindow)))
-        taskMenu.addItem(makeItem(L("New Task (New Workspace)"), #selector(newTaskTab)))
+        taskMenu.addItem(makeItem(L("New Task (New Tab)"), #selector(newTaskTab)))
         taskMenu.addItem(.separator())
         taskMenu.addItem(makeItem(L("Split Pane Right"), #selector(splitRight)))
         taskMenu.addItem(makeItem(L("Split Pane Down"), #selector(splitDown)))
@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 任务侧栏由标题栏按钮的 hover / click 驱动。不得占用 cmd+K：它属于
         // Ghostty 默认 keybind `super+k=clear_screen`，必须直达 surface/core。
         taskMenu.addItem(makeItem(L("Task Sidebar"), #selector(toggleSidebar)))
-        taskMenu.addItem(makeItem(L("Workspace Sidebar"), #selector(toggleWorkspaceSidebar)))
+        taskMenu.addItem(makeItem(L("Tab Sidebar"), #selector(toggleTabSidebar)))
 
         NSApp.mainMenu = mainMenu
     }
@@ -227,8 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func rebuildMenuForPreferences() { buildMenu() }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
-    @objc private func toggleWorkspaceSidebar() {
-        AppState.shared.keyWindowController?.toggleWorkspaceSidebar()
+    @objc private func toggleTabSidebar() {
+        AppState.shared.keyWindowController?.toggleTabSidebar()
     }
 
     @objc private func toggleBuiltInTheme(_ sender: NSMenuItem) {

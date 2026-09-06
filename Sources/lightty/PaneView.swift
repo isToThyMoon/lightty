@@ -407,7 +407,7 @@ final class PaneView: NSView {
     private func rename(to name: String) {
         header.title = name
         onMetadataChange?(self)
-        // 工作区列的 pane 行显示 pane 名，改名后需要活地图刷新
+        // 标签页列的 pane 行显示 pane 名，改名后需要活地图刷新
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }
 
@@ -420,7 +420,7 @@ final class PaneView: NSView {
     private var spotlightVeil: NSView?
 
     /// 从侧栏/菜单栏/搜索等处跳转到本 pane 后的落点提示。
-    /// 不给目标加图形（圈线在终端画面里是异物），而是请控制器把同工作区
+    /// 不给目标加图形（圈线在终端画面里是异物），而是请控制器把同标签页
     /// 其余 pane 短暂压暗——视线本能落在唯一清晰的那块上。做减法的聚光灯，
     /// 与内核的 unfocused-split-opacity 同一门语言。
     func flashReveal() {

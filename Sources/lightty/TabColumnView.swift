@@ -1,27 +1,27 @@
 import AppKit
 import LighttyCore
 
-/// 双栏侧栏的左栏：工作区 › pane 两级树（cmux 形态的窗口活地图）。
-/// spec: docs/specs/double-sidebar.md。工作区可折叠，折叠状态仅当前侧栏会话内保留。
+/// 双栏侧栏的左栏：标签页 › pane 两级树（cmux 形态的窗口活地图）。
+/// spec: docs/specs/double-sidebar.md。标签页可折叠，折叠状态仅当前侧栏会话内保留。
 ///
-/// 层级表达（Safari 侧栏标签页组同款）：工作区行 = 容器图标 + semibold 标题 +
+/// 层级表达（Safari 侧栏标签页组同款）：标签页行 = 容器图标 + semibold 标题 +
 /// pane 计数，活跃时图标/标题染强调色但**不给填充**；pane 行 = 缩进的圆点 +
-/// 常规字重单行。全侧栏唯一的填充高亮是当前 pane（强调色淡底）——当前工作区
+/// 常规字重单行。全侧栏唯一的填充高亮是当前 pane（强调色淡底）——当前标签页
 /// 必然包含当前 pane，两级选中不需要两块底色。
 ///
-/// 工作区行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
+/// 标签页行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
 /// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
-final class WorkspaceColumnView: NSView {
-    private let sectionLabel = NSTextField(labelWithString: L("Workspaces"))
+final class TabColumnView: NSView {
+    private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
         symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"),
         target: nil, action: nil)
     private let splitDownButton = ShellIconButton(
         symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"),
         target: nil, action: nil)
-    private let newWorkspaceButton = ShellIconButton(
-        symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New workspace"),
+    private let newTabButton = ShellIconButton(
+        symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New tab"),
         target: nil, action: nil)
     private let scroll = NSScrollView()
     private let rowsStack = NSStackView()
@@ -30,8 +30,8 @@ final class WorkspaceColumnView: NSView {
     /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
     /// （一次工具调用就有 PreToolUse + PostToolUse 两发），拆建必闪。
     private var paneRows: [UUID: PaneRowView] = [:]
-    /// 工作区没有持久化折叠语义；仅在当前侧栏实例内记忆，reload 不丢。
-    private var collapsedWorkspaceIDs = Set<UUID>()
+    /// 标签页没有持久化折叠语义；仅在当前侧栏实例内记忆，reload 不丢。
+    private var collapsedTabIDs = Set<UUID>()
 
     private var controller: TerminalWindowController? {
         window?.windowController as? TerminalWindowController
@@ -47,8 +47,8 @@ final class WorkspaceColumnView: NSView {
         splitRightButton.action = #selector(splitRight)
         splitDownButton.target = self
         splitDownButton.action = #selector(splitDown)
-        newWorkspaceButton.target = self
-        newWorkspaceButton.action = #selector(newWorkspace)
+        newTabButton.target = self
+        newTabButton.action = #selector(newTab)
 
         rowsStack.orientation = .vertical
         rowsStack.alignment = .leading
@@ -63,7 +63,7 @@ final class WorkspaceColumnView: NSView {
         scroll.drawsBackground = false
         scroll.scrollerStyle = .overlay
 
-        for v in [sectionLabel, splitRightButton, splitDownButton, newWorkspaceButton, scroll] {
+        for v in [sectionLabel, splitRightButton, splitDownButton, newTabButton, scroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -71,30 +71,30 @@ final class WorkspaceColumnView: NSView {
 
         NSLayoutConstraint.activate([
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
-            newWorkspaceButton.topAnchor.constraint(equalTo: topAnchor),
-            newWorkspaceButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            newWorkspaceButton.widthAnchor.constraint(equalToConstant: 28),
-            newWorkspaceButton.heightAnchor.constraint(equalToConstant: 28),
+            newTabButton.topAnchor.constraint(equalTo: topAnchor),
+            newTabButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            newTabButton.widthAnchor.constraint(equalToConstant: 28),
+            newTabButton.heightAnchor.constraint(equalToConstant: 28),
 
             splitDownButton.trailingAnchor.constraint(
-                equalTo: newWorkspaceButton.leadingAnchor, constant: -1),
-            splitDownButton.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
+                equalTo: newTabButton.leadingAnchor, constant: -1),
+            splitDownButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
             splitDownButton.widthAnchor.constraint(equalToConstant: 28),
             splitDownButton.heightAnchor.constraint(equalToConstant: 28),
 
             splitRightButton.trailingAnchor.constraint(
                 equalTo: splitDownButton.leadingAnchor, constant: -1),
-            splitRightButton.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
+            splitRightButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
             splitRightButton.widthAnchor.constraint(equalToConstant: 28),
             splitRightButton.heightAnchor.constraint(equalToConstant: 28),
 
             // 12 边距 + 行内 10 缩进：标题与行文字左对齐
             sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
-            sectionLabel.centerYAnchor.constraint(equalTo: newWorkspaceButton.centerYAnchor),
+            sectionLabel.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
             sectionLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
 
-            scroll.topAnchor.constraint(equalTo: newWorkspaceButton.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
             // 两侧对称 12 = 边缘钮宽度：task 卡片关着时，窗口左缘的展开钮
             // （EdgeToggleControl）正好落在左侧这条边沟里，行高亮到钮的圆角处止步。
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -108,7 +108,7 @@ final class WorkspaceColumnView: NSView {
             document.bottomAnchor.constraint(equalTo: rowsStack.bottomAnchor),
         ])
 
-        // pane 绑定/改名/解绑经 lighttyTasksDidChange 广播；工作区结构变化
+        // pane 绑定/改名/解绑经 lighttyTasksDidChange 广播；标签页结构变化
         // 由 TerminalWindowController.refreshTabStrip 直接调 reload。
         NotificationCenter.default.addObserver(
             self, selector: #selector(scheduleReload),
@@ -141,14 +141,14 @@ final class WorkspaceColumnView: NSView {
         }
     }
 
-    /// pane 焦点变化只原地切换行底色，不拆建工作区树。
+    /// pane 焦点变化只原地切换行底色，不拆建标签页树。
     func applyActivePane(_ paneID: UUID?) {
         for (rowPaneID, row) in paneRows {
             row.setActive(rowPaneID == paneID)
         }
     }
 
-    /// shell 的 OSC PWD 更新只改对应 pane 第二行，不重建工作区树。
+    /// shell 的 OSC PWD 更新只改对应 pane 第二行，不重建标签页树。
     func applyWorkingDirectory(_ directory: String?, for paneID: UUID) {
         paneRows[paneID]?.applyWorkingDirectory(directory)
     }
@@ -162,9 +162,9 @@ final class WorkspaceColumnView: NSView {
         }
     }
 
-    @objc private func newWorkspace() {
-        // 有活跃 pane 时走 Ghostty action 通路：新工作区继承当前 pane 的
-        // cwd/font/context。空态（全部工作区已关）没有活跃 pane，直接建一个。
+    @objc private func newTab() {
+        // 有活跃 pane 时走 Ghostty action 通路：新标签页继承当前 pane 的
+        // cwd/font/context。空态（全部标签页已关）没有活跃 pane，直接建一个。
         if let active = controller?.activePane {
             active.terminal.performBindingAction("new_tab")
         } else {
@@ -184,48 +184,48 @@ final class WorkspaceColumnView: NSView {
         guard let controller else { return }
         rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         paneRows.removeAll()
-        let overview = controller.workspaceOverview()
+        let overview = controller.tabOverview()
         let activePaneID = controller.activePane?.dragIdentifier
-        collapsedWorkspaceIDs.formIntersection(overview.map(\.id))
+        collapsedTabIDs.formIntersection(overview.map(\.id))
         for entry in overview {
             let index = entry.index
-            let workspaceID = entry.id
+            let tabID = entry.id
             let wasActive = entry.isActive
-            let isCollapsed = collapsedWorkspaceIDs.contains(entry.id)
-            let row = WorkspaceRowView(
+            let isCollapsed = collapsedTabIDs.contains(entry.id)
+            let row = TabRowView(
                 title: entry.title,
                 count: entry.panes.count,
                 isActive: entry.isActive,
                 isCollapsed: isCollapsed)
-            row.workspaceIndex = index
+            row.tabIndex = index
             row.onSelect = { [weak self] in
                 guard let self else { return }
                 if wasActive {
-                    self.toggleWorkspaceCollapse(workspaceID)
+                    self.toggleTabCollapse(tabID)
                 } else {
                     self.controller?.selectTab(at: index)
                 }
             }
             row.onToggleCollapse = { [weak self] in
-                self?.toggleWorkspaceCollapse(workspaceID)
+                self?.toggleTabCollapse(tabID)
             }
             row.onPaneDrop = { [weak self] paneID in
-                self?.controller?.movePane(withID: paneID, toWorkspaceAt: index) ?? false
+                self?.controller?.movePane(withID: paneID, toTabAt: index) ?? false
             }
             row.onRename = { [weak self, weak row] in
                 guard let self, let anchor = row, let controller = self.controller else { return }
                 NameEditorPopover.present(
-                    from: anchor, title: L("Rename workspace"),
+                    from: anchor, title: L("Rename tab"),
                     initial: entry.title, confirmLabel: L("Rename")
                 ) { name in controller.renameTab(at: index, to: name) }
             }
             row.onMenu = { [weak self, weak row] in
                 guard let self, let anchor = row else { return }
                 ShellMenuPopover.present(from: anchor, items: [
-                    .action(L("Rename workspace")) { [weak self] in
+                    .action(L("Rename tab")) { [weak self] in
                         guard let controller = self?.controller else { return }
                         NameEditorPopover.present(
-                            from: anchor, title: L("Rename workspace"),
+                            from: anchor, title: L("Rename tab"),
                             initial: entry.title, confirmLabel: L("Rename")
                         ) { name in controller.renameTab(at: index, to: name) }
                     },
@@ -250,11 +250,11 @@ final class WorkspaceColumnView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
-    private func toggleWorkspaceCollapse(_ workspaceID: UUID) {
-        if collapsedWorkspaceIDs.contains(workspaceID) {
-            collapsedWorkspaceIDs.remove(workspaceID)
+    private func toggleTabCollapse(_ tabID: UUID) {
+        if collapsedTabIDs.contains(tabID) {
+            collapsedTabIDs.remove(tabID)
         } else {
-            collapsedWorkspaceIDs.insert(workspaceID)
+            collapsedTabIDs.insert(tabID)
         }
         reload()
     }
@@ -276,7 +276,7 @@ final class WorkspaceColumnView: NSView {
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
             self.applyActivePane(pane.dragIdentifier)
-            // 落点提示：跳转可能伴随工作区切换，多分屏下必须告诉视线去哪
+            // 落点提示：跳转可能伴随标签页切换，多分屏下必须告诉视线去哪
             pane.flashReveal()
         }
         paneRow.onClose = { [weak pane] in
@@ -297,9 +297,9 @@ final class WorkspaceColumnView: NSView {
     // MARK: - pane 行拖拽（手动跟手循环，与任务列表同一套机件）
 
     /// 接管一条 pane 行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，不被
-    /// scroll 裁剪），逐帧命中兄弟行（pane 行 / 工作区行）并高亮落点；释放时
-    /// 走既有的移动通路（落在 pane 行 = 移到其右侧分屏，落在工作区行 = 移入该
-    /// 工作区）。与任务列表的重排共用 ReorderDrag，手感一致。
+    /// scroll 裁剪），逐帧命中兄弟行（pane 行 / 标签页行）并高亮落点；释放时
+    /// 走既有的移动通路（落在 pane 行 = 移到其右侧分屏，落在标签页行 = 移入该
+    /// 标签页）。与任务列表的重排共用 ReorderDrag，手感一致。
     private func beginPaneRowDrag(source: PaneRowView, paneID: UUID, event: NSEvent) {
         guard let image = ReorderDrag.snapshot(of: source) else { return }
         let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
@@ -336,7 +336,7 @@ final class WorkspaceColumnView: NSView {
                 for v in peers {
                     if self.convert(v.bounds, from: v).midY > c.y { idx += 1 } else { break }
                 }
-                idx = min(max(idx, 1), peers.count)  // 不越过第一条工作区标题
+                idx = min(max(idx, 1), peers.count)  // 不越过第一条标签页标题
                 guard idx != lastIdx else { return }
                 lastIdx = idx
                 NSAnimationContext.runAnimationGroup { ctx in
@@ -364,25 +364,25 @@ final class WorkspaceColumnView: NSView {
         )
     }
 
-    /// 源行在 arranged 序列里的同区上下相邻 pane（跨工作区标题即断，视为无邻居）。
+    /// 源行在 arranged 序列里的同区上下相邻 pane（跨标签页标题即断，视为无邻居）。
     private func neighborPaneIDs(of source: PaneRowView) -> (prev: UUID?, next: UUID?) {
         let arranged = rowsStack.arrangedSubviews
         guard let si = arranged.firstIndex(of: source) else { return (nil, nil) }
         var prev: UUID?
         for v in arranged[..<si].reversed() {
-            if v is WorkspaceRowView { break }
+            if v is TabRowView { break }
             if let r = v as? PaneRowView { prev = r.paneID; break }
         }
         var next: UUID?
         for v in arranged[(si + 1)...] {
-            if v is WorkspaceRowView { break }
+            if v is TabRowView { break }
             if let r = v as? PaneRowView { next = r.paneID; break }
         }
         return (prev, next)
     }
 
     /// 把源行拖后的最终位置翻译成一次 split 树移动：优先落到“下方同区 pane 的左侧”，
-    /// 否则“上方同区 pane 的右侧”，都没有则整体移进上方那个工作区。没真动则跳过。
+    /// 否则“上方同区 pane 的右侧”，都没有则整体移进上方那个标签页。没真动则跳过。
     private func commitPaneRowDrop(
         source: PaneRowView, paneID: UUID, origPrev: UUID?, origNext: UUID?
     ) {
@@ -396,17 +396,17 @@ final class WorkspaceColumnView: NSView {
             _ = controller?.movePane(withID: paneID, to: dest, zone: .left)
         } else if let dest = pane(prev) {
             _ = controller?.movePane(withID: paneID, to: dest, zone: .right)
-        } else if let wsIndex = workspaceIndexAbove(source) {
-            _ = controller?.movePane(withID: paneID, toWorkspaceAt: wsIndex)
+        } else if let wsIndex = tabIndexAbove(source) {
+            _ = controller?.movePane(withID: paneID, toTabAt: wsIndex)
         }
     }
 
-    /// 源行上方最近的工作区标题的 index（落进空/首位时用）。
-    private func workspaceIndexAbove(_ source: PaneRowView) -> Int? {
+    /// 源行上方最近的标签页标题的 index（落进空/首位时用）。
+    private func tabIndexAbove(_ source: PaneRowView) -> Int? {
         let arranged = rowsStack.arrangedSubviews
         guard let si = arranged.firstIndex(of: source) else { return nil }
         for v in arranged[..<si].reversed() {
-            if let ws = v as? WorkspaceRowView { return ws.workspaceIndex }
+            if let ws = v as? TabRowView { return ws.tabIndex }
         }
         return nil
     }
@@ -422,12 +422,12 @@ private final class ColumnFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// 工作区行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
+/// 标签页行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
 /// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
 /// 关闭不在菜单里重复出现。
 ///
 /// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
-/// 侧栏里可接收 pane 拖拽落点的行（工作区行 + pane 行）。手动拖拽循环
+/// 侧栏里可接收 pane 拖拽落点的行（标签页行 + pane 行）。手动拖拽循环
 /// （见 ReorderDrag）据此统一命中与高亮，与任务列表同一套跟手机件。
 private protocol SidebarPaneDropRow: NSView {
     func acceptsPaneDrop(_ id: UUID) -> Bool
@@ -435,15 +435,15 @@ private protocol SidebarPaneDropRow: NSView {
     func setDropHighlighted(_ on: Bool)
 }
 
-private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
-    /// 拖拽落点映射用：空区落到本工作区时按此 index 走 movePane(toWorkspaceAt:)。
-    var workspaceIndex = 0
+private final class TabRowView: NSView, SidebarPaneDropRow {
+    /// 拖拽落点映射用：空区落到本标签页时按此 index 走 movePane(toTabAt:)。
+    var tabIndex = 0
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
     var onMenu: (() -> Void)?
     var onClose: (() -> Void)?
-    /// pane 拖到工作区行：移进该工作区。返回是否接受。
+    /// pane 拖到标签页行：移进该标签页。返回是否接受。
     var onPaneDrop: ((UUID) -> Bool)?
 
     private let isActive: Bool
@@ -484,7 +484,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
         disclosureButton.target = self
         disclosureButton.action = #selector(toggleCollapse)
         disclosureButton.toolTip =
-            isCollapsed ? L("Expand workspace") : L("Collapse workspace")
+            isCollapsed ? L("Expand tab") : L("Collapse tab")
         applyGlyph()
 
         countLabel.stringValue = "\(count)"
@@ -503,7 +503,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
         menuButton.action = #selector(menuTapped)
 
         closeButton.image = NSImage(
-            systemSymbolName: "xmark", accessibilityDescription: L("Close workspace"))?
+            systemSymbolName: "xmark", accessibilityDescription: L("Close tab"))?
             .withSymbolConfiguration(.init(pointSize: 8.5, weight: .bold))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
@@ -512,7 +512,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
         closeButton.isHidden = true
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
-        closeButton.toolTip = L("Close workspace")
+        closeButton.toolTip = L("Close tab")
 
         for v in [disclosureButton, label, countLabel, menuButton, closeButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -548,7 +548,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
     @objc private func menuTapped() { onMenu?() }
     @objc private func closeTapped() { onClose?() }
 
-    /// Safari 标签页组同款：常态显示容器图标（与「新工作区」按钮同族的
+    /// Safari 标签页组同款：常态显示容器图标（与「新标签页」按钮同族的
     /// rectangle 组合），hover 换成折叠 chevron——同一个 18pt 插槽，不吃行宽。
     /// 折叠态在常态下不单独表达：pane 行消失 + 计数仍在，信息已经够了。
     private func applyGlyph() {
@@ -561,7 +561,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
         } else {
             disclosureButton.image = NSImage(
                 systemSymbolName: "rectangle.on.rectangle",
-                accessibilityDescription: L("Workspace"))?
+                accessibilityDescription: L("Tab"))?
                 .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
             disclosureButton.contentTintColor =
                 isActive ? .controlAccentColor : ShellStyle.secondaryText
@@ -569,7 +569,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
     }
 
     private func applyFill() {
-        // 活跃工作区不给填充（标题/图标已染强调色）；填充只表达 hover
+        // 活跃标签页不给填充（标题/图标已染强调色）；填充只表达 hover
         let fill: NSColor = hovered ? ShellStyle.selectionFill : .clear
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
@@ -603,7 +603,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
     }
 
     // MARK: - SidebarPaneDropRow
-    func acceptsPaneDrop(_ id: UUID) -> Bool { true }   // 任何 pane 都能移进工作区
+    func acceptsPaneDrop(_ id: UUID) -> Bool { true }   // 任何 pane 都能移进标签页
     func performPaneDrop(_ id: UUID) -> Bool { onPaneDrop?(id) ?? false }
 
     // MARK: - pane 落点
@@ -635,7 +635,7 @@ private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
     }
 }
 
-enum WorkspacePaneStatusPresentation {
+enum TabPaneStatusPresentation {
     /// 文字只表达三个值得打断扫读节奏的阶段：处理中、等待用户、已完成。
     /// 圆点仍按真实活动状态变色；tool hook 再密也不会让文字宽度反复跳动。
     static func text(for status: PaneStatus?) -> String? {
@@ -674,14 +674,14 @@ enum WorkspacePaneStatusPresentation {
 /// 曾试过砍掉第二行、cwd 挪 tooltip：悬浮气泡的观感和延迟都不如常驻
 /// 次要色一行，用户点名要回来。
 /// 当前 pane 用强调色淡底——全侧栏唯一的填充高亮；hover 时行尾出 ✕
-/// （与工作区行的关闭位统一；内核关闭同路）。
+/// （与标签页行的关闭位统一；内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
 private final class PaneRowView: NSView, SidebarPaneDropRow {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
     /// 别的 pane 拖到本行：移到本 pane 右侧。返回是否接受。
     var onPaneDrop: ((UUID) -> Bool)?
-    /// 起手拖拽本行（由所属 WorkspaceColumnView 接管跟手循环，与任务列表同款）。
+    /// 起手拖拽本行（由所属 TabColumnView 接管跟手循环，与任务列表同款）。
     var onBeginDrag: ((NSEvent) -> Void)?
 
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
@@ -783,7 +783,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 42),
 
-            // 嵌进工作区标题的文字轴之下再退一步，属地关系靠缩进本身表达；
+            // 嵌进标签页标题的文字轴之下再退一步，属地关系靠缩进本身表达；
             // 圆点跟第一行对齐，不悬在两行中间。
             dotView.leadingAnchor.constraint(
                 equalTo: leadingAnchor, constant: indented ? 26 : 10),
@@ -846,7 +846,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
         else { return }
 
         let previousActivity = activity
-        let previousText = WorkspacePaneStatusPresentation.text(for: self.status)
+        let previousText = TabPaneStatusPresentation.text(for: self.status)
         let previousCWD = self.status?.cwd
         self.status = status
 
@@ -855,7 +855,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
             applyDotColor()
             applyFill()
         }
-        if previousText != WorkspacePaneStatusPresentation.text(for: status) {
+        if previousText != TabPaneStatusPresentation.text(for: status) {
             applyStatusLabel()
         }
         if previousCWD != status?.cwd {
@@ -869,7 +869,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
     /// 圆点负责快速扫色，次级文字负责解释语义；不再铺 badge 底色与当前行
     /// 高亮争抢视觉重心。任务名是稳定信息，固定保留在第二行。
     private func applyStatusLabel() {
-        if let text = WorkspacePaneStatusPresentation.text(for: status) {
+        if let text = TabPaneStatusPresentation.text(for: status) {
             statusLabel.isHidden = false
             statusLabel.stringValue = text
             statusLabel.toolTip = text

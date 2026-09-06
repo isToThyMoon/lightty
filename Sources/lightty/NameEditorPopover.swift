@@ -1,7 +1,7 @@
 import AppKit
 
 /// 通用命名气泡：标题 + 输入框 + 确认，锚定在触发控件上。
-/// 新建任务 / 重命名任务 / 重命名工作区共用，替代割裂的 NSAlert。
+/// 新建任务 / 重命名任务 / 重命名标签页共用，替代割裂的 NSAlert。
 enum NameEditorPopover {
     private static var popover: NSPopover?
 

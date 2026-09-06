@@ -178,7 +178,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
 
-            // full-size terminal 会延伸到原生标题栏下；工作区侧栏收起时，左贴的
+            // full-size terminal 会延伸到原生标题栏下；标签页侧栏收起时，左贴的
             // 身份胶囊会被红黄绿与侧栏开关盖住。按各 pane 自身居中后不再依赖
             // 窗口左侧安全区，多分屏也各自保持一致的视觉轴。
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -448,7 +448,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     /// 不停跳变——比呼吸的圆点扎眼得多，正好和「不打扰」相反），要么再加一段
     /// 仲裁逻辑去挤 pane 名。两条都比这点信息量贵，所以走 tooltip。
     private func updateStatusTooltip() {
-        toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
+        toolTip = TabPaneStatusPresentation.detailLine(for: status)
     }
 
     // MARK: 环境动画的开关

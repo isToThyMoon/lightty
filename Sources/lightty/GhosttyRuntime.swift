@@ -558,7 +558,7 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_SET_TAB_TITLE:
-            // tab = 工作区，名字归用户所有（双击标签改）；OSC 不允许覆盖。
+            // tab = 标签页，名字归用户所有（双击标签改）；OSC 不允许覆盖。
             return true
 
         case GHOSTTY_ACTION_PROMPT_TITLE:

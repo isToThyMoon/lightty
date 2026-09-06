@@ -2,7 +2,7 @@ import AppKit
 import LighttyCore
 
 /// 任务打开流程：任务行旁的气泡展示 handoff 摘要、已打开的 pane，
-/// 以及当前工作区新 pane / 新工作区 / 新窗口三种目的地。
+/// 以及当前标签页新 pane / 新标签页 / 新窗口三种目的地。
 enum RestoreFlow {
     private static var popover: NSPopover?
 
@@ -101,8 +101,8 @@ private final class RestorePopoverController: NSViewController {
             rows.append(opened)
             sectionLabels.append(opened)
             for (index, entry) in bound.enumerated() {
-                let workspace = entry.controller.workspaceName(of: entry.pane)
-                let label = workspace.map { "\($0) › \(entry.pane.header.title)" }
+                let tab = entry.controller.tabName(of: entry.pane)
+                let label = tab.map { "\($0) › \(entry.pane.header.title)" }
                     ?? entry.pane.header.title
                 let row = RestoreRowButton(
                     L("Jump · %@", label), target: self,
@@ -121,7 +121,7 @@ private final class RestorePopoverController: NSViewController {
             L("New terminal"), target: self,
             action: #selector(restoreInPane))
         let tabButton = RestoreRowButton(
-            L("New workspace"), target: self,
+            L("New tab"), target: self,
             action: #selector(restoreInTab))
         let windowButton = RestoreRowButton(
             L("New window"), target: self,
