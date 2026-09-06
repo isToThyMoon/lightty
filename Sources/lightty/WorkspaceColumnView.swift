@@ -271,6 +271,8 @@ final class WorkspaceColumnView: NSView {
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
             self.applyActivePane(pane.dragIdentifier)
+            // 落点提示：跳转可能伴随工作区切换，多分屏下必须告诉视线去哪
+            pane.flashReveal()
         }
         paneRow.onClose = { [weak pane] in
             pane?.terminal.requestCloseFromUser()
