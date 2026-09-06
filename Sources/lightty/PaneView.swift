@@ -417,27 +417,40 @@ final class PaneView: NSView {
 
     // MARK: - 跳转落点提示
 
-    private var revealFlash: NSView?
+    private var spotlightVeil: NSView?
 
-    /// 从侧栏等处跳转到本 pane 后的落点提示：一圈强调色边框，短暂停留后
-    /// 淡出。多分屏下光标/焦点变化太安静，视线需要一个一次性的锚。
+    /// 从侧栏/菜单栏/搜索等处跳转到本 pane 后的落点提示。
+    /// 不给目标加图形（圈线在终端画面里是异物），而是请控制器把同工作区
+    /// 其余 pane 短暂压暗——视线本能落在唯一清晰的那块上。做减法的聚光灯，
+    /// 与内核的 unfocused-split-opacity 同一门语言。
     func flashReveal() {
-        revealFlash?.removeFromSuperview()
-        let flash = ShellPassthroughView(frame: bounds)
-        flash.autoresizingMask = [.width, .height]
-        flash.wantsLayer = true
-        flash.layer?.borderWidth = 3
-        flash.layer?.borderColor = NSColor.controlAccentColor.cgColor
-        addSubview(flash, positioned: .above, relativeTo: nil)
-        revealFlash = flash
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.9
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            flash.animator().alphaValue = 0
-        }, completionHandler: { [weak self, weak flash] in
-            flash?.removeFromSuperview()
-            if self?.revealFlash === flash { self?.revealFlash = nil }
-        })
+        (window?.windowController as? TerminalWindowController)?.spotlight(on: self)
+    }
+
+    /// 聚光灯的「暗」侧：盖一层终端背景色纱再淡出。用背景色而非黑色，
+    /// 是把内容往各自底色方向压对比，明暗主题都成立（黑纱在浅色主题发脏）。
+    func dimForSpotlight() {
+        spotlightVeil?.removeFromSuperview()
+        let veil = ShellPassthroughView(frame: bounds)
+        veil.autoresizingMask = [.width, .height]
+        veil.wantsLayer = true
+        veil.layer?.backgroundColor = GhosttyRuntime.shared.configValues
+            .backgroundColor.withAlphaComponent(0.4).cgColor
+        addSubview(veil, positioned: .above, relativeTo: nil)
+        spotlightVeil = veil
+        // 纱先停住给视线定位，再收走；直接一条 ease 曲线会淡得太早，
+        // 显式分成「停留 → 淡出」两拍。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self, weak veil] in
+            guard let veil, veil.superview != nil else { return }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.45
+                context.timingFunction = ShellStyle.easeInOutCubic
+                veil.animator().alphaValue = 0
+            }, completionHandler: { [weak self, weak veil] in
+                veil?.removeFromSuperview()
+                if self?.spotlightVeil === veil { self?.spotlightVeil = nil }
+            })
+        }
     }
 
     // MARK: - Ghostty terminal search host
