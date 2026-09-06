@@ -167,10 +167,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         applyTerminalColors()
 
-        // header 整条被 terminal 的 I-beam 光标区覆盖；胶囊与 ✕ 是可点对象
-        HoverCursor.installPointingHand(on: capsule)
-        HoverCursor.installPointingHand(on: closeButton)
-
         addSubview(capsule)
         for v in [dotView, closeButton, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -283,6 +279,14 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private func applyCapsuleFill() {
         capsule.layer?.backgroundColor = terminalForeground
             .withAlphaComponent(capsuleHovered ? 0.10 : 0.05).cgColor
+    }
+
+    /// 整条 header 都可点/可拖（点击选中 pane、胶囊展开面板、拖动移 pane）。
+    /// 这里不用 HoverCursor：header 与 terminal 的 I-beam 光标区相邻，跨界时
+    /// cursor rect 的「离开还原箭头」晚于 tracking area 的设置，手型会被盖掉
+    /// （探针实测）。加入同一套 cursor rect 机制后，交接由窗口原子完成。
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 
     override func updateTrackingAreas() {
