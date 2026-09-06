@@ -19,6 +19,8 @@ enum PaneFocus {
             window.makeKeyAndOrderFront(nil)
         }
         match.controller.reveal(pane: match.pane)
+        // 落点提示：从菜单栏/通知跳过来，多分屏下必须告诉视线去哪
+        match.pane.flashReveal()
         // 用户已经亲眼看到这个 pane 了，done 的粘滞在此终结
         PaneStatusStore.shared.markRead(paneID)
         return true
