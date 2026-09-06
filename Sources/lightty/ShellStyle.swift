@@ -181,43 +181,47 @@ final class HoverCursor: NSResponder {
     }
 }
 
-/// hover 自愈哨兵：视图随侧栏滑动从静止指针下经过时，AppKit 会连发 mouseEntered
-/// 却不补 mouseExited（之后指针真正移走也不再发），hover 底就永久卡住。
-/// hover 期间低频自查指针是否仍在视图内，不在就宣告失去 hover。只在 hover 时跑。
-final class HoverSentinel {
-    private var timer: Timer?
+/// 侧栏滑动期间的 hover 闸门。视图随侧栏滑动从静止指针下经过时，AppKit 会连发
+/// mouseEntered 却不补 mouseExited：既闪一串瞬态 hover，还会永久卡住。
+/// 根治：滑动期间闸门关闭，hover 控件一律忽略 entered；滑动结束再让每个控件
+/// 按指针实际位置重算一次 hover，并重建 tracking area 清掉 AppKit 的陈旧内外态。
+enum ShellHoverGate {
+    private(set) static var suppressed = false
 
-    func watch(_ view: NSView, onLost: @escaping () -> Void) {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) {
-            [weak view] timer in
-            guard let view, let window = view.window else {
-                timer.invalidate()
-                onLost()
-                return
-            }
-            let local = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            if !view.bounds.contains(local) {
-                timer.invalidate()
-                onLost()
-            }
-        }
+    static func suppress() { suppressed = true }
+
+    static func release(in window: NSWindow?) {
+        suppressed = false
+        guard let root = window?.contentView?.superview else { return }
+        resync(root)
     }
 
-    func stop() {
-        timer?.invalidate()
-        timer = nil
+    private static func resync(_ view: NSView) {
+        (view as? HoverResyncing)?.resyncHover()
+        view.subviews.forEach { resync($0) }
+    }
+}
+
+protocol HoverResyncing: AnyObject {
+    /// 闸门放开时调用：按指针当前位置决定 hover 态，并重建 tracking area。
+    func resyncHover()
+}
+
+extension NSView {
+    /// 指针此刻是否压在本视图上（只在 key window 里算数，与 .activeInKeyWindow 一致）
+    var shellPointerInside: Bool {
+        guard let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor else { return false }
+        return bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 }
 
 /// Codex 风格的无边框图标按钮：默认安静，hover/按下时才出现圆角底。
 /// 命中区是完整 bounds（28pt 模数），但底色只画在字形周围的内嵌块上
 /// （四边各缩 fillInset）：整块铺灰会让小字形显得被一大片灰底吞掉。
-final class ShellIconButton: NSButton {
+final class ShellIconButton: NSButton, HoverResyncing {
     private static let fillInset: CGFloat = 3
     private let fillLayer = CALayer()
     private var tracking: NSTrackingArea?
-    private let sentinel = HoverSentinel()
     private var isHovered = false { didSet { updateAppearance() } }
 
     var isActive = false { didSet { updateAppearance() } }
@@ -279,13 +283,17 @@ final class ShellIconButton: NSButton {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !ShellHoverGate.suppressed else { return }
         setHovered(true)
-        sentinel.watch(self) { [weak self] in self?.setHovered(false) }
     }
 
     override func mouseExited(with event: NSEvent) {
-        sentinel.stop()
         setHovered(false)
+    }
+
+    func resyncHover() {
+        updateTrackingAreas()
+        setHovered(shellPointerInside)
     }
 
     private func setHovered(_ hovered: Bool) {

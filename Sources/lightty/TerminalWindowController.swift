@@ -70,6 +70,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             completion?()
             return
         }
+        // 滑动期间关掉 hover：控件从静止指针下经过会闪一串瞬态 hover
+        // （并因 AppKit 漏发 exited 而卡住）。驱动器停下时放开并重算。
+        ShellHoverGate.suppress()
         let terminals = panes().map(\.terminal)
         terminals.forEach { $0.setPromptClearOnResize(false) }
         let starts = targets.map { $0.0.constant }
@@ -129,6 +132,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarLayoutAnimationTimer?.invalidate()
         sidebarLayoutAnimationTimer = nil
         sidebarAnimationStep = nil
+        // 完成或被打断都算滑动结束（打断者会立刻再次关闸）
+        ShellHoverGate.release(in: window)
     }
 
     private weak var titlebarChrome: NSView?
