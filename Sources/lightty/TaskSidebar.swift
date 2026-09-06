@@ -219,6 +219,11 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView.headerView = nil
         tableView.dataSource = self
         tableView.delegate = self
+        // 关掉系统的 inset 表格样式：它给 cell 两侧各塞 16pt 内衬，而行高亮
+        // （ShellTableRowView 自绘）是全宽的，行尾的 ⋯ 就离行右缘一截。
+        // 行内衬由 cell 约束自己定。
+        tableView.style = .plain
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.rowHeight = 48
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
         tableView.backgroundColor = .clear
@@ -379,8 +384,9 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             cell.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            // 行内衬 10：圆点落在内容左轴 20（滚动区缘 10 + 10）
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+            // 行内衬 16：圆点落在卡片左轴 26（滚动区缘 10 + 16），比小节标签的 20
+            // 缩进一级
+            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 16),
             dot.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
@@ -393,7 +399,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
 
-            detailButton.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -7),
+            detailButton.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
             detailButton.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             detailButton.widthAnchor.constraint(equalToConstant: 26),
             detailButton.heightAnchor.constraint(equalToConstant: 26),
