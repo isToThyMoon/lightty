@@ -182,7 +182,11 @@ final class HoverCursor: NSResponder {
 }
 
 /// Codex 风格的无边框图标按钮：默认安静，hover/按下时才出现圆角底。
+/// 命中区是完整 bounds（28pt 模数），但底色只画在字形周围的内嵌块上
+/// （四边各缩 fillInset）：整块铺灰会让小字形显得被一大片灰底吞掉。
 final class ShellIconButton: NSButton {
+    private static let fillInset: CGFloat = 3
+    private let fillLayer = CALayer()
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { updateAppearance() } }
 
@@ -201,14 +205,21 @@ final class ShellIconButton: NSButton {
         toolTip = accessibilityLabel
         wantsLayer = true
         HoverCursor.installPointingHand(on: self)
-        layer?.cornerRadius = ShellStyle.controlCornerRadius
+        fillLayer.cornerRadius = ShellStyle.controlCornerRadius - Self.fillInset
+        fillLayer.actions = ["backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        layer?.insertSublayer(fillLayer, at: 0)
         contentTintColor = ShellStyle.secondaryText
-        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .medium)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .medium)
         setButtonType(.momentaryChange)
         updateAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        fillLayer.frame = bounds.insetBy(dx: Self.fillInset, dy: Self.fillInset)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -232,7 +243,7 @@ final class ShellIconButton: NSButton {
     }
 
     override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = ShellStyle.pressedFill.shellResolvedCGColor(for: effectiveAppearance)
+        fillLayer.backgroundColor = ShellStyle.pressedFill.shellResolvedCGColor(for: effectiveAppearance)
         super.mouseDown(with: event)
         updateAppearance()
     }
@@ -246,7 +257,7 @@ final class ShellIconButton: NSButton {
         let fill: NSColor = isHovered
             ? ShellStyle.pressedFill
             : (isActive ? ShellStyle.selectionFill : .clear)
-        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
+        fillLayer.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
         contentTintColor = (isHovered || isActive) ? ShellStyle.primaryText : ShellStyle.secondaryText
     }
 }
