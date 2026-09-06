@@ -415,6 +415,31 @@ final class PaneView: NSView {
         window?.makeFirstResponder(terminal)
     }
 
+    // MARK: - 跳转落点提示
+
+    private var revealFlash: NSView?
+
+    /// 从侧栏等处跳转到本 pane 后的落点提示：一圈强调色边框，短暂停留后
+    /// 淡出。多分屏下光标/焦点变化太安静，视线需要一个一次性的锚。
+    func flashReveal() {
+        revealFlash?.removeFromSuperview()
+        let flash = ShellPassthroughView(frame: bounds)
+        flash.autoresizingMask = [.width, .height]
+        flash.wantsLayer = true
+        flash.layer?.borderWidth = 3
+        flash.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        addSubview(flash, positioned: .above, relativeTo: nil)
+        revealFlash = flash
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.9
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            flash.animator().alphaValue = 0
+        }, completionHandler: { [weak self, weak flash] in
+            flash?.removeFromSuperview()
+            if self?.revealFlash === flash { self?.revealFlash = nil }
+        })
+    }
+
     // MARK: - Ghostty terminal search host
 
     func startTerminalSearch(needle: String?) {
