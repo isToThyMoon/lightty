@@ -159,10 +159,12 @@ enum HookInstaller {
         let isAgentPresent: Bool
         let executablePath: String?
         let state: State
-        /// 已装，但装进去的是旧内容（**这个 agent 自己的**事件表变过）。
+        /// 已装，但装进去的是旧内容。触发它的不只是事件表：**这个 agent 自己的**
+        /// hooks、两家共用的那份 `SKILL.md`、以及这个 agent 自己的两份清单，
+        /// 任何一样变了都会（见 `HookMarketplace.version(hooks:skill:manifests:)`）。
         /// 两家都在安装时拷贝插件，改 marketplace 不会自动生效，得让 CLI 再跑一次。
         let needsUpdate: Bool
-        /// 该 agent 当前应装的插件版本，`0.1.0+<自己那份 hooks 的哈希>`
+        /// 该 agent 当前应装的插件版本，`0.1.0+<内容哈希>`——哈希喂的是上面那三样。
         let version: String
     }
 
@@ -211,6 +213,20 @@ enum HookInstaller {
         return Report(
             agent: agent, isAgentPresent: true, executablePath: executable,
             state: state, needsUpdate: needsUpdate, version: version)
+    }
+
+    /// 这一家的 CLI 现在能不能调起我们那个交接技能。
+    ///
+    /// **`state == .installed` 不够**，必须同时 `!needsUpdate`：两家 CLI 在安装时把
+    /// 插件**拷贝**进自己的缓存，`needsUpdate` 为真意味着缓存里那份是旧的——技能是
+    /// 后加的，旧缓存里根本没有 `skills/` 目录。而技能名不认识时两家都**静默失败**：
+    /// 什么都不会发生，也没有任何报错可供我们发现。
+    ///
+    /// 这条判断错了的代价，正是这次设计要消灭的那个失败，所以它单独成函数而不是
+    /// 写在调用点：`Context` 可注入，于是它测得到。
+    static func handoffSkillAvailable(for agent: SessionAgent, in context: Context = .live) -> Bool {
+        let report = report(for: HookAgent(agent), in: context)
+        return report.state == .installed && !report.needsUpdate
     }
 
     static func reports(in context: Context = .live) -> [Report] {
@@ -390,6 +406,17 @@ enum HookInstaller {
 enum HookAgent: String, CaseIterable, Sendable {
     case claudeCode
     case codex
+
+    /// 会话侧的 agent 身份 → 插件安装侧的同一家。两个枚举分开是因为两侧的取值
+    /// 来源不同（会话来自各家的归档目录，安装来自我们自己的注册表），但家数一样。
+    /// 用 switch 而不是 `agent == .codex ? … : …`：这个映射的全部意义就是「映错了
+    /// 是静默失败」，将来多一家 agent 时必须是编译错误，而不是默默被当成 Claude Code。
+    init(_ agent: SessionAgent) {
+        switch agent {
+        case .claude: self = .claudeCode
+        case .codex: self = .codex
+        }
+    }
 
     /// PATH 上的可执行文件名
     var executableName: String {

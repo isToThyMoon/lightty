@@ -3,7 +3,7 @@ import LighttyCore
 
 /// pane 聚焦的唯一入口：菜单栏菜单项与系统通知点击共用一份实现。
 ///
-/// 放在这里而不是各自复制一份，是因为「激活 app → 还原最小化 → 切工作区 →
+/// 放在这里而不是各自复制一份，是因为「激活 app → 还原最小化 → 切标签页 →
 /// 交还终端焦点 → 标记已读」这串顺序有讲究（后台 tab 的 pane 成不了
 /// first responder，必须先 `selectTab` 再 `focusTerminal`），两处走岔会出
 /// 难查的焦点 bug。
@@ -44,7 +44,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
 
     /// 见 `scheduleRefresh()`：合并同一 runloop tick 内的多次状态变更
-    private var refreshScheduled = false
     /// 菜单打开期间才需要即时重建；关着的时候交给 `menuNeedsUpdate`
     private var menuIsOpen = false
     private var installed = false
@@ -59,7 +58,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func install() {
         guard !installed else { return }
         installed = true
-        UserDefaults.standard.register(defaults: [Self.enabledDefaultsKey: true])
+        FilePreferences.shared.register(defaults: [Self.enabledDefaultsKey: true])
         menu.delegate = self
         // 分节标题要保持灰掉，不能被 AppKit 的自动 enable 逻辑点亮
         menu.autoenablesItems = false
@@ -72,11 +71,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - 开关
 
     var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
+        FilePreferences.shared.bool(forKey: Self.enabledDefaultsKey)
     }
 
     func setEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: Self.enabledDefaultsKey)
+        FilePreferences.shared.set(enabled, forKey: Self.enabledDefaultsKey)
         applyEnabledState()
     }
 
@@ -88,7 +87,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard turningOff else { return }
         // 关掉后菜单栏上什么都不剩，不说明一句用户会以为 app 坏了
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = L("Menu bar status hidden")
             alert.informativeText = L("You can show it again from the lightty menu.")
             alert.addButton(withTitle: L("OK"))
@@ -114,18 +113,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - 刷新
 
     /// `PreToolUse` 每次工具调用都触发一次状态变更，高频。这里照
-    /// `WorkspaceColumnView.scheduleReload()` 的写法压到下一个 runloop tick，
+    /// `TabColumnView.scheduleReload()` 的写法压到下一个 runloop tick，
     /// 一串连续事件只重建一次。
     ///
     /// 标志位没加锁：契约规定 `lighttyPaneStatusDidChange` 由 store 在主线程 post。
-    @objc private func scheduleRefresh() {
-        guard !refreshScheduled else { return }
-        refreshScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshScheduled = false
-            self?.refresh()
-        }
-    }
+    private lazy var refreshes = Coalescer(.nextTick) { [weak self] in self?.refresh() }
+    @objc private func scheduleRefresh() { refreshes.schedule() }
 
     private func refresh() {
         updateIcon()
@@ -239,14 +232,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         var listed = 0
 
         for (windowIndex, controller) in controllers.enumerated() {
-            let overview = controller.workspaceOverview().filter { !$0.panes.isEmpty }
+            let overview = controller.tabOverview().filter { !$0.panes.isEmpty }
             guard !overview.isEmpty else { continue }
             if multiWindow { addSectionHeader(L("Window %d", windowIndex + 1)) }
-            // 菜单栏空间更紧：单工作区时仍直接平铺；侧栏则始终保留可折叠容器行。
-            let showWorkspaces = overview.count > 1
+            // 菜单栏空间更紧：单标签页时仍直接平铺；侧栏则始终保留可折叠容器行。
+            let showTabs = overview.count > 1
             for entry in overview {
-                if showWorkspaces { addSectionHeader(entry.title) }
-                let indent = (multiWindow ? 1 : 0) + (showWorkspaces ? 1 : 0)
+                if showTabs { addSectionHeader(entry.title) }
+                let indent = (multiWindow ? 1 : 0) + (showTabs ? 1 : 0)
                 for pane in entry.panes {
                     menu.addItem(paneItem(for: pane, indent: indent))
                     listed += 1
@@ -265,7 +258,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let markAll = NSMenuItem(
             title: L("Mark All as Read"), action: #selector(markAllRead), keyEquivalent: "")
         markAll.target = self
-        markAll.isEnabled = PaneStatusStore.shared.unreadCount > 0
+        markAll.isEnabled = PaneStatusStore.shared.hasUnreadReminders
         menu.addItem(markAll)
 
         let toggle = NSMenuItem(
@@ -302,7 +295,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         item.indentationLevel = indent
         item.attributedTitle = paneTitle(for: pane, status: status)
         // 完整信息（工具名 + detail）走 tooltip，与 pane 头同一份文案
-        item.toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
+        item.toolTip = TabPaneStatusPresentation.detailLine(for: status)
         return item
     }
 
@@ -313,7 +306,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             string: name.isEmpty ? L("Pane") : name, attributes: [.font: font])
         // 状态文字与侧栏同一套三档文案；上状态色而不是灰，与圆点互为呼应，
         // 也和后面灰色的任务名拉开层次。
-        if let status, let text = WorkspacePaneStatusPresentation.text(for: status) {
+        if let status, let text = TabPaneStatusPresentation.text(for: status) {
             title.append(NSAttributedString(
                 string: "  \(text)",
                 attributes: [

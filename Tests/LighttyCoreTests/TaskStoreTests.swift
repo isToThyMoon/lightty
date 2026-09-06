@@ -24,6 +24,36 @@ final class TaskStoreTests: XCTestCase {
 
     // MARK: - create
 
+    func testArchiveRestorePreservesExistingTaskAndRejectsOutsideDeletion() throws {
+        let store = makeStore()
+        let first = try store.create(name: "same", workdir: "/x")
+        let archived = try store.archive(at: first.fileURL)
+        let second = try store.create(name: "same", workdir: "/y")
+        XCTAssertEqual(try store.archivedFiles().map { $0.resolvingSymlinksInPath().path },
+                       [archived.resolvingSymlinksInPath().path])
+        let restored = try store.restoreArchived(at: archived)
+        XCTAssertNotEqual(restored, second.fileURL)
+        XCTAssertEqual(try store.load(at: second.fileURL).workdir, "/y")
+        XCTAssertEqual(try store.load(at: restored).workdir, "/x")
+        XCTAssertThrowsError(try store.permanentlyDeleteArchived(at: second.fileURL))
+        let again = try store.archive(at: restored)
+        try store.permanentlyDeleteArchived(at: again)
+        XCTAssertTrue(try store.archivedFiles().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.fileURL.path))
+    }
+
+    func testArchiveRejectsSymlinkToActiveTask() throws {
+        let store = makeStore()
+        let task = try store.create(name: "safe", workdir: "/x")
+        try FileManager.default.createDirectory(at: store.archiveDirectory, withIntermediateDirectories: true)
+        let link = store.archiveDirectory.appendingPathComponent("link.md")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: task.fileURL)
+        XCTAssertThrowsError(try store.permanentlyDeleteArchived(at: link))
+        XCTAssertThrowsError(try store.restoreArchived(at: link))
+        XCTAssertTrue(try store.archivedFiles().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.fileURL.path))
+    }
+
     func testCreateWritesSanitizedFile() throws {
         let store = makeStore()
         let created = try store.create(name: "修 a/b: 会话  管理", workdir: "/Users/me/p", tool: "claude")

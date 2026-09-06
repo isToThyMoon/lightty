@@ -27,7 +27,7 @@ window-height = 50
 link-url = true
 
 # Cursor
-cursor-style = bar
+cursor-style = block
 cursor-style-blink = false
 cursor-opacity = 1.0
 

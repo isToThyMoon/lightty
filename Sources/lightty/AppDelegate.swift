@@ -5,7 +5,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 应用内更新（Sparkle）。只在打包形态下启动：SUFeedURL 由打包脚本写进
     /// Info.plist，swift build 的裸可执行没有它，此时保持 nil、菜单项不出现。
     private var updaterController: SPUStandardUpdaterController?
+    private var aboutWindowController: AboutWindowController?
 
+    private var textEditingShortcuts: TextEditingShortcuts?
     private var shiftTapMonitor: Any?
     private var lastShiftTap: TimeInterval = 0
     private weak var fontDownloadMenuItem: NSMenuItem?
@@ -15,9 +17,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFontDownloadPreviewMode = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(self, selector: #selector(preferencesStorageFailed),
+            name: FilePreferences.failureNotification, object: FilePreferences.shared)
+        if FilePreferences.shared.lastError != nil {
+            DispatchQueue.main.async { [weak self] in self?.preferencesStorageFailed() }
+        }
+        AppearancePreference.apply()
+        AgentLaunchPreference.migrateLegacyCommands()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
+        textEditingShortcuts = TextEditingShortcuts()
         installShiftTapMonitor()
+        // 语言 / 终端主题在设置页改了之后菜单文案与勾选态要跟上：整份重建。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(rebuildMenuForPreferences),
+            name: .lighttyPreferencesDidChange, object: nil)
         if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
             updaterController = SPUStandardUpdaterController(
                 startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
@@ -33,13 +47,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 两者都幂等、都不在这里申请通知权限（首次真要发通知时才问）。
         StatusBarController.shared.install()
         PaneNotifier.shared.install()
-        // 把状态推给 pane 头与工作区侧栏。做成外部推送而不是每个 pane 自己订阅，
-        // 是为了让 PaneView 不需要知道状态体系的存在。
-        PaneStatusPresenter.shared.install()
+        // Session data has application lifetime; opening a sidebar never bootstraps it.
+        AppState.shared.sessionLibrary.start()
         // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
         // LIGHTTY_SOCK，agent 随时可能打第一发；socket 没绑好那一发就发进虚空。
         PaneStatusStore.shared.start()
-        let first = AppState.shared.newWindow()
+        // 会话恢复：上次关窗/退出时的窗口、标签页、pane（含命名、cwd、任务绑定、
+        // agent --resume）。没有快照或快照为空才开默认窗口。
+        let restored = WorkspaceStore.shared.load().map(WorkspaceRestorer.restore) ?? []
+        let first = restored.first ?? AppState.shared.newWindow()
+        // 之后任何结构/命名/状态变化都刷快照（节流合并）
+        for name in [Notification.Name.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(scheduleSessionSave), name: name, object: nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
         // 主动引导：装了 agent 却没装 hook 时才弹，且只弹一次（用户按「暂不」后
         // 只走菜单）。推到下一个 runloop tick：蒙层挂在 themeFrame 上，同步调用时
@@ -85,7 +106,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func scheduleSessionSave() {
+        WorkspaceStore.shared.scheduleSave()
+    }
+
+    @objc private func preferencesStorageFailed() {
+        let alert = AppBranding.makeAlert()
+        alert.messageText = L("Preferences could not be saved.")
+        alert.informativeText = L("Check ~/.lightty/preferences.json and its permissions. An unreadable or newer file will not be overwritten.")
+        alert.runModal()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        FilePreferences.shared.flush()
+        // cmd+Q 等路径窗口还都在，此刻定格会话；关最后一个窗口的路径已在
+        // windowWillClose 定格过（frozen），这里不会覆盖。
+        WorkspaceStore.shared.saveNow()
         // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
         // 但干净退出不该给下一次启动留活。
         PaneStatusStore.shared.stop()
@@ -98,6 +134,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 菜单
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(makeItem(L("New Window"), #selector(dockNewWindow)))
+        menu.addItem(makeItem(L("New Tab"), #selector(dockNewTab)))
+        for controller in AppState.shared?.windowControllers ?? [] {
+            guard controller.tabCount > 0 else { continue }
+            menu.addItem(.separator())
+            controller.appendDockTabItems(to: menu)
+        }
+        return menu
+    }
+
+    @objc private func dockNewWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        newTaskWindow()
+    }
+
+    @objc private func dockNewTab() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let controller = AppState.shared.keyWindowController {
+            controller.window?.deminiaturize(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            controller.hideSettings()
+            if controller.activePane == nil {
+                controller.addTab(initialPane: PaneView())
+                return
+            }
+        }
+        newTaskTab()
+    }
+
     private func buildMenu() {
         let mainMenu = NSMenu()
 
@@ -106,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.delegate = self
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: L("About lightty"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(makeItem(L("About lightty"), #selector(showAbout)))
         if let updaterController {
             let check = NSMenuItem(
                 title: L("Check for Updates…"),
@@ -116,14 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appMenu.addItem(check)
         }
         appMenu.addItem(.separator())
-        appMenu.addItem(makeItem(L("Agent status hooks"), #selector(showHookSetup)))
-        let themeToggle = NSMenuItem(
-            title: L("Use Lightty Theme"),
-            action: #selector(toggleBuiltInTheme(_:)),
-            keyEquivalent: "")
-        themeToggle.target = self
-        themeToggle.state = TerminalThemePreference.usesBuiltInTheme() ? .on : .off
-        appMenu.addItem(themeToggle)
+        appMenu.addItem(makeItem(L("Settings…"), #selector(showSettings)))
+        appMenu.addItem(.separator())
         let fontDownload = NSMenuItem(
             title: L("Download Maple Mono NF CN…"),
             action: #selector(downloadLighttyFont(_:)),
@@ -154,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // keybind（含默认 cmd+N/T/D/W、cmd+[]、cmd+alt+方向等）匹配后经 action_cb 回来。
         // 菜单项仅供鼠标点选。
         taskMenu.addItem(makeItem(L("New Task (New Window)"), #selector(newTaskWindow)))
-        taskMenu.addItem(makeItem(L("New Task (New Workspace)"), #selector(newTaskTab)))
+        taskMenu.addItem(makeItem(L("New Task (New Tab)"), #selector(newTaskTab)))
         taskMenu.addItem(.separator())
         taskMenu.addItem(makeItem(L("Split Pane Right"), #selector(splitRight)))
         taskMenu.addItem(makeItem(L("Split Pane Down"), #selector(splitDown)))
@@ -163,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 任务侧栏由标题栏按钮的 hover / click 驱动。不得占用 cmd+K：它属于
         // Ghostty 默认 keybind `super+k=clear_screen`，必须直达 surface/core。
         taskMenu.addItem(makeItem(L("Task Sidebar"), #selector(toggleSidebar)))
-        taskMenu.addItem(makeItem(L("Workspace Sidebar"), #selector(toggleWorkspaceSidebar)))
+        taskMenu.addItem(makeItem(L("Tab Sidebar"), #selector(toggleTabSidebar)))
 
         NSApp.mainMenu = mainMenu
     }
@@ -177,6 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - actions
+
+    @objc private func showAbout() {
+        if aboutWindowController == nil { aboutWindowController = AboutWindowController() }
+        aboutWindowController?.present()
+    }
 
     @objc private func newTaskWindow() {
         guard let terminal = AppState.shared.keyWindowController?.activePane?.terminal else {
@@ -209,16 +275,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .performBindingAction("close_surface")
     }
 
-    @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
-    @objc private func toggleWorkspaceSidebar() {
-        AppState.shared.keyWindowController?.toggleWorkspaceSidebar()
+    @objc private func showSettings() {
+        guard let controller = AppState.shared.keyWindowController else {
+            AppState.shared.newWindow().showSettings()
+            return
+        }
+        controller.showSettings()
     }
 
-    @objc private func toggleBuiltInTheme(_ sender: NSMenuItem) {
-        let enabled = !TerminalThemePreference.usesBuiltInTheme()
-        TerminalThemePreference.setUsesBuiltInTheme(enabled)
-        sender.state = enabled ? .on : .off
-        GhosttyRuntime.shared.reloadGlobalConfig()
+    @objc private func rebuildMenuForPreferences() { buildMenu() }
+
+    @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
+    @objc private func toggleTabSidebar() {
+        AppState.shared.keyWindowController?.toggleTabSidebar()
     }
 
     @objc private func downloadLighttyFont(_ sender: NSMenuItem) {
@@ -261,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessory.addSubview(label)
         accessory.addSubview(progress)
 
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.messageText = preview
             ? L("Previewing Font Download")
             : L("Installing Maple Mono NF CN")
@@ -340,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentFontResult(title: String, detail: String, in window: NSWindow?) {
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.messageText = title
         alert.informativeText = detail
         alert.addButton(withTitle: L("OK"))
@@ -348,10 +417,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { alert.runModal() }
     }
 
-    @objc private func showHookSetup() {
-        guard let controller = AppState.shared.keyWindowController else { return }
-        HookSetupOverlay.present(in: controller)
-    }
 }
 
 extension AppDelegate: NSMenuDelegate {

@@ -46,15 +46,26 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     public let state: PaneActivity
     public let agent: String?
     public let sessionID: String?
+    /// Agent configuration root reported by the hook process, not its working directory.
+    public let sourceRoot: String?
+    public let sourceConfiguration: SessionConfigurationLocation?
+    public let agentProcess: AgentProcessIdentity?
     /// `state == .tool` 时的工具名
     public let tool: String?
     /// 单行摘要（如文件路径）。**读方必须截断**，长度不可信。
     public let detail: String?
     public let cwd: String?
+    /// 原始 hook 事件名（可选）。`state` 把 SessionStart 与 SessionEnd 都折成 idle，
+    /// 会话恢复（重启后 `--resume`）需要分辨 agent 是「刚开场」还是「已退出」，
+    /// 只有这一个字段能说清。旧 hook 不发该字段 → nil，读方按「未知」处理。
+    public let event: String?
 
     enum CodingKeys: String, CodingKey {
-        case v, ts, state, agent, tool, detail, cwd
+        case v, ts, state, agent, tool, detail, cwd, event
         case sessionID = "session_id"
+        case sourceRoot = "source_root"
+        case sourceConfiguration = "source_configuration"
+        case agentProcess = "agent_process"
     }
 
     public init(
@@ -63,18 +74,26 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         state: PaneActivity,
         agent: String? = nil,
         sessionID: String? = nil,
+        sourceRoot: String? = nil,
+        sourceConfiguration: SessionConfigurationLocation? = nil,
+        agentProcess: AgentProcessIdentity? = nil,
         tool: String? = nil,
         detail: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        event: String? = nil
     ) {
         self.v = v
         self.ts = ts
         self.state = state
         self.agent = agent
         self.sessionID = sessionID
+        self.sourceRoot = sourceRoot
+        self.sourceConfiguration = sourceConfiguration
+        self.agentProcess = agentProcess
         self.tool = tool
         self.detail = detail
         self.cwd = cwd
+        self.event = event
     }
 
     // MARK: - 编解码

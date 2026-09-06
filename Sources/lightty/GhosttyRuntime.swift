@@ -15,6 +15,14 @@ struct GhosttyConfigValues {
     var isTransparent: Bool { backgroundOpacity < 1 }
 }
 
+extension Notification.Name {
+    static let ghosttyGlobalConfigDidChange = Notification.Name("ghosttyGlobalConfigDidChange")
+}
+
+enum GhosttyConfigNotification {
+    static let valuesKey = "values"
+}
+
 /// libghostty 生命周期与回调的唯一持有者。
 /// 调用序列与回调约定见 docs/libghostty-embedding.md（钉在 vendor 的 ghostty.h，API 不稳定）。
 final class GhosttyRuntime {
@@ -37,7 +45,7 @@ final class GhosttyRuntime {
             fatalError("ghostty_init failed")
         }
 
-        // 终端配置边界：先加载随包基线，再让 Ghostty 用户配置覆盖它，最后把
+        // 终端配置边界：先加载随包基线，仅在关闭内置配置时允许用户覆盖，最后把
         // finalize 后的同一份 config 原样交给 ghostty_app_new。Lightty 不在壳层
         // 二次解析或改写 terminal 选项。有意跳过 load_cli_args：这里的命令行属于
         // Lightty，而不是 Ghostty.app。
@@ -139,11 +147,14 @@ final class GhosttyRuntime {
     /// 与 Ghostty `+show-config` 可直接 diff 的最小配置探针。
     /// 只用于开发诊断，不参与正常 UI 或配置逻辑。
     var terminalConfigProbe: String {
+        var cursorStyle: UnsafePointer<CChar>?
+        _ = Self.get(loadedConfig, &cursorStyle, "cursor-style")
         let values = [
             "background = \(configValues.backgroundColor.hexRGB)",
             "foreground = \(configValues.foregroundColor.hexRGB)",
             "background-opacity = \(configValues.backgroundOpacity)",
             "background-blur = \(configValues.backgroundBlur)",
+            "cursor-style = \(cursorStyle.map { String(cString: $0) } ?? "unknown")",
         ]
         let diagnostics = configDiagnostics.map { "diagnostic = \($0)" }
         return (values + diagnostics).joined(separator: "\n")
@@ -158,9 +169,8 @@ final class GhosttyRuntime {
         reloadConfig(surface: nil, soft: false)
     }
 
-    /// 启动与 reload 共用的唯一配置入口。普通随包配置只提供缺省值，用户的
-    /// 全局配置与递归 config-file 均可覆盖它；勾选内置主题时，仅把 `theme`
-    /// 选择在用户配置之后重放，不接管其他 terminal 选项。
+    /// 启动与 reload 共用的唯一配置入口。内置模式不加载用户配置；关闭后，
+    /// 用户全局配置及递归 config-file 可覆盖随包基线。
     private static func loadGlobalConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
 
@@ -169,13 +179,9 @@ final class GhosttyRuntime {
             return nil
         }
 
-        ghostty_config_load_default_files(config)
-        ghostty_config_load_recursive_files(config)
-
-        if TerminalThemePreference.usesBuiltInTheme(),
-           !loadBundledConfig(named: "lightty-theme", into: config) {
-            ghostty_config_free(config)
-            return nil
+        if !TerminalThemePreference.usesBuiltInTheme() {
+            ghostty_config_load_default_files(config)
+            ghostty_config_load_recursive_files(config)
         }
 
         ghostty_config_finalize(config)
@@ -228,11 +234,16 @@ final class GhosttyRuntime {
             return target.target.surface
         }
 
-        func targetView() -> TerminalSurfaceView? {
+        // 目标视图在回调的同步阶段就解析好：多数动作把真正的工作推到主队列异步块里，
+        // 块执行时 surface 可能已经随 pane 释放（ghostty_surface_free），那时再拿
+        // target 里的裸指针去问 userdata 就是 use-after-free（测试里关窗后崩过）。
+        // 闭包持有的是 Swift 对象强引用，块跑完前视图与其 surface 都活着。
+        let resolvedTargetView: TerminalSurfaceView? = {
             guard let surface = targetSurface(),
                   let userdata = ghostty_surface_userdata(surface) else { return nil }
             return Unmanaged<TerminalSurfaceView>.fromOpaque(userdata).takeUnretainedValue()
-        }
+        }()
+        func targetView() -> TerminalSurfaceView? { resolvedTargetView }
 
         // target surface → (窗口控制器, pane)
         func locate() -> (TerminalWindowController, PaneView)? {
@@ -392,7 +403,8 @@ final class GhosttyRuntime {
                 // 无论是否满足单 pane 单 tab 的调整条件，此刻都必须显形。
                 defer { controller.revealWindowIfNeeded() }
                 guard controller.panes().count == 1,
-                      controller.tabCount == 1 else { return }
+                      controller.tabCount == 1,
+                      !controller.suppressesInitialSize else { return }
                 window.setContentSize(NSSize(
                     width: CGFloat(size.width),
                     height: CGFloat(size.height) + PaneHeaderView.height))
@@ -558,7 +570,7 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_SET_TAB_TITLE:
-            // tab = 工作区，名字归用户所有（双击标签改）；OSC 不允许覆盖。
+            // tab = 标签页，名字归用户所有（双击标签改）；OSC 不允许覆盖。
             return true
 
         case GHOSTTY_ACTION_PROMPT_TITLE:
@@ -620,6 +632,9 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_COMMAND_FINISHED:
+            guard let view = targetView() else { return false }
+            let finishedAt = Date()
+            DispatchQueue.main.async { [weak view] in view?.commandFinished(at: finishedAt) }
             return true
 
         // MARK: - 进度
@@ -646,7 +661,12 @@ final class GhosttyRuntime {
                 }
             } else {
                 DispatchQueue.main.async {
-                    GhosttyRuntime.shared?.configValues = values
+                    guard let runtime = GhosttyRuntime.shared else { return }
+                    runtime.configValues = values
+                    NotificationCenter.default.post(
+                        name: .ghosttyGlobalConfigDidChange,
+                        object: runtime,
+                        userInfo: [GhosttyConfigNotification.valuesKey: values])
                 }
             }
             return true
@@ -804,7 +824,7 @@ final class GhosttyRuntime {
             let trustedSchemes = ["http", "https", "mailto"]
             if !trustedSchemes.contains(url.scheme?.lowercased() ?? "") {
                 DispatchQueue.main.async {
-                    let alert = NSAlert()
+                    let alert = AppBranding.makeAlert()
                     alert.messageText = L("Open terminal link?")
                     alert.informativeText = value
                     alert.alertStyle = .warning
@@ -939,7 +959,7 @@ final class GhosttyRuntime {
         let contents = String(cString: string)
         DispatchQueue.main.async { [weak view] in
             guard let view, let surface = view.surface else { return }
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ
                 ? L("Allow terminal to read the clipboard?")
                 : L("Paste from clipboard?")
@@ -988,7 +1008,7 @@ final class GhosttyRuntime {
                 apply()
                 return
             }
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = L("Allow terminal to write to the clipboard?")
             alert.informativeText = String(text.prefix(500))
             alert.alertStyle = .warning

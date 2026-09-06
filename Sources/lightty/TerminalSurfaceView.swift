@@ -21,6 +21,16 @@ struct TerminalSurfaceConfiguration {
     /// 全局环境里塞东西。`inheriting` 初始化器不复制本字段——新 pane 必须拿到
     /// 属于自己的 id，继承反而是错的。
     var envVars: [String: String] = [:]
+    /// agent 启动/会话续接命令（如 `codex resume <id>`）。**不再走 libghostty 的
+    /// `initial_input`**：那是在 shell 起来之前写进 pty 的预输入，会被 shell 初始化
+    /// （starship 等）在恢复多 pane 同时启动时冲掉（实测 2026-09-07）。改为等 shell
+    /// 就绪（首个 OSC 7 报 cwd）后用 `sendText` 发，可靠得多。
+    /// `inheriting` 不复制，普通新建或分屏不应重复执行已有 pane 的启动命令。
+    ///
+    /// 存的是「要执行什么」而不是一行现成文本：拼命令的规则集中在 AgentCommand，
+    /// 每个建 pane 的入口只需要说明自己属于哪一类。
+    var command: AgentCommand = .none
+    var initialInput: String? { command.shellInput }
 
     init() {}
 
@@ -60,6 +70,7 @@ struct TerminalSurfaceConfiguration {
         }
 
         if let workingDirectory { config.working_directory = borrow(workingDirectory) }
+        // initialInput 不再作为 libghostty 预输入（见字段注释）；改在 shell 就绪后 sendText。
 
         var pairs = envVars.map {
             ghostty_env_var_s(key: borrow($0.key), value: borrow($0.value))
@@ -86,6 +97,9 @@ final class TerminalSurfaceView: NSView {
     /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
+    /// Viewing is a user event, not a focus-state transition: clicking/typing in an
+    /// already-focused terminal must acknowledge a completion received since then.
+    var onInteraction: (() -> Void)?
     var onWorkingDirectoryChange: ((String?) -> Void)?
 
     private(set) var currentWorkingDirectory: String?
@@ -108,14 +122,26 @@ final class TerminalSurfaceView: NSView {
     private(set) var cellSize: NSSize = .zero
 
     private var terminalCursor = NSCursor.arrow
-    private let launchConfiguration: TerminalSurfaceConfiguration
+    let launchConfiguration: TerminalSurfaceConfiguration
 
     override var acceptsFirstResponder: Bool { true }
+
+    /// 待 shell 就绪后要发的 agent 启动/续接命令；发一次即清。
+    private var pendingReadyInput: String?
+    private var sentReadyInput = false
+    var onCommandFinished: ((Date) -> Void)?
+
+    /// Shell integration reports command completion, not arbitrary terminal text.
+    func commandFinished(at date: Date) {
+        guard launchConfiguration.initialInput == nil || sentReadyInput else { return }
+        onCommandFinished?(date)
+    }
 
     init(configuration: TerminalSurfaceConfiguration = .init()) {
         launchConfiguration = configuration
         currentWorkingDirectory = Self.normalizedWorkingDirectory(
             configuration.workingDirectory)
+        pendingReadyInput = configuration.initialInput
         super.init(frame: .zero)
     }
 
@@ -206,6 +232,12 @@ final class TerminalSurfaceView: NSView {
 
     /// 壳层明确请求向 PTY 注入文本的边界（「收工」/「注入」）。
     /// 这不参与键盘事件或快捷键配置。
+    ///
+    /// **这一支是「粘贴」，不是「打字」**——core 里 `ghostty_surface_text` 直接走
+    /// `completeClipboardPaste`（见 `vendor/ghostty/src/apprt/embedded.zig` 的注释
+    /// 与 `Surface.zig` 的 `textCallback`）。于是文本里的回车对开着括号粘贴模式的
+    /// 程序（agent 的 TUI 就是）只是「插入一个换行」，不是「提交」。
+    /// 要提交必须另外按一次回车键：`sendReturn()`。
     func sendText(_ text: String) {
         guard let surface else { return }
         let bytes = Array(text.utf8)
@@ -215,6 +247,29 @@ final class TerminalSurfaceView: NSView {
                 ghostty_surface_text(surface, $0, UInt(buffer.count))
             }
         }
+    }
+
+    /// 按一次回车键——和用户真的按下去走同一条路（`ghostty_surface_key`），
+    /// 所以用户自己配在回车上的绑定照样生效，编码也仍然由 core 决定。
+    ///
+    /// 为什么不能把回车拼进 `sendText`：那一支是粘贴，粘进去的回车不提交（见上）。
+    /// 文本不带 `text`：回车是 C0 控制字符，交给 core 按键码编码，
+    /// Kitty 键盘协议才看得到物理键——与 `keyAction` 同一条规则。
+    @discardableResult
+    func sendReturn() -> Bool {
+        guard let surface else { return false }
+        var event = ghostty_input_key_s()
+        event.action = GHOSTTY_ACTION_PRESS
+        event.keycode = 0x24 // kVK_Return，与 vendor 的键码表一致
+        event.text = nil
+        event.composing = false
+        event.mods = GHOSTTY_MODS_NONE
+        event.consumed_mods = GHOSTTY_MODS_NONE
+        event.unshifted_codepoint = 0x0D
+        let handled = ghostty_surface_key(surface, event)
+        event.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, event)
+        return handled
     }
 
     /// 宿主 UI 把用户操作表达为 Ghostty action 的唯一入口。
@@ -326,20 +381,27 @@ final class TerminalSurfaceView: NSView {
 
     // MARK: - 焦点与 AppKit 局部事件
 
+    func focus() {
+        guard let window else { return }
+        let alreadyFocused = window.firstResponder === self
+        if window.makeFirstResponder(self), alreadyFocused { onInteraction?() }
+    }
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result, let surface {
-            ghostty_surface_set_focus(surface, true)
+        if result {
+            if let surface { ghostty_surface_set_focus(surface, true) }
             onFocusChange?(true)
+            onInteraction?()
         }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result, let surface {
+        if result {
             suppressNextLeftMouseUp = false
-            ghostty_surface_set_focus(surface, false)
+            if let surface { ghostty_surface_set_focus(surface, false) }
             onFocusChange?(false)
         }
         return result
@@ -392,6 +454,7 @@ final class TerminalSurfaceView: NSView {
     // MARK: - 键盘（直接对齐 Ghostty SurfaceView_AppKit）
 
     override func keyDown(with event: NSEvent) {
+        onInteraction?()
         guard let surface else {
             interpretKeyEvents([event])
             return
@@ -781,6 +844,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onInteraction?()
         guard let surface else { return }
         _ = ghostty_surface_mouse_button(
             surface,
@@ -876,6 +940,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        onInteraction?()
         guard let surface else { return }
         var x = event.scrollingDeltaX
         var y = event.scrollingDeltaY
@@ -949,10 +1014,22 @@ final class TerminalSurfaceView: NSView {
     /// core 的 PWD action 来自 OSC 7 / OSC 9 / OSC 1337。OSC 7 在部分 shell
     /// 配置下仍可能是 file URL，壳层统一收敛成可展示的本地路径。
     func setWorkingDirectory(_ rawValue: String) {
+        // 首个 OSC 7 = shell 就绪（precmd 里发的，此刻已在提示符、可接受输入）。
+        // 就绪输入必须在 cwd 比较之前触发：恢复的 pane 首个 OSC 7 常等于初始 cwd，
+        // 会被下面的 guard 挡掉。
+        fireReadyInputIfNeeded()
         let directory = Self.normalizedWorkingDirectory(rawValue)
         guard directory != currentWorkingDirectory else { return }
         currentWorkingDirectory = directory
         onWorkingDirectoryChange?(directory)
+    }
+
+    /// shell 就绪后把 agent 启动/续接命令发进去，发一次即清。surface 未建（极少见）则留待下次。
+    private func fireReadyInputIfNeeded() {
+        guard !sentReadyInput, let command = pendingReadyInput, surface != nil else { return }
+        sentReadyInput = true
+        pendingReadyInput = nil
+        sendText(command)
     }
 
     private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {
@@ -984,14 +1061,16 @@ final class TerminalSurfaceView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
+        onInteraction?()
         performBindingAction("paste_from_clipboard")
     }
 
     @objc func pasteAsPlainText(_ sender: Any?) {
-        performBindingAction("paste_from_clipboard")
+        paste(sender)
     }
 
     @objc func pasteSelection(_ sender: Any?) {
+        onInteraction?()
         performBindingAction("paste_from_selection")
     }
 
@@ -1363,6 +1442,7 @@ extension TerminalSurfaceView: NSTextInputClient {
 
     func insertText(_ string: Any, replacementRange: NSRange) {
         guard NSApp.currentEvent != nil else { return }
+        onInteraction?()
 
         let characters: String
         switch string {

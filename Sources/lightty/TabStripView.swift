@@ -8,7 +8,7 @@ final class TabStripView: NSView {
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
-    /// 双击标签重命名工作区（index, 新名字）。
+    /// 双击标签重命名标签页（index, 新名字）。
     var onRename: ((Int, String) -> Void)?
 
     private let stack = NSStackView()
@@ -18,7 +18,7 @@ final class TabStripView: NSView {
         wantsLayer = true
         applyBackground()
 
-        // 「新工作区」入口固定在工作区侧栏标题行，条内不放重复「+」。
+        // 「新标签页」入口固定在标签页侧栏标题行，条内不放重复「+」。
         stack.orientation = .horizontal
         stack.spacing = 4
         stack.alignment = .centerY
@@ -57,7 +57,7 @@ final class TabStripView: NSView {
             item.onRenameRequest = { [weak self, weak item] in
                 guard let self, let item else { return }
                 NameEditorPopover.present(
-                    from: item, title: L("Rename workspace"), initial: title, confirmLabel: L("Rename")
+                    from: item, title: L("Rename tab"), initial: title, confirmLabel: L("Rename")
                 ) { [weak self] name in
                     self?.onRename?(index, name)
                 }
@@ -93,7 +93,7 @@ private final class TabItemView: NSView {
     init(title: String, isActive: Bool) {
         self.isActive = isActive
         closeButton = ShellIconButton(
-            symbol: "xmark", accessibilityLabel: L("Close workspace"), target: nil, action: nil)
+            symbol: "xmark", accessibilityLabel: L("Close tab"), target: nil, action: nil)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.controlCornerRadius

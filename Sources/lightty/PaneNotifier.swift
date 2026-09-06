@@ -9,7 +9,7 @@ import UserNotifications
 ///    授权框是伏击用户——他还没见过这个功能凭什么授权。改成第一次真的要发
 ///    通知的那一刻才申请。
 /// 2. **必须装 delegate**：不装 `UNUserNotificationCenterDelegate` 时，app 在
-///    前台通知根本不显示。而本功能恰好有「app 在前台但 pane 在别的窗口/工作区」
+///    前台通知根本不显示。而本功能恰好有「app 在前台但 pane 在别的窗口/标签页」
 ///    这一档，没有 delegate 那一档就静默失效了。
 /// 3. **合并**：多个 agent 同时收工必须并成一条，不能刷屏。
 final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
@@ -29,11 +29,10 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var authWaiters: [(Bool) -> Void] = []
     private var authRequestInFlight = false
 
-    /// pane → 上一次见到的状态。只有**跨越**进 done/attention 才提醒，
-    /// 停在 done 上的后续事件不该反复响。
+    /// pane → 上一次见到的未读提醒。只有跨越进未读 done/attention 才提醒；
+    /// 读过的 attention 仍是等待状态，但不再排队发通知。
     private var lastStates: [UUID: PaneActivity] = [:]
     private var pending: [UUID] = []
-    private var flushScheduled = false
     private var installed = false
 
     private override init() { super.init() }
@@ -77,7 +76,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private func seedStates() {
         for (_, pane) in AppState.shared?.runningPanes() ?? [] {
             let id = pane.dragIdentifier
-            lastStates[id] = PaneStatusStore.shared.status(for: id)?.state ?? .idle
+            lastStates[id] = PaneStatusStore.shared.unreadActivity(for: id) ?? .idle
         }
     }
 
@@ -92,7 +91,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         for (controller, pane) in running {
             let id = pane.dragIdentifier
             alive.insert(id)
-            let state = PaneStatusStore.shared.status(for: id)?.state ?? .idle
+            let state = PaneStatusStore.shared.unreadActivity(for: id) ?? .idle
             // 安装时已经把当时所有 pane 录进基线（见 seedStates），所以此刻
             // 第一次见到的 pane 一定是安装之后新建的，它的初始态只能是 idle——
             // 直接跳成 done 是货真价实的跳变，该提醒。
@@ -120,22 +119,20 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
               !window.isMiniaturized,
               window.occlusionState.contains(.visible)
         else { return false }
-        // 后台工作区（tab）里的 pane 没有渲染在屏幕上
-        return controller.workspaceOverview().contains { entry in
+        // 后台标签页（tab）里的 pane 没有渲染在屏幕上
+        return controller.tabOverview().contains { entry in
             entry.isActive && entry.panes.contains { $0 === pane }
         }
     }
 
     // MARK: - 合并与投递
 
+    private lazy var flushes = Coalescer(.after(Self.coalesceWindow)) { [weak self] in self?.flush() }
+
     private func enqueue(_ paneID: UUID) {
+        // 攒的是「哪几个 pane」，合流只管「什么时候投递」——两件事分开。
         if !pending.contains(paneID) { pending.append(paneID) }
-        guard !flushScheduled else { return }
-        flushScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.coalesceWindow) { [weak self] in
-            self?.flushScheduled = false
-            self?.flush()
-        }
+        flushes.schedule()
     }
 
     private func flush() {
@@ -196,8 +193,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         // 合并窗口 + 授权往返期间 pane 可能已被关掉或已读，按当下重新过滤
         let entries: [(name: String, state: PaneActivity)] = ids.compactMap { id in
             guard let match = running.first(where: { $0.pane.dragIdentifier == id }) else { return nil }
-            let state = PaneStatusStore.shared.status(for: id)?.state ?? .idle
-            guard state == .done || state == .attention else { return nil }
+            guard let state = PaneStatusStore.shared.unreadActivity(for: id) else { return nil }
             return (Self.displayName(for: match.pane), state)
         }
         guard !entries.isEmpty else { return }

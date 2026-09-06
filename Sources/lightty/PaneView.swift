@@ -10,26 +10,19 @@ extension Notification.Name {
 /// 因而展开只向左右等量延伸并向下生长。纯几何独立出来供回归测试锁住方向。
 struct PaneIdentityMorphGeometry {
     static func panelFrame(around capsule: NSRect) -> NSRect {
-        NSRect(
-            x: capsule.midX - PaneIdentityPanel.panelWidth / 2,
+        let width = max(PaneIdentityPanel.panelWidth, capsule.width + 16)
+        return NSRect(
+            x: capsule.midX - width / 2,
             y: capsule.maxY - PaneIdentityPanel.maxHeight,
-            width: PaneIdentityPanel.panelWidth,
+            width: width,
             height: PaneIdentityPanel.maxHeight)
-    }
-
-    static func collapsedIslandFrame(capsule: NSRect, panelFrame: NSRect) -> NSRect {
-        NSRect(
-            x: capsule.minX - panelFrame.minX,
-            y: capsule.minY - panelFrame.minY,
-            width: capsule.width,
-            height: capsule.height)
     }
 
     static func expandedIslandFrame(in panelBounds: NSRect, height: CGFloat) -> NSRect {
         NSRect(
             x: 0,
             y: panelBounds.height - height,
-            width: PaneIdentityPanel.panelWidth,
+            width: panelBounds.width,
             height: height)
     }
 }
@@ -37,6 +30,133 @@ struct PaneIdentityMorphGeometry {
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
+    let sessionLibrary: SessionLibrary
+    var sessionState: PaneSessionState {
+        guard let state = sessionLibrary.paneState(for: dragIdentifier) else {
+            preconditionFailure("A live PaneView must be registered in its session model")
+        }
+        return state
+    }
+    private var needsWindowNumber = true
+
+    func assignWindowNumber(_ number: Int) {
+        guard needsWindowNumber else { return }
+        needsWindowNumber = false
+        sessionLibrary.renamePane(dragIdentifier, to: L("Terminal %d", number))
+        applySessionState()
+    }
+
+    @objc private func sessionsDidChange(_ notification: Notification) {
+        guard SessionChange.from(notification)?.panes[dragIdentifier] != nil else { return }
+        applySessionState()
+    }
+
+    /// Rendering has no model mutations or secondary notifications.
+    private func applySessionState() {
+        let state = sessionState
+        let metadataChanged = header.title != state.title || header.sessionAgent != state.sessionKey?.agent
+        if header.sessionAgent != state.sessionKey?.agent { header.sessionAgent = state.sessionKey?.agent }
+        if header.title != state.title { header.title = state.title }
+        header.apply(state.status, isUnread: state.isUnread)
+        if metadataChanged { refreshIdentityPanel() }
+        identityPanel?.applyStatusDot(header.activityDotColor)
+        if metadataChanged { onMetadataChange?(self) }
+    }
+
+    /// Establish identity atomically, before installing the pane in a window.
+    func associateSession(_ association: PaneSessionAssociation) {
+        sessionLibrary.associate(.attached(association), with: dragIdentifier)
+        applySessionState()
+        WorkspaceStore.shared.scheduleSave()
+    }
+
+    var sessionAssociation: PaneSessionAssociation? {
+        sessionState.binding.association
+    }
+    /// A known terminal/session association, not a guess based on title or working directory.
+    var displayedSessionKey: AgentSessionKey? {
+        sessionState.sessionKey
+    }
+
+    /// agent 正在跑的时候不能往 PTY 里塞东西：那一刻前台是它自己的输出流。
+    var acceptsInjectedCommand: Bool {
+        sessionState.acceptsInput
+    }
+
+    /// 让 agent 自己改会话名——把 `/rename <名字>` 送进这个 pane。
+    ///
+    /// 为什么不由 lightty 记一份覆盖名：标题归 agent 所有（claude 的 `customTitle`、
+    /// codex 的 thread title），我们再存一份必然对不上，而且会话侧栏读的是 agent 的目录。
+    ///
+    /// 这是「会话正开着」时的那条路。会话没开时走官方接口，见 `SessionRename`——
+    /// 开着的时候不能走那条：从外面写进去，这个已经跑起来的进程不会重读，
+    /// 它屏幕上还是旧标题。
+    ///
+    /// 这一步本质是替用户按键盘。挡得住「agent 正在跑」（见 `acceptsInjectedCommand`），
+    /// **挡不住「这个 pane 前台是别的程序」**——用户在里面开了 vim 之类，lightty 看不见
+    /// 那个 PTY 里跑的是什么。这层风险是这条路固有的，消不掉。
+    @discardableResult
+    func renameSession(to name: String) -> Bool {
+        guard displayedSessionKey != nil, acceptsInjectedCommand,
+              let input = AgentCommand.rename(name).shellInput else { return false }
+        // 先粘上这一行，再按一次回车提交。两步是必须的：注入文本在 core 里按粘贴处理，
+        // 粘进去的回车对 agent 的 TUI 只是插入一个换行（见 `TerminalSurfaceView.sendText`）。
+        terminal.sendText(input)
+        terminal.sendReturn()
+        // `/rename` 未必触发 Stop 钩子，指望不上状态变化那条刷新路径，这里自己补一次。
+        if let key = displayedSessionKey { sessionLibrary.invalidateMetadata(for: key) }
+        return true
+    }
+
+    /// 让 pane 里的 agent 按交接协议重写绑定任务的正文。
+    ///
+    /// 跟 `renameSession(to:)` 是同一条路：替用户按键盘——先粘一行/一段，再单独
+    /// 按一次回车提交。挡得住「agent 正在跑」（`acceptsInjectedCommand`），
+    /// 挡不住「这个 pane 前台是别的程序」。
+    ///
+    /// **这一支的「前台不是 agent」比 `rename` 那支后果大一档，别照抄那边的说法。**
+    /// `rename` 发的是一行，前台是 shell 时最多冒一句 command not found。没装插件
+    /// 那一支发的是十几行（`HandoffProtocol.directInstruction`），逐行都会被 shell
+    /// 当命令执行，其中一行还含反引号——shell 里那是命令替换，会去执行任务文件
+    /// 那个路径。实际后果有限（`.md` 不可执行），但值得知道边界在哪。
+    ///
+    /// 正常路径上没有注入风险：core 的粘贴编码无条件 strip 掉 0x1B
+    /// （见 `TerminalSurfaceView.sendText` 指向的 `input/paste.zig`），路径里就算
+    /// 有 ESC 也拼不出粘贴终止符；`TaskFileName.sanitize` 又把空白折叠掉，
+    /// lightty 自己建的文件名不含换行。
+    ///
+    /// 插件装没装在这里查，不在建行的时候查：`HookInstaller.report(for:)` 要扫
+    /// PATH、读两个配置文件，而列表每敲一个字就重建一次行。放在点击这一下，
+    /// 一次用户动作读几个文件无所谓，也不必为此维护一份会过期的缓存。
+    @discardableResult
+    func updateHandoff() -> Bool {
+        guard let fileURL = taskFileURL,
+              let agent = displayedSessionKey?.agent,
+              acceptsInjectedCommand else { return false }
+        // 装了但"装的是旧内容"同样调不起技能——技能是后加的，旧缓存里没有它。
+        // 判断在 `HookInstaller.handoffSkillAvailable` 里，那儿测得到。
+        let installed = HookInstaller.handoffSkillAvailable(for: agent)
+        guard let input = AgentCommand.handoff(
+            agent: agent, path: fileURL.path, skillInstalled: installed).shellInput
+        else { return false }
+        terminal.sendText(input)
+        terminal.sendReturn()
+        return true
+    }
+
+    func reconcileSessionProcess() {
+        sessionLibrary.reconcileProcess(in: dragIdentifier,
+            terminalExited: terminal.surface != nil && terminal.processExited)
+    }
+    var sessionProcessIdentity: AgentProcessIdentity? {
+        sessionState.processIdentity
+    }
+
+    private func shellCommandFinished(at date: Date) {
+        sessionLibrary.commandFinished(in: dragIdentifier, at: date)
+        applySessionState()
+        WorkspaceStore.shared.scheduleSave()
+    }
     enum Binding {
         case unnamed                 // 灰点「未命名」
         case bound(fileURL: URL)     // 绿点，任务文件已存在
@@ -47,6 +167,9 @@ final class PaneView: NSView {
     let dragIdentifier: UUID
     private(set) var binding: Binding = .unnamed
     private var terminalSearchBar: TerminalSearchBar?
+    /// 搜索条住在系统气泡里：这一档玻璃是 NSPopover 的私有框架视图自己画的，
+    /// 用 NSVisualEffectView 复现不出来（材质、外观、窗口样式都试过）。
+    private var searchPopover: NSPopover?
     private var searchSelected: Int?
     private var searchTotal: Int?
     private var dropOverlay: PaneDropOverlayView?
@@ -58,10 +181,21 @@ final class PaneView: NSView {
     /// pane header 拖到目标四边时，由目标窗口控制器原位重组 split tree。
     var onMoveRequest: ((UUID, PaneView, PaneDropZone) -> Bool)?
 
-    /// pane 名默认值的会话内计数器（pane 名不落盘，编号比一排「未命名」可辨认）。
+    /// pane 名默认值的会话内计数器（编号比一排「未命名」可辨认）。
     private static var paneCounter = 0
 
-    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init()) {
+    /// 会话恢复后把计数器抬到恢复出的默认名之上，新 pane 不与「终端 3」重名。
+    static func seedDefaultNameCounter(from names: [String]) {
+        let prefix = L("Terminal %d").replacingOccurrences(of: "%d", with: "")
+        let numbers = names.compactMap { name -> Int? in
+            guard name.hasPrefix(prefix) else { return nil }
+            return Int(name.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
+        }
+        if let top = numbers.max() { paneCounter = max(paneCounter, top) }
+    }
+
+    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init(), sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary) {
+        self.sessionLibrary = sessionLibrary
         let paneID = UUID()
         dragIdentifier = paneID
         // pane 身份下发给 shell：agent 的 hook 是 shell 的孙进程，环境变量沿进程树
@@ -70,11 +204,12 @@ final class PaneView: NSView {
         configuration.envVars["LIGHTTY_PANE_ID"] = paneID.uuidString
         // 状态走 datagram socket 推送，不落文件（状态是用完即弃的中间态）。
         // 路径按本实例 pid 命名，随 spawn 下发——多实例各收各的。
-        configuration.envVars["LIGHTTY_SOCK"] = PaneRuntimeDirectory.socketPath().path
+        configuration.envVars["LIGHTTY_SOCK"] = sessionLibrary.statusSocketPath.path
         terminal = TerminalSurfaceView(configuration: configuration)
         Self.paneCounter += 1
         super.init(frame: .zero)
-        header.title = L("Terminal %d", Self.paneCounter)
+        sessionLibrary.registerPane(paneID, name: L("Terminal %d", Self.paneCounter), directory: configuration.workingDirectory)
+        header.title = sessionState.title
         header.dot = .unnamed
         header.dragIdentifier = dragIdentifier
         header.onSelect = { [weak self] in self?.focusTerminal() }
@@ -114,22 +249,32 @@ final class PaneView: NSView {
         header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
+            self.reconcileSessionProcess()
             self.onClose?(self)
+        }
+        terminal.onCommandFinished = { [weak self] date in self?.shellCommandFinished(at: date) }
+        terminal.onWorkingDirectoryChange = { [weak self] directory in
+            guard let self else { return }
+            self.sessionLibrary.updateDirectory(directory, for: self.dragIdentifier)
+            WorkspaceStore.shared.scheduleSave()
         }
 
         // 运行时目录 + 状态监听。放在 init 而不是各个关闭路径的对称位置，是因为
         // pane 的死法有好几种（✕、cmd+W、关 tab、关窗、shell 退出），deinit 是唯一
         // 能一网打尽的点；跨窗口拖动时 PaneView 本体存活，不会误触发。
-        PaneStatusStore.shared.attach(paneID)
+        NotificationCenter.default.addObserver(self, selector: #selector(sessionsDidChange(_:)),
+            name: .lighttySessionLibraryDidChange, object: sessionLibrary)
     }
 
     deinit {
         let paneID = dragIdentifier
+        NotificationCenter.default.removeObserver(self)
+        let library = sessionLibrary
         // deinit 不保证在主线程；store 是主线程独占的
         if Thread.isMainThread {
-            PaneStatusStore.shared.detach(paneID)
+            library.removePane(paneID)
         } else {
-            DispatchQueue.main.async { PaneStatusStore.shared.detach(paneID) }
+            DispatchQueue.main.async { library.removePane(paneID) }
         }
     }
 
@@ -202,7 +347,7 @@ final class PaneView: NSView {
         if let shellCWD = terminal.currentWorkingDirectory, !shellCWD.isEmpty {
             return shellCWD
         }
-        if let agentCWD = PaneStatusStore.shared.status(for: dragIdentifier)?.cwd,
+        if let agentCWD = sessionState.status?.cwd,
             !agentCWD.isEmpty {
             return agentCWD
         }
@@ -212,8 +357,9 @@ final class PaneView: NSView {
     /// 恢复任务用的 pane 工厂：新 shell 直接生在任务的 `cwd`（创建现场），
     /// agent 起来就在项目里，退出 agent 后 shell 也还在。目录已不存在则不传，
     /// 回退内核默认目录——不能让 spawn 失败。气泡三目的地与 ⇧⇧ 搜索共用。
-    static func restoring(task: TaskFile, fileURL: URL) -> PaneView {
+    static func restoring(task: TaskFile, fileURL: URL, command: AgentCommand = .none) -> PaneView {
         var configuration = TerminalSurfaceConfiguration()
+        configuration.command = command
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: task.workdir, isDirectory: &isDirectory),
             isDirectory.boolValue {
@@ -224,15 +370,78 @@ final class PaneView: NSView {
         return pane
     }
 
+    // MARK: - 会话快照（重启恢复）
+
+    /// Project the same association used by navigation; absence of a hook is not an exit.
+    func snapshot() -> PaneSnapshot {
+        reconcileSessionProcess()
+        let association = sessionAssociation
+        return PaneSnapshot(
+            name: sessionState.terminalName,
+            workingDirectory: terminal.currentWorkingDirectory,
+            taskFile: taskFileURL?.path,
+            agent: association?.key.agent.rawValue,
+            sessionID: association?.key.nativeID,
+            agentCWD: association?.workingDirectory,
+            agentAlive: association != nil,
+            catalogSession: association?.key,
+            catalogConfiguration: association?.configuration)
+    }
+
+    /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
+    /// 输入敲进去（此时 cwd 取 agent 自报目录——会话按项目目录归档，换目录找不到）；
+    /// 任务文件还在就重新绑定；名字原样回填。恢复依赖缺失时保留意图但不启动 Agent。
+    static func restored(from snapshot: PaneSnapshot, sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary,
+                         locateExecutable: (String) -> String? = HookInstaller.locateExecutable) -> PaneView {
+        var configuration = TerminalSurfaceConfiguration()
+        let association = PaneSessionAssociation(snapshot: snapshot, home: FileManager.default.homeDirectoryForCurrentUser)
+        let preferred = association?.workingDirectory ?? snapshot.workingDirectory
+        if let directory = preferred, Self.isDirectory(directory) {
+            configuration.workingDirectory = directory
+        }
+        var restoredAssociation: PaneSessionAssociation?
+        if let association, Self.isDirectory(association.workingDirectory),
+           let executable = locateExecutable(association.key.agent.rawValue),
+           let plan = try? association.resumePlan(executable: executable) {
+            configuration.command = .resume(plan)
+            restoredAssociation = association
+        }
+        let pane = PaneView(surfaceConfiguration: configuration, sessionLibrary: sessionLibrary)
+        if let restoredAssociation { sessionLibrary.associate(.restoring(restoredAssociation), with: pane.dragIdentifier) }
+        else if let association { sessionLibrary.associate(.unavailable(association), with: pane.dragIdentifier) }
+        sessionLibrary.renamePane(pane.dragIdentifier, to: snapshot.name)
+        pane.needsWindowNumber = false
+        pane.applySessionState()
+        if let path = snapshot.taskFile {
+            let url = URL(fileURLWithPath: path)
+            if let task = try? AppState.shared?.taskStore.load(at: url) {
+                pane.bind(to: url, name: task.name)
+            }
+        }
+        return pane
+    }
+
+    private static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+
     // MARK: - 身份面板（灵动岛式展开）
 
     private var identityPanel: PaneIdentityPanel?
+    /// 承载灵动岛的子窗口。它静止不动，只是给岛体提供窗口后模糊的资格
+    /// （同窗口内的兄弟视图糊不到终端，见 IdentityIslandView）。
+    private var identityWindow: PaneIdentityWindow?
     private var panelDismissMonitor: Any?
 
     /// pane 离窗（拖拽重组/关闭）时面板必须跟着收，否则悬浮在 contentView 上成孤儿。
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if identityPanel != nil { dismissIdentityPanel() }
+        // 搜索气泡锚在本视图上，pane 离窗（拖拽重组/关闭）时必须一起收，
+        // 否则锚点没了，气泡会留在屏幕上。
+        if terminalSearchBar != nil { endTerminalSearch(requestCore: true) }
     }
 
     private func toggleIdentityPanel() {
@@ -252,7 +461,16 @@ final class PaneView: NSView {
 
     private func showIdentityPanel() {
         let panel = PaneIdentityPanel()
-        panel.onPaneNameCommit = { [weak self] name in self?.rename(to: name) }
+        // 第一行显示的是「有会话就用会话标题」，所以改的也应该是会话名——否则用户
+        // 打了个名字、存进了终端名，却被会话标题盖住，看不见。
+        panel.onPaneNameCommit = { [weak self] name in
+            guard let self else { return }
+            guard self.displayedSessionKey != nil else {
+                self.rename(to: name)
+                return
+            }
+            if !self.renameSession(to: name) { NSSound.beep() }
+        }
         panel.taskProvider = { [weak self] in
             let running = AppState.shared.runningPanes()
             let current = self?.taskFileURL?.standardizedFileURL
@@ -289,6 +507,19 @@ final class PaneView: NSView {
             }
         }
         panel.onUnbindTask = { [weak self] in self?.unbind() }
+        // 送没送出去要如实回给面板：pane 没了当没送出去，面板会重建那一行而不是关掉列表。
+        panel.onUpdateHandoff = { [weak self] in self?.updateHandoff() ?? false }
+        panel.handoffActionProvider = { [weak self] in
+            // 认不出这个 pane 里跑的是哪家 agent 就不给这一行：两家的技能调用
+            // 写法不同，猜错是静默失败——什么都不会发生，用户还以为点过了。
+            guard let self, self.taskFileURL != nil,
+                  self.displayedSessionKey != nil else { return nil }
+            return self.acceptsInjectedCommand
+                ? .ready
+                // 只说「正忙」：这一行的标题里已经有「Agent」了，右侧再说一遍是重复，
+                // 而且那点宽度正是标题需要的（面板只有 272 宽）。
+                : .blocked(reason: L("Busy"))
+        }
         panel.onTaskRenameCommit = { [weak self] name in
             guard let self, case .bound(let url) = self.binding else { return }
             do {
@@ -303,87 +534,87 @@ final class PaneView: NSView {
             self?.dismissIdentityPanel()
             self?.focusTerminal()
         }
-        panel.onIslandHeightChange = { [weak self, weak panel] height in
-            guard let self, let panel else { return }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                context.allowsImplicitAnimation = true
-                panel.island.animator().frame = self.islandRect(in: panel, height: height)
-            }
-        }
         panel.applyTerminalTheme(
             background: GhosttyRuntime.shared.configValues.backgroundColor,
             foreground: header.terminalForeground)
         refresh(panel: panel)
+        panel.expandTaskListForFirstUse()
 
         // 面板挂到窗口 contentView（所有 split 之上）：挂在 pane 里会被
         // clipsToBounds 和相邻 pane 的更高兄弟层级裁剪/遮盖。
         // 面板高度取上限（岛体在其中生长），本体静止、永不动画。
-        guard let host = window?.contentView else { return }
+        guard let host = window?.contentView, let hostWindow = window else { return }
         let start = host.convert(header.capsuleFrame, from: header)
-        panel.frame = PaneIdentityMorphGeometry.panelFrame(around: start)
-        let collapsedFrame = PaneIdentityMorphGeometry.collapsedIslandFrame(
-            capsule: start, panelFrame: panel.frame)
-        // 第一行不参与淡入且始终停在胶囊原位；所有扩展内容统一渐显。
-        panel.setExpandedContentAlpha(0, animated: false)
-        panel.setIdentityAnchorOffset(collapsedFrame.minX)
-        panel.island.frame = collapsedFrame
-        host.addSubview(panel)
-        identityPanel = panel
-        panel.layoutSubtreeIfNeeded()
-        header.setCapsuleHidden(true) // 瞬时交接：面板第一行与胶囊逐像素同构
+        let panelFrame = PaneIdentityMorphGeometry.panelFrame(around: start)
+        panel.frame = NSRect(origin: .zero, size: panelFrame.size)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.22
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            context.allowsImplicitAnimation = true
-            panel.island.animator().frame = islandRect(
-                in: panel, height: PaneIdentityPanel.baseHeight)
-            panel.setExpandedContentAlpha(1, animated: true)
-        } completionHandler: { [weak panel] in
-            panel?.focusNameField()
+        // 先建窗口再算胶囊位置：窗口会把面板挪到那圈阴影边距里（原点不再是 0），
+        // 之后所有位置一律走坐标转换，不能再拿 frame 相减——收起时就是这么偏出去的。
+        let identityWindow = PaneIdentityWindow(content: panel)
+        identityWindow.setFrame(identityWindowFrame(panelFrame: panelFrame), display: false)
+
+        let collapsedFrame = capsuleFrameInPanel(panel) ?? .zero
+        // 起点与胶囊逐像素同构：岛体就是胶囊那块矩形，内容被裁得只剩胶囊里那一行。
+        panel.setIdentityAnchorOffset(collapsedFrame.minX)
+        panel.applyIslandFrame(collapsedFrame, duration: 0)
+
+        hostWindow.addChildWindow(identityWindow, ordered: .above)
+        identityWindow.makeFirstResponder(identityWindow)
+        identityWindow.makeKeyAndOrderFront(nil)
+        identityPanel = panel
+        self.identityWindow = identityWindow
+        panel.onIslandHeightChange = { [weak self, weak panel] height in
+            guard let self, let panel else { return }
+            panel.applyIslandFrame(self.islandRect(in: panel, height: height),
+                                   duration: 0.2)
+        }
+        panel.layoutSubtreeIfNeeded()
+        header.setCapsuleHidden(true)
+        panel.applyIslandFrame(
+            islandRect(in: panel, height: panel.currentIslandHeight), duration: 0.24
+        ) { [weak self, weak panel] in
+            guard let panel, self?.identityPanel === panel else { return }
+            panel.focusInitialField()
         }
 
-        // 点击岛体与胶囊之外任意处收起（判定用岛体实际 frame，面板是透明容器）
+        // 点击岛体与胶囊之外任意处收起。面板自己那扇窗口是透明的且比岛体大一圈，
+        // 落在岛体之外的点击同样算"点在外面"。
         panelDismissMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
-            guard let self, let panel = self.identityPanel,
-                  event.window === self.window else { return event }
-            let inIsland = panel.island.frame.contains(
-                panel.convert(event.locationInWindow, from: nil))
+            guard let self, let panel = self.identityPanel else { return event }
+            if event.window === panel.window {
+                let point = panel.convert(event.locationInWindow, from: nil)
+                if !panel.islandFrame.contains(point) { self.dismissIdentityPanel() }
+                return event
+            }
+            guard event.window === self.window else { return event }
             let inHeader = self.header.bounds.contains(
                 self.header.convert(event.locationInWindow, from: nil))
-            if !inIsland && !inHeader {
-                self.dismissIdentityPanel()
-            }
+            if !inHeader { self.dismissIdentityPanel() }
             return event
         }
     }
 
     private func dismissIdentityPanel() {
-        guard let panel = identityPanel else { return }
+        guard let panel = identityPanel, let window = identityWindow else { return }
         if let panelDismissMonitor { NSEvent.removeMonitor(panelDismissMonitor) }
         panelDismissMonitor = nil
         identityPanel = nil
+        identityWindow = nil
+        // 面板收起时把 key 还给主窗口，否则主窗口里的 hover 会一直停摆。
+        window.parent?.makeKey()
 
-        let end = (panel.superview ?? self).convert(header.capsuleFrame, from: header)
-        let islandEnd = PaneIdentityMorphGeometry.collapsedIslandFrame(
-            capsule: end, panelFrame: panel.frame)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            context.allowsImplicitAnimation = true
-            // 岛体缩回中心；第一行通常原地不动，仅在 header 曾移动时跟到新锚点。
-            panel.island.animator().frame = islandEnd
-            panel.setIdentityAnchorOffset(islandEnd.minX)
-            panel.animator().layoutSubtreeIfNeeded()
-            panel.setExpandedContentAlpha(0, animated: true)
-        } completionHandler: { [weak self, weak panel] in
+        let islandEnd = capsuleFrameInPanel(panel) ?? panel.islandFrame
+        // End field editing before shrinking; the field editor is window-owned.
+        window.makeFirstResponder(nil)
+        panel.setIdentityAnchorOffset(islandEnd.minX)
+        panel.applyIslandFrame(islandEnd, duration: 0.18) { [weak self, weak window] in
             // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
-            self?.header.setCapsuleHidden(false)
-            panel?.removeFromSuperview()
+            if self?.identityPanel == nil { self?.header.setCapsuleHidden(false) }
+            guard let window else { return }
+            window.parent?.removeChildWindow(window)
+            window.orderOut(nil)
         }
     }
 
@@ -397,22 +628,24 @@ final class PaneView: NSView {
         panel.update(
             paneName: header.title,
             taskName: header.titleOfBoundTask,
-            dot: header.dot.color)
+            dot: header.dot.color,
+            agent: header.sessionAgent)
+        panel.applyStatusDot(header.activityDotColor)
     }
 
 
 
     // MARK: - pane 名（会话态标签，不落盘）
 
-    private func rename(to name: String) {
-        header.title = name
-        onMetadataChange?(self)
-        // 工作区列的 pane 行显示 pane 名，改名后需要活地图刷新
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+    func rename(to name: String) {
+        needsWindowNumber = false
+        sessionLibrary.renamePane(dragIdentifier, to: name)
+        applySessionState()
+        WorkspaceStore.shared.scheduleSave()
     }
 
     func focusTerminal() {
-        window?.makeFirstResponder(terminal)
+        terminal.focus()
     }
 
     // MARK: - 跳转落点提示
@@ -420,18 +653,25 @@ final class PaneView: NSView {
     private var spotlightVeil: NSView?
 
     /// 从侧栏/菜单栏/搜索等处跳转到本 pane 后的落点提示。
-    /// 不给目标加图形（圈线在终端画面里是异物），而是请控制器把同工作区
-    /// 其余 pane 短暂压暗——视线本能落在唯一清晰的那块上。做减法的聚光灯，
-    /// 与内核的 unfocused-split-opacity 同一门语言。
+    /// 不给目标加图形（圈线在终端画面里是异物），而是让目标自己浮现一次。
+    /// **动的只能是该看的那块**：会动的东西必然抢视线，压暗其余 pane 等于
+    /// 把动画放在了不该看的地方，视线反而被拽走。
     func flashReveal() {
         (window?.windowController as? TerminalWindowController)?.spotlight(on: self)
     }
 
-    /// 聚光灯的「暗」侧：盖一层终端背景色纱再淡出。用背景色而非黑色，
-    /// 是把内容往各自底色方向压对比，明暗主题都成立（黑纱在浅色主题发脏）；
-    /// 取本 pane 的实况背景（header 跟踪的 per-surface 值）而非全局 config，
-    /// 明暗切换后、各 pane 主题不同时都各自取对。
-    func dimForSpotlight() {
+    /// 聚光灯：给目标盖一层它自己的终端背景色，随即淡出——内容从底色里浮出来。
+    /// 用背景色而非黑/白，是把内容往各自底色方向收再放回来，明暗主题都成立
+    /// （黑纱在浅色主题发脏）；取本 pane 的实况背景（header 跟踪的 per-surface
+    /// 值）而非全局 config，明暗切换后、各 pane 主题不同时都各自取对。
+    ///
+    /// 分「停留 → 淡出」两拍，不用一条 ease 曲线一淡到底：一条曲线中段就淡掉大半，
+    /// 视线从侧栏移过来时已经没了。停留那一拍留给这段路程，短一点就够——只要提示
+    /// 别在人赶到之前散掉，多出来的时间都是在挡着不让读。
+    ///
+    /// 峰值 0.6 而非全盖：现在糊住的是刚点开的那块，得让人在提示还亮着的时候就
+    /// 能开始读，而不是先等它散。
+    func flashSpotlight() {
         spotlightVeil?.removeFromSuperview()
         let veil = ShellPassthroughView(frame: bounds)
         veil.autoresizingMask = [.width, .height]
@@ -440,12 +680,10 @@ final class PaneView: NSView {
             .withAlphaComponent(0.6).cgColor
         addSubview(veil, positioned: .above, relativeTo: nil)
         spotlightVeil = veil
-        // 纱先停住给视线定位，再收走；直接一条 ease 曲线会淡得太早，
-        // 显式分成「停留 → 淡出」两拍。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self, weak veil] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak veil] in
             guard let veil, veil.superview != nil else { return }
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.45
+                context.duration = 0.4
                 context.timingFunction = ShellStyle.easeInOutCubic
                 veil.animator().alphaValue = 0
             }, completionHandler: { [weak self, weak veil] in
@@ -459,6 +697,7 @@ final class PaneView: NSView {
 
     func startTerminalSearch(needle: String?) {
         if let terminalSearchBar {
+            searchPopover?.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
             if let needle, !needle.isEmpty {
                 terminalSearchBar.setNeedle(needle)
             } else {
@@ -479,24 +718,84 @@ final class PaneView: NSView {
             terminal?.performBindingAction("navigate_search:previous")
         }
         bar.onClose = { [weak self] in self?.endTerminalSearch(requestCore: true) }
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(bar)
-        NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: terminal.topAnchor, constant: 8),
-            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-        ])
+
+        let size = bar.fittingSize
+        bar.frame = NSRect(origin: .zero, size: size)
+        let controller = NSViewController()
+        controller.view = bar
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.contentSize = size
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        popover.hideAnchorArrow()
+        popover.show(relativeTo: searchAnchorRect(size: size), of: self, preferredEdge: .maxY)
         terminalSearchBar = bar
+        searchPopover = popover
         bar.update(selected: searchSelected, total: searchTotal)
         DispatchQueue.main.async { [weak bar] in bar?.focus() }
     }
 
+    /// 搜索气泡的定位矩形：终端顶边下 8、pane 右边界内 8——与它还贴在视图里时逐像素相同。
+    /// 气泡向 `.maxY` 一侧展开并在矩形上居中，所以这里给的是卡片底边的中点。
+    private func searchAnchorRect(size: NSSize) -> NSRect {
+        NSRect(x: bounds.maxX - 8 - size.width / 2,
+               y: terminal.convert(terminal.bounds, to: self).maxY - 8 - size.height,
+               width: 1, height: 1)
+    }
+
+    /// `NSPopover` 只记住 show 时那一个矩形，pane 改尺寸（开合侧栏、拖分屏、缩放窗口）
+    /// 它不会自己重算，会停在旧位置。每次布局都把矩形喂回去。
+    override func layout() {
+        super.layout()
+        repositionIdentityWindow()
+        guard let popover = searchPopover, let bar = terminalSearchBar else { return }
+        // layout 调用很密，矩形没变就别回写：每次赋值气泡都会重排一次。
+        let rect = searchAnchorRect(size: bar.frame.size)
+        if popover.positioningRect != rect { popover.positioningRect = rect }
+    }
+
+    /// 灵动岛那扇子窗口不受 Auto Layout 管辖：pane 一移动或改尺寸就得把它挪回
+    /// 胶囊上方。窗口静止、动画在面板内部，所以这里只改窗口位置，不碰岛体。
+    private func repositionIdentityWindow() {
+        guard let identityWindow, let host = window?.contentView else { return }
+        let capsule = host.convert(header.capsuleFrame, from: header)
+        guard let panel = identityPanel else { return }
+        // Keep the content canvas stable while open, even if the header title changes.
+        let frame = identityWindowFrame(panelFrame: NSRect(
+            x: capsule.midX - panel.bounds.width / 2,
+            y: capsule.maxY - panel.bounds.height,
+            width: panel.bounds.width, height: panel.bounds.height))
+        if identityWindow.frame != frame { identityWindow.setFrame(frame, display: true) }
+    }
+
+    /// 胶囊在面板自己坐标系里的位置。展开的起点和收起的终点都取这里，两条路径
+    /// 用同一套换算：主窗口 → 屏幕 → 子窗口 → 面板。面板在子窗口里是内缩的，
+    /// 拿 frame 相减会漏掉那一圈边距。
+    private func capsuleFrameInPanel(_ panel: PaneIdentityPanel) -> NSRect? {
+        guard let hostWindow = window, let panelWindow = panel.window else { return nil }
+        let onScreen = hostWindow.convertToScreen(header.convert(header.capsuleFrame, to: nil))
+        let inPanelWindow = panelWindow.convertFromScreen(onScreen)
+        return NSRect(origin: panel.convert(inPanelWindow.origin, from: nil),
+                      size: header.capsuleFrame.size)
+    }
+
+    /// 子窗口比面板四周各大一圈：岛体展开时占满面板整宽，阴影得画在这圈边距里。
+    private func identityWindowFrame(panelFrame: NSRect) -> NSRect {
+        guard let host = window?.contentView, let hostWindow = window else { return .zero }
+        let margin = PaneIdentityWindow.shadowMargin
+        return hostWindow.convertToScreen(host.convert(panelFrame, to: nil))
+            .insetBy(dx: -margin, dy: -margin)
+    }
+
     func endTerminalSearch(requestCore: Bool) {
-        guard let bar = terminalSearchBar else {
+        guard terminalSearchBar != nil else {
             if requestCore { terminal.performBindingAction("end_search") }
             return
         }
         terminalSearchBar = nil
-        bar.removeFromSuperview()
+        searchPopover?.close()
+        searchPopover = nil
         if requestCore { terminal.performBindingAction("end_search") }
         focusTerminal()
     }

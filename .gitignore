@@ -4,3 +4,4 @@ vendor/
 Frameworks/
 .idea/
 dist/
+scripts/claude-session-helper/node_modules/

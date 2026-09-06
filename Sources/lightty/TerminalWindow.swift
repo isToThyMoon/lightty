@@ -8,7 +8,7 @@ final class PaneSplitView: NSSplitView {
 }
 
 /// 终端窗口：原生标题栏只承载红黄绿三键与侧栏按钮，content 以 full-size
-/// 铺到窗口四边。工作区侧栏自行避让标题栏高度；右侧 terminal 则延伸到顶边。
+/// 铺到窗口四边。标签页侧栏自行避让标题栏高度；右侧 terminal 则延伸到顶边。
 /// 标题栏无系统标题文字，terminal surface 仍完整遵守 Ghostty config。
 final class TerminalWindow: NSWindow {
     init(contentRect: NSRect) {

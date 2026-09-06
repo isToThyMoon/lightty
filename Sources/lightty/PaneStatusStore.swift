@@ -54,6 +54,9 @@ final class PaneStatusStore {
     /// 挂着的 pane（值仅作存在性标记）。detach 之后在途的报文要能被认出来丢掉。
     private var attached: Set<UUID> = []
     private var statuses: [UUID: PaneStatus] = [:]
+    /// Reading a request acknowledges its reminder, not the Agent's waiting state.
+    private var readAttention: Set<UUID> = []
+    private var processWatches: [UUID: (identity: AgentProcessIdentity, source: DispatchSourceProcess)] = [:]
     /// 坏报文只记一次日志：畸形报文往往是成批的（版本不匹配的旧 hook），刷屏没有意义。
     private var loggedMalformed = false
 
@@ -105,6 +108,8 @@ final class PaneStatusStore {
     /// 停收并删掉自己的 socket 文件。
     func stop() {
         assertMain()
+        for watch in processWatches.values { watch.source.cancel() }
+        processWatches.removeAll()
         source?.cancel()  // cancelHandler 负责 close(fd)
         source = nil
         fd = -1
@@ -162,7 +167,7 @@ final class PaneStatusStore {
     ///
     /// 每发报文单独往主线程投一次，**不在这里合流**：PaneNotifier 是靠状态**迁移**
     /// 判断「这个 pane 刚跑完」的，把同一 pane 的连续几发压成最后一发会把中间的
-    /// `done` 吃掉，提醒就没了。合流该在 UI 层做，PaneStatusPresenter 已按 runloop
+    /// `done` 吃掉，提醒就没了。SessionLibrary 逐条归并状态，呈现通知按 runloop
     /// tick 合过一次。
     private func drain(_ fd: Int32) {
         // 上限取报文上限的两倍：超限报文会被截断成坏 JSON 而丢弃，正是想要的行为
@@ -200,8 +205,69 @@ final class PaneStatusStore {
         assertMain()
         // detach 之后可能还有在途报文，别把已经清掉的状态复活
         guard attached.contains(datagram.pane) else { return }
+        if let previous = statuses[datagram.pane] {
+            guard datagram.status.ts >= previous.ts else { return }
+            if datagram.status.event == "SessionEnd",
+               (datagram.status.agent != previous.agent || datagram.status.sessionID != previous.sessionID) {
+                return // An old conversation can end after this process has switched conversations.
+            }
+            if let old = previous.agentProcess, let next = datagram.status.agentProcess,
+               next.startedBefore(old) { return }
+        }
+        if statuses[datagram.pane] != datagram.status { readAttention.remove(datagram.pane) }
         statuses[datagram.pane] = datagram.status
+        watchProcess(for: datagram.pane)
         postChange(datagram.pane)
+    }
+
+    private func watchProcess(for pane: UUID) {
+        guard let status = statuses[pane] else { return }
+        guard status.event != "SessionEnd", let process = status.agentProcess else {
+            processWatches.removeValue(forKey: pane)?.source.cancel()
+            return
+        }
+        if process.liveness == .exited { endProcess(process, pane: pane); return }
+        if processWatches[pane]?.identity == process { return }
+        processWatches.removeValue(forKey: pane)?.source.cancel()
+        guard process.isDescendant(of: getpid()) else { return }
+        let source = DispatchSource.makeProcessSource(identifier: process.pid, eventMask: .exit, queue: .main)
+        processWatches[pane] = (process, source)
+        source.setEventHandler { [weak self] in self?.endProcess(process, pane: pane) }
+        source.activate()
+        // Close the race between checking existence and registering the kernel notification.
+        reconcileProcess(for: pane)
+    }
+
+    /// Also called before snapshot/navigation, when a queued exit callback may not have run yet.
+    func reconcileProcess(for pane: UUID) {
+        guard let process = statuses[pane]?.agentProcess, process.liveness == .exited else { return }
+        endProcess(process, pane: pane)
+    }
+
+    /// Returns false if a known process is still alive/unknown, or a newer hook superseded this event.
+    func commandFinished(for pane: UUID, at date: Date) -> Bool {
+        guard let status = statuses[pane] else { return true }
+        guard status.ts <= date else { return false }
+        if let process = status.agentProcess {
+            guard process.liveness == .exited else { return false }
+            endProcess(process, pane: pane)
+        } else {
+            statuses[pane] = PaneStatus(ts: date, state: .idle, agent: status.agent,
+                sessionID: status.sessionID, sourceRoot: status.sourceRoot,
+                sourceConfiguration: status.sourceConfiguration, cwd: status.cwd, event: "SessionEnd")
+            postChange(pane)
+        }
+        return true
+    }
+
+    private func endProcess(_ process: AgentProcessIdentity, pane: UUID) {
+        guard let status = statuses[pane], status.agentProcess == process, status.event != "SessionEnd" else { return }
+        processWatches.removeValue(forKey: pane)?.source.cancel()
+        statuses[pane] = PaneStatus(ts: status.ts, state: .idle, agent: status.agent,
+            sessionID: status.sessionID, sourceRoot: status.sourceRoot, sourceConfiguration: status.sourceConfiguration,
+            agentProcess: process, cwd: status.cwd, event: "SessionEnd")
+        postChange(pane)
+        WorkspaceStore.shared.scheduleSave()
     }
 
     // MARK: - pane 生命周期
@@ -223,8 +289,10 @@ final class PaneStatusStore {
 
     /// 注销 pane：删目录 + 清状态。pane 关闭时调用。
     func detach(_ paneID: UUID) {
+        processWatches.removeValue(forKey: paneID)?.source.cancel()
         assertMain()
         attached.remove(paneID)
+        readAttention.remove(paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
         if hadStatus { postChange(paneID) }
@@ -244,6 +312,19 @@ final class PaneStatusStore {
         assertMain()
         return statuses[paneID]
     }
+
+    /// Only unread reminders may animate or cause a notification. A read attention
+    /// remains an attention until the next Agent lifecycle event resolves it.
+    func unreadActivity(for paneID: UUID) -> PaneActivity? {
+        assertMain()
+        switch statuses[paneID]?.state {
+        case .done: return .done
+        case .attention where !readAttention.contains(paneID): return .attention
+        default: return nil
+        }
+    }
+
+    var hasUnreadReminders: Bool { statuses.keys.contains { unreadActivity(for: $0) != nil } }
 
     /// 未读 = 处于粘滞的 `done` 态的 pane 数。
     var unreadCount: Int {
@@ -282,31 +363,32 @@ final class PaneStatusStore {
 
     // MARK: - 已读
 
-    /// `done`/`attention` → `idle`，**只改内存**：hook 是纯发方，没有反向通道，
-    /// 而且下一发 hook 报文本来就会盖掉它。
-    ///
-    /// attention 也在此终结：它可能由 turn 结束后的「等你输入」提醒事件点亮，
-    /// 之后 agent 不再发任何事件——没有用户侧清除路径的话，用户跳进 pane
-    /// 亲眼看过了，问号还永远挂着。你看过，提醒的职责就完成了；若 agent
-    /// 仍在等而你切走，它的下一发提醒事件会重新点亮。
+    /// Done clears on reading; attention only loses its unread emphasis. Neither
+    /// sends an answer to the Agent nor invents a lifecycle transition for it.
     func markRead(_ paneID: UUID) {
         assertMain()
-        guard let current = statuses[paneID],
-            current.state == .done || current.state == .attention else { return }
-        statuses[paneID] = Self.markedRead(current)
+        guard acknowledge(paneID) else { return }
         postChange(paneID)
     }
 
     func markAllRead() {
         assertMain()
         var changed = false
-        for (paneID, status) in statuses
-        where status.state == .done || status.state == .attention {
-            statuses[paneID] = Self.markedRead(status)
-            changed = true
+        for paneID in Array(statuses.keys) {
+            if acknowledge(paneID) { changed = true }
         }
         // 多个 pane 一起变 → object 为 nil，观察者走全量分支
         if changed { postChange(nil) }
+    }
+
+    private func acknowledge(_ paneID: UUID) -> Bool {
+        guard let current = statuses[paneID] else { return false }
+        switch unreadActivity(for: paneID) {
+        case .done: statuses[paneID] = Self.markedRead(current)
+        case .attention: readAttention.insert(paneID)
+        default: return false
+        }
+        return true
     }
 
     private static func markedRead(_ status: PaneStatus) -> PaneStatus {
@@ -316,9 +398,13 @@ final class PaneStatusStore {
             state: .idle,
             agent: status.agent,
             sessionID: status.sessionID,
+            sourceRoot: status.sourceRoot,
+            sourceConfiguration: status.sourceConfiguration,
+            agentProcess: status.agentProcess,
             tool: status.tool,
             detail: status.detail,
-            cwd: status.cwd
+            cwd: status.cwd,
+            event: status.event
         )
     }
 
@@ -336,7 +422,11 @@ final class PaneStatusStore {
 
     private func postChange(_ paneID: UUID?) {
         NotificationCenter.default.post(
-            name: .lighttyPaneStatusDidChange, object: paneID.map { $0 as NSUUID })
+            name: .lighttyPaneStatusDidChange, object: paneID.map { $0 as NSUUID }, userInfo: ["store": self])
+    }
+
+    static func source(from notification: Notification) -> PaneStatusStore? {
+        notification.userInfo?["store"] as? PaneStatusStore
     }
 
     private func assertMain(_ function: StaticString = #function) {

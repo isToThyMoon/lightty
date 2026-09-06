@@ -10,8 +10,8 @@ import LighttyCore
 enum ShellStyle {
     // MARK: Geometry
 
-    /// 双面板侧栏体系：工作区侧栏（docked）+ 任务浮层卡片（overlay）
-    static let workspaceColumnWidth: CGFloat = 200
+    /// 双面板侧栏体系：标签页侧栏（docked）+ 任务浮层卡片（overlay）
+    static let tabColumnWidth: CGFloat = 200
     static let taskPanelWidth: CGFloat = 270
     static let panelInset: CGFloat = 6
     static let sidebarHorizontalInset: CGFloat = 10
@@ -57,10 +57,14 @@ enum ShellStyle {
     /// 侧栏底色；抽屉覆盖 terminal，必须完全不透明。
     static let sidebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
     static let controlFill = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x323037)
+    /// 输入区域需与旧版灰色 popover 和新版玻璃材质都保持明暗差，不依赖描边。
+    static let inputFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x424047)
+    static let inputHoverFill = NSColor.shellDynamic(light: 0xD8D2CE, dark: 0x4C4952)
     /// 抬升面：浮在 chrome 之上的卡片（搜索浮层预览等），浅色纯白、深色亮一档
     static let raisedSurface = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x2E2C33)
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
+    static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)
     static let pressedFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x44414A)
     static let divider = NSColor.shellDynamic(light: 0xE5E1DF, dark: 0x3B3841)
     static let primaryText = NSColor.shellDynamic(light: 0x302E2D, dark: 0xE9E7EC)
@@ -71,9 +75,34 @@ enum ShellStyle {
     static let actionHoverFill = NSColor.shellDynamic(light: 0x242321, dark: 0xF8F6FA)
     static let actionText = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
 
+    // MARK: 重点色（全局唯一入口）
+
+    /// 应用自己的重点色，**不跟随系统强调色**（原生控件的蓝就是用户系统偏好里的
+    /// 强调色，换台机器就变）；由设置页的 AccentPreference 决定（出厂粉色，
+    /// 可选默认中性/蓝/绿/黄/橙/紫/白）。所有「选中 / 开启」的着色——开关开启态、下拉勾选——
+    /// 都从这里取。品牌黄（图标 #FFDB00）在浅底上对比度约 1.4:1，做不了文字色，
+    /// 菜单里的「黄」是压深过的琥珀。
+    static var accent: NSColor { AccentPreference.current().color }
+    /// 重点色上的前景：开关滑块、落在重点底上的勾
+    static var onAccent: NSColor { AccentPreference.current().foreground }
+    /// 重点色淡底
+    static func accentTint(_ alpha: CGFloat) -> NSColor { accent.withAlphaComponent(alpha) }
+
+    /// 导航色：只管「你现在在哪」——标签页侧栏的活跃标签页、活跃 pane 行、拖拽落点。
+    /// 用户选了带色相的重点色就跟重点色走（一套色）；选默认/白这类无色相档位时，
+    /// 导航退回内置蔚蓝——导航必须一眼扫到，中性色做不到。蔚蓝刻意比状态色里的
+    /// 「思考」周蓝（4E6EF2）更清亮，避免和圆点撞色。
+    static var navigationAccent: NSColor {
+        AccentPreference.current().hasHue ? accent : navigationFallback
+    }
+    private static let navigationFallback = NSColor.shellDynamic(light: 0x1F6FEB, dark: 0x58A6FF)
+    static func navigationTint(_ alpha: CGFloat) -> NSColor {
+        navigationAccent.withAlphaComponent(alpha)
+    }
+
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
-    // 圆点配色以前在 5 个地方各写各的（pane 头、工作区侧栏行、任务侧栏、搜索浮层、
+    // 圆点配色以前在 5 个地方各写各的（pane 头、标签页侧栏行、任务侧栏、搜索浮层、
     // 灵动岛），加状态色时必须先收敛成一处，否则每加一个态就要改五遍、必漏。
 
     /// 已绑定任务 / 任务处于活跃状态的强调色。沿用系统绿——收敛不改观感。
@@ -151,33 +180,36 @@ extension NSColor {
 /// 悬停光标。cursor rects（addCursorRect）在本工程 layer-backed + autolayout +
 /// 动态重建行的组合下系统性失效（实测全 app 无手型），改用 .cursorUpdate
 /// tracking area：owner 收事件设光标，.inVisibleRect 让命中区自动跟随布局，
-/// 行重建后无需手动 invalidate。视图持有 tracking area，owner 为共享单例。
+/// 行重建后无需手动 invalidate。tracking area 保持 owner，owner 弱引用视图。
 final class HoverCursor: NSResponder {
     private let cursor: NSCursor
-    private init(_ cursor: NSCursor) {
+    private weak var view: NSView?
+    private init(_ cursor: NSCursor, view: NSView) {
         self.cursor = cursor
+        self.view = view
         super.init()
     }
     required init?(coder: NSCoder) { fatalError() }
-    override func cursorUpdate(with event: NSEvent) { cursor.set() }
+    override func cursorUpdate(with event: NSEvent) {
+        guard let view else { return }
+        let scrolling = (view.enclosingScrollView as? SidebarListScrollView)?.suppressesPointerFeedback == true
+        (scrolling || ShellHoverGate.suppressed ? NSCursor.arrow : cursor).set()
+    }
 
-    private static let pointingHand = HoverCursor(.pointingHand)
-    private static let resizeLeftRight = HoverCursor(.resizeLeftRight)
-    private static let arrow = HoverCursor(.arrow)
-
-    static func installPointingHand(on view: NSView) { install(pointingHand, on: view) }
-    static func installResizeLeftRight(on view: NSView) { install(resizeLeftRight, on: view) }
+    static func installPointingHand(on view: NSView) { install(.pointingHand, on: view) }
+    static func installResizeLeftRight(on view: NSView) { install(.resizeLeftRight, on: view) }
     /// 覆盖在 terminal（整片 I-beam）之上的浮层用：夺回箭头
-    static func installArrow(on view: NSView) { install(arrow, on: view) }
+    static func installArrow(on view: NSView) { install(.arrow, on: view) }
 
-    private static func install(_ owner: HoverCursor, on view: NSView) {
+    private static func install(_ cursor: NSCursor, on view: NSView) {
+        let owner = HoverCursor(cursor, view: view)
         // .activeAlways：光标反馈不依赖 key 状态。气泡（NSPopover）弹出时
         // 主窗口让出 key，.activeInKeyWindow 的区域会集体停摆——点一下行
         // 之后整个列表的手型就没了。
         view.addTrackingArea(NSTrackingArea(
             rect: .zero,
             options: [.cursorUpdate, .activeAlways, .inVisibleRect],
-            owner: owner))
+            owner: owner, userInfo: ["cursorOwner": owner]))
     }
 }
 
@@ -228,7 +260,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
     var onHoverChange: ((Bool) -> Void)?
 
     init(symbol: String, accessibilityLabel: String, target: AnyObject?, action: Selector?) {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel)
+        let image = SymbolImages.image(symbol, description: accessibilityLabel)
         super.init(frame: .zero)
         self.image = image
         self.target = target
@@ -273,13 +305,22 @@ final class ShellIconButton: NSButton, HoverResyncing {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
             owner: self)
         addTrackingArea(area)
         tracking = area
+    }
+
+    /// 闸门放开时重建：清掉 AppKit 记住的陈旧内外态（见 ShellHoverGate）。
+    private func rebuildTrackingArea() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = nil
+        updateTrackingAreas()
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -292,7 +333,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
     }
 
     func resyncHover() {
-        updateTrackingAreas()
+        rebuildTrackingArea()
         setHovered(shellPointerInside)
     }
 
@@ -324,7 +365,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
 
 /// 无系统强调色的应用 chrome 文字按钮。
 final class ShellTextButton: NSButton {
-    enum Emphasis { case quiet, primary }
+    enum Emphasis { case quiet, primary, destructive }
 
     private let emphasis: Emphasis
     /// 改文字必须走这里，**不要设 `title`**：上色是通过 `attributedTitle` 做的，
@@ -364,7 +405,9 @@ final class ShellTextButton: NSButton {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
@@ -387,9 +430,17 @@ final class ShellTextButton: NSButton {
         if emphasis == .primary {
             fill = isHovered ? ShellStyle.actionHoverFill : ShellStyle.actionFill
             enabledText = ShellStyle.actionText
+        } else if emphasis == .destructive {
+            fill = NSColor.systemRed.withAlphaComponent(isHovered ? 0.18 : 0.10)
+            enabledText = .systemRed
         } else {
-            fill = isHovered ? ShellStyle.hoverFill : .clear
-            enabledText = ShellStyle.secondaryText
+            // 次要动作也是按钮，静止时就得有底。原来是「平时一串字、划过才浮一块
+            // hoverFill」——而 hoverFill(#F0ECEA) 和输入框的 controlFill(#EFEBE9)
+            // 只差一档灰，浮出来那块跟旁边的输入框长得一模一样，既不像按钮，也几乎
+            // 看不见。整体往下压一档：静止 selectionFill、悬停 pressedFill，比输入框
+            // 深一层，"能按的"和"能填的"就分开了。
+            fill = isHovered ? ShellStyle.pressedFill : ShellStyle.selectionFill
+            enabledText = ShellStyle.primaryText
         }
         let dimmed = !isEnabled || looksDisabled
         layer?.backgroundColor = (dimmed ? .clear : fill)
@@ -402,14 +453,53 @@ final class ShellTextButton: NSButton {
     }
 }
 
+/// Drop targets use the app accent without native emphasized text/icon inversion.
+class ShellDropTargetRowView: NSTableRowView {
+    // AppKit paints regular drop targets through background/selection as well as
+    // destination feedback. Own all three passes so native blue cannot show underneath.
+    override func drawBackground(in dirtyRect: NSRect) {
+        backgroundColor.setFill()
+        NSBezierPath(rect: bounds).fill()
+    }
+
+    // Section headers are never selectable. Interactive subclasses own selection drawing.
+    override func drawSelection(in dirtyRect: NSRect) {}
+
+    // 选中、按住、拖拽目标，本类一律画成浅色圆角底，从来不是 AppKit 那种深色重点底。
+    // `.emphasized` 的意思正是「底色很深，里面的东西请反白」——NSTableRowView 在行被
+    // 选中且表处于 emphasized（按住一行就是）时会这么报，于是行里的模板图标和 SF
+    // Symbol 全被刷成白色，在浅底上就此消失（文字不受影响，它们有各自写死的颜色）。
+    // 这里的内部永远是浅底，所以永远是 `.normal`。
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+
+    override func drawDraggingDestinationFeedback(in dirtyRect: NSRect) {
+        guard isTargetForDropOperation else { return }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5),
+                                    xRadius: ShellStyle.rowCornerRadius, yRadius: ShellStyle.rowCornerRadius)
+            ShellStyle.accentTint(0.10).setFill()
+            path.fill()
+            ShellStyle.accentTint(0.55).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+}
+
 /// 任务行的圆角 hover / selection 背景，替换 NSTableView 默认的蓝色高亮。
-final class ShellTableRowView: NSTableRowView {
+final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     private var tracking: NSTrackingArea?
-    private var isHovered = false { didSet { needsDisplay = true } }
+    private var isHovered = false
     private var cursorInstalled = false
+    func setSidebarHovered(_ value: Bool) {
+        guard isHovered != value else { return }
+        isHovered = value
+        needsDisplay = true
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        setSidebarHovered(false)
         // 手型装在每一行而不是整个 tableView：cursorUpdate 只在跨区域边界时
         // 触发，表级单一大区域在「点击弹气泡把光标重置成箭头」之后，行间移动
         // 不再产生任何事件，手型一去不返；按行分区，换行即重触发。
@@ -420,7 +510,9 @@ final class ShellTableRowView: NSTableRowView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
@@ -429,16 +521,39 @@ final class ShellTableRowView: NSTableRowView {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func mouseEntered(with event: NSEvent) {
+        sidebarHoverEntered()
+    }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
     }
 
+    /// 选中态只在这张表持有焦点时画。
+    ///
+    /// 两个侧栏的选中不是一回事，所以这是个开关而不是统一行为：
+    ///
+    /// - **Sessions** 的选中是**派生的**——它跟着当前聚焦终端里那段会话走
+    ///   （`syncTerminalSelection`）。那是应用状态，侧栏没焦点时也该看得见，
+    ///   因为它回答的正是「我现在这个标签页里跑的是哪一段」。
+    /// - **Handoff** 的选中只是**键盘光标**：`tableViewSelectionDidChange` 是空的，
+    ///   它不反映任何状态，只记录上一次点/上下键停在哪儿，回车拿它开气泡。
+    ///   失焦之后还留着，就成了一个看起来像状态、其实什么都不代表的高亮——
+    ///   而 Handoff 模式真正的状态信号（绿点、「活跃」）在旁边，两个互相打架。
+    var showsSelectionOnlyWhenFocused = false
+
+    /// 这一帧到底画不画选中。`isEmphasized` 由 AppKit 维护：表是 key window 里的
+    /// first responder 时为真。hover 也要看它——不画选中的时候，选中行照样该有
+    /// 悬停反馈，否则鼠标划过去那一行是死的。
+    private var drawsSelection: Bool {
+        guard selectionHighlightStyle != .none, isSelected else { return false }
+        return !showsSelectionOnlyWhenFocused || isEmphasized
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isHovered, !isSelected else { return }
+        guard isHovered, !drawsSelection else { return }
         ShellStyle.hoverFill.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: 2, dy: 2),
@@ -447,12 +562,21 @@ final class ShellTableRowView: NSTableRowView {
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        guard selectionHighlightStyle != .none else { return }
+        guard drawsSelection else { return }
         ShellStyle.selectionFill.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: 2, dy: 2),
             xRadius: ShellStyle.rowCornerRadius,
             yRadius: ShellStyle.rowCornerRadius).fill()
+    }
+
+    /// AppKit 换了 `isEmphasized` 不一定重画这一行——焦点从侧栏移走时，
+    /// 那一行会保持旧样子直到别的原因触发重绘。
+    override var isEmphasized: Bool {
+        didSet {
+            guard showsSelectionOnlyWhenFocused, isEmphasized != oldValue else { return }
+            needsDisplay = true
+        }
     }
 }
 

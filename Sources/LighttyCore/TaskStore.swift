@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 public enum TaskStoreError: Error {
+    case invalidArchivePath
     /// rename(2) 失败（临时文件已清理）
     case atomicRenameFailed(path: String, errno: Int32)
 }
@@ -48,14 +49,52 @@ public final class TaskStore {
         try TaskFile.parse(Data(contentsOf: fileURL))
     }
 
-    // MARK: - 写
+    public var archiveDirectory: URL { directory.appendingPathComponent("archive", isDirectory: true) }
+
+    public func archivedFiles() throws -> [URL] {
+        guard fm.fileExists(atPath: archiveDirectory.path) else { return [] }
+        guard archiveDirectory.resolvingSymlinksInPath().standardizedFileURL == archiveDirectory.standardizedFileURL else {
+            throw TaskStoreError.invalidArchivePath
+        }
+        return try fm.contentsOfDirectory(at: archiveDirectory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
+            .filter { $0.pathExtension == "md" && (try? validateArchived($0)) != nil }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func validateArchived(_ url: URL) throws {
+        guard url.standardizedFileURL.deletingLastPathComponent() == archiveDirectory.standardizedFileURL,
+              url.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL,
+              try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw TaskStoreError.invalidArchivePath
+        }
+    }
 
     @discardableResult
-    public func create(name: String, workdir: String, tool: String? = nil) throws -> (fileURL: URL, task: TaskFile) {
+    public func restoreArchived(at url: URL) throws -> URL {
+        try validateArchived(url)
+        let task = try load(at: url)
+        let target = uniqueURL(for: task.name)
+        try fm.moveItem(at: url, to: target)
+        return target
+    }
+
+    public func permanentlyDeleteArchived(at url: URL) throws {
+        try validateArchived(url)
+        try fm.removeItem(at: url)
+    }
+
+    // MARK: - 写
+
+    /// `body` 是建任务时用户自己写下的交接正文（目标、背景、下一步）。留空就是空正文，
+    /// 与以前一样。它不是 lightty 的格式：Agent 之后会按 docs/task-format.md 的节头改写
+    /// 这块内容，这里只负责原样落盘。
+    @discardableResult
+    public func create(name: String, workdir: String, tool: String? = nil,
+                       body: String = "") throws -> (fileURL: URL, task: TaskFile) {
         let timestamp = now()
         let task = TaskFile(
             name: name, status: "active", workdir: workdir, tool: tool,
-            created: timestamp, updated: timestamp
+            created: timestamp, updated: timestamp, body: body
         )
         let url = uniqueURL(for: name)
         try atomicWrite(task.serialize(), to: url)

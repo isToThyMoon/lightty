@@ -2,6 +2,21 @@ import AppKit
 import GhosttyKit
 import LighttyCore
 
+/// 身份胶囊与灵动岛第一行共用的排布。
+///
+/// 两处必须逐像素同构：展开时胶囊瞬间隐身、面板第一行顶上，收起时反过来。差一个
+/// 像素，交接那一帧就能看见文字跳。数只留这一份——之前胶囊加了 agent 图标而岛体
+/// 没跟上，文字就往回缩了 14pt。
+enum PaneIdentityMetrics {
+    static let dotLeading: CGFloat = 6
+    static let dotSize: CGFloat = 7
+    /// 状态点尾 → 图标
+    static let iconLeading: CGFloat = 6
+    static let iconSize: CGFloat = 10
+    /// 图标尾 → 名字
+    static let iconGap: CGFloat = 4
+}
+
 /// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
 /// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
 /// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
@@ -40,6 +55,17 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private let closeButton = NSButton()
     var onCloseRequested: (() -> Void)?
     private let nameLabel = NSTextField(labelWithString: "")
+    private let agentIcon = NSImageView()
+    private var agentIconWidth: NSLayoutConstraint!
+    private var agentIconGap: NSLayoutConstraint!
+    var sessionAgent: SessionAgent? {
+        didSet {
+            guard oldValue != sessionAgent else { return }
+            agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
+            agentIconWidth.constant = sessionAgent == nil ? 0 : PaneIdentityMetrics.iconSize
+            agentIconGap.constant = sessionAgent == nil ? 0 : PaneIdentityMetrics.iconGap
+        }
+    }
     private let taskHintLabel = NSTextField(labelWithString: "")
     private var capsuleTracking: NSTrackingArea?
     private var headerTracking: NSTrackingArea?
@@ -66,6 +92,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     /// 胶囊在 header 坐标系中的 frame（面板形变动画的起点/终点）。
     var capsuleFrame: NSRect { capsule.frame }
+    /// 名字相对状态点的横向偏移。灵动岛第一行必须给出同一个数，否则交接会跳。
+    var titleOffsetFromDot: CGFloat { nameLabel.frame.minX - dotView.frame.maxX }
 
     /// 面板展开期间胶囊隐身。瞬时切换、不淡出：面板第一行与胶囊逐像素同构，
     /// 交接瞬间标题原地不动（灵动岛的"岛体扩展、内容不动"）。
@@ -75,7 +103,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // 这一句被调用时面板刚挂上窗口（PaneView 的展开顺序：refresh → addSubview →
         // setCapsuleHidden），正好是把状态色补给灵动岛的时机——PaneView 的
         // refresh(panel:) 传的是静态绑定色，不知道状态。
-        if hidden { syncIdentityPanelDot() }
     }
 
     var dot: Dot = .unnamed {
@@ -169,16 +196,18 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         applyTerminalColors()
 
         addSubview(capsule)
-        for v in [dotView, closeButton, nameLabel, taskHintLabel] {
+        for v in [dotView, closeButton, agentIcon, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             capsule.addSubview(v)
         }
         capsule.translatesAutoresizingMaskIntoConstraints = false
+        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
 
-            // full-size terminal 会延伸到原生标题栏下；工作区侧栏收起时，左贴的
+            // full-size terminal 会延伸到原生标题栏下；标签页侧栏收起时，左贴的
             // 身份胶囊会被红黄绿与侧栏开关盖住。按各 pane 自身居中后不再依赖
             // 窗口左侧安全区，多分屏也各自保持一致的视觉轴。
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -188,10 +217,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             capsule.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -4),
 
-            dotView.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 6),
+            dotView.leadingAnchor.constraint(
+                equalTo: capsule.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
             dotView.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
-            dotView.widthAnchor.constraint(equalToConstant: 7),
-            dotView.heightAnchor.constraint(equalToConstant: 7),
+            dotView.widthAnchor.constraint(equalToConstant: PaneIdentityMetrics.dotSize),
+            dotView.heightAnchor.constraint(equalToConstant: PaneIdentityMetrics.dotSize),
 
             // 与圆点同心、命中区放大到 16pt；不参与水平链，布局零位移
             closeButton.centerXAnchor.constraint(equalTo: dotView.centerXAnchor),
@@ -199,7 +229,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             closeButton.widthAnchor.constraint(equalToConstant: 16),
             closeButton.heightAnchor.constraint(equalToConstant: 16),
 
-            nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
+            agentIcon.leadingAnchor.constraint(
+                equalTo: dotView.trailingAnchor, constant: PaneIdentityMetrics.iconLeading),
+            agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            agentIcon.heightAnchor.constraint(equalToConstant: PaneIdentityMetrics.iconSize),
+            agentIconWidth,
+            agentIconGap,
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
             taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
@@ -230,7 +265,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // 新建 pane / 跨窗口拖动落地：presenter 不知道这一刻，自己向 store 取
-        if window != nil { pullStatus() }
         updateAmbientAnimations()
     }
 
@@ -275,6 +309,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             taskHintLabel.stringValue = want
         }
         syncAttentionRingFrame()
+        // 胶囊宽度随文案变，手型矩形要跟着重算
+        window?.invalidateCursorRects(for: self)
     }
 
     private func applyCapsuleFill() {
@@ -282,12 +318,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .withAlphaComponent(capsuleHovered ? 0.10 : 0.05).cgColor
     }
 
-    /// 整条 header 都可点/可拖（点击选中 pane、胶囊展开面板、拖动移 pane）。
+    /// 手型只给胶囊（含其中的关闭钮）：它是"可点开面板"的东西；header 其余
+    /// 空白只是选中/拖动区，保持箭头。
     /// 这里不用 HoverCursor：header 与 terminal 的 I-beam 光标区相邻，跨界时
     /// cursor rect 的「离开还原箭头」晚于 tracking area 的设置，手型会被盖掉
     /// （探针实测）。加入同一套 cursor rect 机制后，交接由窗口原子完成。
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
+        addCursorRect(convert(capsule.frame, from: capsule.superview), cursor: .pointingHand)
     }
 
     override func updateTrackingAreas() {
@@ -341,6 +378,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         layer?.backgroundColor = terminalBackground
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
+        agentIcon.contentTintColor = terminalForeground
         taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
         applyCloseButtonTint()
         applyCapsuleFill()
@@ -380,21 +418,36 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private static let dotPulseKey = "statusPulse"
 
     private var status: PaneStatus?
+    private var isUnread = false
     /// `.done` 落地时如果 pane 不可见，闪烁就白放了——记下来，等可见了补上。
     private var pendingDonePulse = false
 
-    /// 由 `PaneStatusPresenter` 推入。
+    /// PaneView renders the application session model's activity snapshot.
     ///
-    /// pane 自己不订阅通知：状态源是全局的一发广播，每个 pane 挂一个观察者
-    /// 只是把同一次广播摊成 N 次派发，还得在 PaneView 里加订阅代码。
-    func apply(_ status: PaneStatus?) {
-        // 高频入口（PreToolUse/PostToolUse 一次工具调用就来两发），先挡住无变化的
-        let changed = status?.state != self.status?.state
-            || status?.tool != self.status?.tool
-            || status?.detail != self.status?.detail
-        guard changed else { return }
+    /// 终端头**真正显示出来**的三样东西：圆点跟状态走，tooltip 用 tool 与 detail。
+    ///
+    /// 比较它，而不是比较原始状态里的字段：以后往这里加显示项，就必须加进这个值，
+    /// 守卫自动跟着走。别照抄侧栏行那边的字段表——那边显示 `cwd`，这里不显示；
+    /// 这里显示 `detail`，那边不显示。**各自比自己显示的东西**（见
+    /// `TabColumnView` 里 `PaneRowView.Rendered`）。
+    private struct Rendered: Equatable {
+        var state: PaneActivity?
+        var tool: String?
+        var detail: String?
+        /// 纯函数，不另存缓存——理由同 `PaneRowView.Rendered`。
+        init(of status: PaneStatus?) {
+            state = status?.state
+            tool = status?.tool
+            detail = status?.detail
+        }
+    }
+
+    func apply(_ status: PaneStatus?, isUnread: Bool = true) {
+        // 高频入口：PreToolUse/PostToolUse 一次工具调用就来两发，先挡住无变化的。
+        guard Rendered(of: self.status) != Rendered(of: status) || self.isUnread != isUnread else { return }
         let enteredDone = status?.state == .done && self.status?.state != .done
         self.status = status
+        self.isUnread = isUnread
 
         applyDotColor()
         applyCloseButtonTint()
@@ -402,7 +455,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         // `.attention` 直接复用现成的呼吸环（唯一一处「非人不可」的状态，
         // 值得动用胶囊级的提示；其余状态一律只在圆点里表达）
-        if status?.state == .attention {
+        if status?.state == .attention && isUnread {
             beginCapsuleAttention()
         } else {
             endCapsuleAttention()
@@ -412,17 +465,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // 否则它会晚一步落在一个已经不是 done 的圆点上
         pendingDonePulse = enteredDone || (pendingDonePulse && status?.state == .done)
         updateAmbientAnimations()
-        syncIdentityPanelDot()
-    }
-
-    /// pane 是新建的、或从别的窗口拖过来的：主动向 store 拉一次当前值。
-    /// 这是拉不是订阅——presenter 不知道 pane 什么时候诞生，而 store 一直知道。
-    private func pullStatus() {
-        guard let dragIdentifier else { return }
-        apply(PaneStatusStore.shared.status(for: dragIdentifier))
     }
 
     private var activity: PaneActivity? { status?.state }
+    var activityDotColor: NSColor? {
+        (activity == nil || activity == .idle) ? nil : effectiveDotColor
+    }
 
     private var effectiveDotColor: NSColor {
         ShellStyle.dotColor(bound: dot == .active, activity: activity)
@@ -448,7 +496,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     /// 不停跳变——比呼吸的圆点扎眼得多，正好和「不打扰」相反），要么再加一段
     /// 仲裁逻辑去挤 pane 名。两条都比这点信息量贵，所以走 tooltip。
     private func updateStatusTooltip() {
-        toolTip = WorkspacePaneStatusPresentation.detailLine(for: status)
+        toolTip = TabPaneStatusPresentation.detailLine(for: status)
     }
 
     // MARK: 环境动画的开关
@@ -523,20 +571,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         pulse.duration = ShellStyle.statusDonePulseDuration
         pulse.timingFunction = ShellStyle.easeInOutCubic
         dotView.layer?.add(pulse, forKey: Self.dotPulseKey)
-    }
-
-    /// 灵动岛第一行的圆点与胶囊逐像素同构，颜色也得跟着状态走。
-    ///
-    /// 面板挂在窗口 contentView 上（不在 pane 子树里），header 拿不到直接引用；
-    /// 但「胶囊隐身」正好是「本 header 的面板正开着」的标记，而同一窗口任意时刻
-    /// 至多一个面板展开（面板的 dismiss monitor 会在点到别处时收起），据此定位即可，
-    /// 不必为这一条信息再从 PaneView 牵一根线过来。
-    private func syncIdentityPanelDot() {
-        guard capsuleIsHidden, let host = window?.contentView else { return }
-        for case let panel as PaneIdentityPanel in host.subviews {
-            panel.applyStatusDot(
-                (activity == nil || activity == .idle) ? nil : effectiveDotColor)
-        }
     }
 
     // MARK: - 点击 / 拖拽

@@ -186,9 +186,8 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.aggregate, .idle)
     }
 
-    /// attention 也被已读终结：它可能由 turn 结束后的「等你输入」提醒点亮，
-    /// 此后 agent 不再发事件——没有用户侧清除路径的话问号永远挂着。
-    func testMarkReadClearsAttention() {
+    /// Reading acknowledges the reminder without claiming that the Agent has resumed.
+    func testMarkReadPreservesAttention() {
         let pane = UUID()
         attach(pane)
         send(.attention, to: pane)
@@ -196,8 +195,12 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.aggregate, .attention)
 
         store.markRead(pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .idle)
-        XCTAssertEqual(store.aggregate, .idle)
+        XCTAssertEqual(store.status(for: pane)?.state, .attention)
+        XCTAssertEqual(store.aggregate, .attention)
+        XCTAssertNil(store.unreadActivity(for: pane))
+        let count = received.count
+        store.markRead(pane)
+        XCTAssertEqual(received.count, count, "Repeated reads do not publish another change")
     }
 
     func testStopUnlinksTheSocketFile() {

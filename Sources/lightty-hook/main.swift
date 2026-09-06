@@ -47,15 +47,37 @@ private func summarize(_ raw: String, limit: Int = 80) -> String {
     return String(flat.prefix(limit - 1)) + "…"
 }
 
-/// 尽力而为地认 agent：hook 子进程继承 agent 自己设的环境变量。
+/// 认 agent：证据按可靠程度排序交给 `HookAgentDetection`——父进程链上的二进制名、
+/// `transcript_path` 的路径形状、最后才是环境变量（会从上层会话泄漏）。
 /// 认不出就留空——`agent` 是可选字段，猜错比留空更糟。
 private func detectAgent(payload: [String: Any]) -> String? {
-    let env = ProcessInfo.processInfo.environment
-    if env["CLAUDECODE"] != nil || env["CLAUDE_CODE_ENTRYPOINT"] != nil { return "claude" }
-    if env["CODEX_HOME"] != nil || env["CODEX_SANDBOX"] != nil { return "codex" }
-    // Claude Code 独有的 payload 字段，作为环境变量之外的兜底
-    if payload["transcript_path"] != nil { return "claude" }
-    return nil
+    HookAgentDetection.agent(
+        ancestorExecutablePaths: ancestorExecutablePaths(),
+        transcriptPath: string(payload["transcript_path"]),
+        environment: ProcessInfo.processInfo.environment)
+}
+
+/// 父进程链上每个进程的**可执行文件绝对路径**，最近的在前。走 `sysctl(KERN_PROC_PID)`
+/// 取 ppid、`proc_pidpath` 取路径；任一步失败就到此为止。最多向上 8 层，够穿过
+/// agent → shell → hook 的任何包装，又不会在深层进程树里白跑。
+///
+/// 要整条路径而不是 basename：claude 经 symlink 解析后可执行文件名是版本号
+/// （`.../share/claude/versions/2.1.263`），basename 认不出，但路径里含 `claude` 段。
+private func ancestorExecutablePaths(limit: Int = 8) -> [String] {
+    var paths: [String] = []
+    var pid = getppid()
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE 是算式宏，Swift 导不进来
+    while pid > 1, paths.count < limit {
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { break }
+        paths.append(String(cString: buffer))
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { break }
+        pid = info.kp_eproc.e_ppid
+    }
+    return paths
 }
 
 // MARK: - handoff 注入（§8）
@@ -124,29 +146,17 @@ private func handoffToInject(event: String, paneID: String, sessionID: String?) 
 
 /// 把任务文件拼成注入的上下文。文件读不到 → nil（不注入，也不报错）。
 ///
-/// 框架文本固定英文：这是跨会话的协议语言，与界面语言无关
-/// （同 Sources/lightty/Localization.swift 的边界说明）。
+/// 这里只管「读得到读不到」，文本一个字都不在这儿：注入、插件里那份 SKILL.md、
+/// 设置页展示等四处共用 `HandoffProtocol` 那一份真值，见
+/// `Sources/LighttyCore/HandoffProtocol.swift`。在这里另写一段，等于让用户在
+/// 设置页读到的和 agent 真正收到的是两样东西——那种不一致最难被发现。
+///
+/// 交给协议的是任务文件**全文**（含 frontmatter）：协议里「只重写 frontmatter
+/// 结束的 `---` 之后」那条指令，得让 agent 对着实物看，否则它引用的是一个
+/// 看不见的东西。
 private func handoffContext(path: String, lateBinding: Bool) -> String? {
     guard let body = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-
-    let opener = lateBinding
-        ? "This terminal pane has just been bound to a task in lightty (or its binding changed), and"
-        : "This terminal pane is bound to a task in lightty, and"
-
-    return """
-        \(opener) the handoff document below is that \
-        task's running record, left by the previous sessions at `\(path)`.
-
-        Read it before doing anything else: continue from its "Next steps" section, and treat \
-        "Key decisions & constraints" as reference material rather than work to redo. When this \
-        session's work is done, write the updated handoff back to that same absolute path \
-        (`\(path)`): rewrite only the body after the frontmatter terminator, refresh `updated` in \
-        the frontmatter, and write a temp file in the same directory then mv it over the target.
-
-        ----- BEGIN HANDOFF DOCUMENT -----
-        \(body)
-        ----- END HANDOFF DOCUMENT -----
-        """
+    return HandoffProtocol.injection(path: path, body: body, lateBinding: lateBinding)
 }
 
 // MARK: - 主流程
@@ -170,16 +180,28 @@ guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let state = PaneActivity(hookEventName: event)
 else { exit(0) }
 
+let agentProcess = AgentProcessIdentity.agentAncestor(startingAt: getppid())
+let agentName = agentProcess?.agent ?? detectAgent(payload: payload)
+let sourceRoot = agentName.flatMap(SessionAgent.init(rawValue:)).map { agent in
+    SessionConfigurationLocation.resolve(agent: agent, environment: environment)
+        .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
+}
 let status = PaneStatus(
     ts: Date(),
     state: state,
-    agent: detectAgent(payload: payload),
+    agent: agentName,
     sessionID: string(payload["session_id"]),
+    sourceRoot: sourceRoot,
+    sourceConfiguration: agentName.flatMap(SessionAgent.init(rawValue:)).map {
+        SessionConfigurationLocation.resolve(agent: $0, environment: environment)
+    },
+    agentProcess: agentProcess?.agent == agentName ? agentProcess?.process : nil,
     tool: string(payload["tool_name"]),
     // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
     // PostToolUse 的同一份参数只是回声
     detail: event == "PreToolUse" ? detail(from: payload["tool_input"]) : nil,
-    cwd: string(payload["cwd"])
+    cwd: string(payload["cwd"]),
+    event: event
 )
 
 // 一发即走。返回值刻意丢弃：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、

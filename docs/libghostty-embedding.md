@@ -68,14 +68,14 @@ Lightty 只有产品壳和声明式随包配置，没有第二套 terminal parse
 
 原则：**凡属于 terminal 视觉域的配置项，其取值方式和推导公式必须照抄官方壳**（macos/Sources/Ghostty/Ghostty.Config.swift 等）；lightty 应用 chrome 是独立产品层，不在此规则内。上游更新后按此清单复核。当前对齐状态：
 
-> **配置职权变更（2026-09-02）**：Lightty 开始随包携带 `lightty-default.ghostty`，只作为用户未配置项目的基线。菜单中的 “Use Lightty Theme” 默认勾选；勾选时在用户文件之后额外合并只有一行 `theme` 的 `lightty-theme.ghostty`，不勾选则用户 `theme` 生效。这里是同一 config 对象的逐行合并，不是整文件替换；用户显式的 font、keybind、颜色、透明度等其他键不受影响。启动和热重载必须共用同一条加载链。
+> **配置职权变更（2026-09-11）**：设置中的“使用 Lightty 内置终端配置”默认开启。开启时只加载 `lightty-default.ghostty`，不读取 Ghostty 用户配置或其递归 `config-file`；关闭时先加载随包基线，再允许 Ghostty 用户配置及递归文件覆盖所有选项（含主题、字体、光标、颜色和透明度）。不再单独重放 theme 配置。保留原偏好存储键以延续用户选择；启动和热重载共用同一条加载链。
 
 > **默认字体职权（2026-09-02）**：不提供独立字体开关或字体合并链。`lightty-default.ghostty` 直接声明 `font-family = "Maple Mono NF CN"`，随后加载的 Ghostty 用户配置仍可覆盖它。字体缺失时不主动弹窗，只在应用菜单提供推荐下载项。下载固定为上游 v7.9 `MapleMono-NF-CN-unhinted.zip`（约 159 MB），SHA-256 校验通过后只安装 Regular/Bold/Italic/BoldItalic 和 OFL 到正常用户字体路径 `~/Library/Fonts`，随后热重载 Ghostty；不做动态 CoreText 注册，也不等待或轮询系统字体服务。系统已经存在该 family 时，下载入口不出现。
 
 | 配置项 | 我们的实现 | 官方出处 | 状态 |
 |---|---|---|---|
 | libghostty resources | `ghostty_init` 前解析：显式 `GHOSTTY_RESOURCES_DIR` → app `Contents/Resources/ghostty` → 从开发期可执行文件向上查找 `vendor/ghostty/zig-out/share/ghostty` | `src/os/resourcesdir.zig` | 纯资源定位 adapter；不解析或修改配置。app 打包必须复制整个 `zig-out/share/ghostty` |
-| 配置加载顺序 | bundled defaults → default_files → recursive_files → optional bundled theme key → finalize；finalize 后同一对象原样传给 `ghostty_app_new` | Ghostty.Config.swift loadConfig + `ghostty_config_load_file` | 用户配置覆盖包含默认字体在内的产品基线；“Use Lightty Theme” 只额外覆盖 `theme`。仅跳过 load_cli_args（命令行属于 Lightty） |
+| 配置加载顺序 | bundled defaults → 仅关闭内置配置时 default_files → recursive_files → finalize；finalize 后同一对象原样传给 `ghostty_app_new` | Ghostty.Config.swift loadConfig + `ghostty_config_load_file` | 内置配置开启时跳过用户文件；关闭时用户配置覆盖产品基线。始终跳过 load_cli_args（命令行属于 Lightty） |
 | 默认字体 | `lightty-default.ghostty` 默认选择 Maple Mono NF CN，不随包携带字体。应用菜单按需检测 family：缺失时提供上游 OFL-1.1 制品下载，校验固定 SHA-256 后安装四个字面和许可证到 `~/Library/Fonts` | 正常用户字体安装 + Ghostty `font-family` | Ghostty 只消费系统字体；Lightty 不维护、动态注册或主动轮询字体。系统已有该 family 时不提供下载入口；用户 `font-family` 可覆盖产品默认值 |
 | background / foreground | ghostty_config_get + color struct | 同式 | 对齐 |
 | background-opacity | Double get，<1 时 terminal 窗口底座非不透明 + 白 0.001 背景；应用标题栏/侧栏另铺不透明实底 | TerminalWindow.syncAppearance | terminal 对齐，chrome 有意分叉 |
@@ -88,7 +88,10 @@ Lightty 只有产品壳和声明式随包配置，没有第二套 terminal parse
 | macos-titlebar-style | 保留 lightty 原生标题栏，不读取该项 | HiddenTitlebarTerminalWindow | **有意分叉**：标题栏只承载系统三键与侧栏开关，pane 操作位于侧栏标题行 |
 | 热重载 | core action、字体菜单与主题菜单均重新执行同一条 bundled defaults → default_files → recursive_files → optional font/theme → finalize 链，并用 `ghostty_app_update_config` / `ghostty_surface_update_config` 更新 | 官方监听 reload + 系统外观变化重载 | terminal core 已接；依赖启动快照的 pane chrome/window base 刷新待补 |
 
-配置分层回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。脚本用隔离的
+配置分层回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。设置存在
+lightty 自己的文件里、读时不看命令行参数，所以脚本用 `LIGHTTY_PREFERENCES_DIR` 指向
+临时造的设置文件来摆内置主题开关；用户真实的 `~/.lightty/preferences.json` 全程不读
+不写。脚本用隔离的
 XDG fixture 验证：空用户文件得到随包基线；勾选时只覆盖用户 `theme`；不勾选时恢复
 用户主题；与主题无关的用户标量值始终保留。`--print-effective-terminal-config` 只输出
 background/foreground/opacity/blur 和配置 diagnostics，供检查使用；脚本同时拒绝
@@ -97,7 +100,10 @@ appearance 强制。
 
 Terminal adapter 回归：运行 `scripts/check-terminal-adapter-parity.sh`。它拒绝任何
 AppKit 非空快捷键和 surface Home cwd override，并钉住 inherited config、IME、
-modifier、key-equivalent、display/occlusion 及常用 core host action 桥。完整本地验收：
+modifier、key-equivalent、display/occlusion 及常用 core host action 桥；tab 一侧钉的是
+窗口内自绘模型（`tabbingMode = .disallowed`，goto/close 走窗口控制器），退回原生
+tab group 会被拒。脚本 `set -e`，第一条不过就停——修完一条要重跑到 PASS，别把后面
+的检查一直遮着。完整本地验收：
 
 ```sh
 swift test
@@ -112,12 +118,7 @@ git diff --check
 > `Contents/Resources/ghostty`。缺失时带名字的内置主题会报 `theme ... not found`，
 > background/foreground 随后保留为 libghostty 默认 `#282c34/#ffffff`。
 
-## 透明排查实录（2026-08-22，防复发）
+## 透明合成约束
 
-现象：窗口/层级全部非不透明、surface 像素 alpha 正确（实测 224），视觉仍不透明。
-
-根因：**layer 化后 NSView 自绘内容落在超出 bounds 的 ContentLayer 里**（实测 header 24pt 的绘制内容出现在全窗口尺寸的 ContentLayer 上），父 layer 不裁剪 → 半透明底色整张盖住终端。
-
-修复：自绘 NSView 必须 `clipsToBounds = true`（PaneHeaderView）。
-
-排查路径备忘：逐层排除（config 读取 → 像素 alpha 采样 → 官方壳同 core 对照 → 素窗口二分 → 层级对照 dump），最快路径其实是最后一步的**双窗口 layer 树 diff**——下次遇合成异常直接从它开始。
+自绘背景不得超出所属 view 的 bounds；PaneHeaderView 使用 `clipsToBounds = true`，防止 ContentLayer 的底色覆盖终端。
+合成异常时核查 config、surface alpha 与 layer 树，必要时与官方壳对照，不能仅凭窗口的 opaque 标志判断透明度。
