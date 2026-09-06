@@ -19,6 +19,13 @@ final class TerminalWindow: NSWindow {
             defer: false)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
+        // 空 toolbar 只为把红绿灯沉到 Tahoe 的 unified 标题栏高度（中心距顶 26pt），
+        // 让 task 浮空卡片能从窗口顶边起、把三键收进自己的头部行（Notes 同式）。
+        // 不放任何 item，透明标题栏下它不画任何东西。
+        let toolbar = NSToolbar(identifier: "lightty.titlebar-spacer")
+        self.toolbar = toolbar
+        toolbarStyle = .unified
+        titlebarSeparatorStyle = .none
         isReleasedWhenClosed = false
         // lightty 的 tab 是窗口内自绘概念（一窗一侧栏 + N 个 pane 树容器）。
         // 原生 tab group 是多 NSWindow 结组、tab bar 横跨全窗宽，与侧栏语义冲突，禁用。
