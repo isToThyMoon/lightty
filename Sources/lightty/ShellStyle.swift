@@ -216,8 +216,24 @@ final class ShellIconButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Auto Layout 约束的是 alignment rect；Tahoe 给无边框按钮塞了几 pt 不对称的
+    /// alignmentRectInsets（每枚按钮还不一样），28×28 的约束会撑出 30.5×37 的 frame，
+    /// 底块随之走样。归零让约束尺寸就是 frame 尺寸。
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+
     override func layout() {
         super.layout()
+        syncFillFrame()
+    }
+
+    /// Auto Layout 改尺寸不一定触发 layout()（同一轮里布局已跑过的按钮会漏掉），
+    /// 所以尺寸变化时也直接同步，否则底块停留在旧尺寸。
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        syncFillFrame()
+    }
+
+    private func syncFillFrame() {
         fillLayer.frame = bounds.insetBy(dx: Self.fillInset, dy: Self.fillInset)
     }
 
