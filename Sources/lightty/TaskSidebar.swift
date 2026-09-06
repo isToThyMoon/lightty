@@ -286,9 +286,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             newTaskButton.heightAnchor.constraint(equalToConstant: 28),
 
             searchButton.trailingAnchor.constraint(equalTo: newTaskButton.leadingAnchor, constant: -4),
-            // +1 光学微调：放大镜镜柄在右下，字形视觉重心偏上，几何同心时显高
-            searchButton.centerYAnchor.constraint(
-                equalTo: newTaskButton.centerYAnchor, constant: 1),
+            // 不做光学微调：底块只贴字形后，整钮偏 1pt 会直接暴露成框错位
+            searchButton.centerYAnchor.constraint(equalTo: newTaskButton.centerYAnchor),
             searchButton.widthAnchor.constraint(equalToConstant: 28),
             searchButton.heightAnchor.constraint(equalToConstant: 28),
 
