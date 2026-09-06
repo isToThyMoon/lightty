@@ -13,7 +13,7 @@ enum ShellStyle {
     /// 双面板侧栏体系：工作区侧栏（docked）+ 任务浮层卡片（overlay）
     static let workspaceColumnWidth: CGFloat = 200
     static let taskPanelWidth: CGFloat = 270
-    static let panelInset: CGFloat = 10
+    static let panelInset: CGFloat = 6
     static let sidebarHorizontalInset: CGFloat = 10
     /// 统一行高系统：所有 chrome 行（tab 栏、pane header、侧栏标题带、搜索框）
     /// 共用 28pt——与 macOS 标题栏同高，这是系统给定的模数基准。行间距统一 12。
