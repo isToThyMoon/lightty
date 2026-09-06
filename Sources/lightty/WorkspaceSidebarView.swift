@@ -100,7 +100,7 @@ final class WorkspaceSidebarView: NSView {
 /// 半透明填充、无描边无投影（弱边界）。默认低存在感，宿主在鼠标靠近边缘带时
 /// reveal。task 卡片的两个开关：窗口左缘的展开钮（左平右圆）与卡片右缘的
 /// 关闭钮（右平左圆），同一形状的镜像。
-final class EdgeToggleControl: NSView {
+final class EdgeToggleControl: NSView, HoverResyncing {
     enum Pointing { case left, right }
 
     var onTap: (() -> Void)?
@@ -110,7 +110,6 @@ final class EdgeToggleControl: NSView {
     private let hoverTint = NSView()
     private let chevron = NSImageView()
     private var tracking: NSTrackingArea?
-    private let sentinel = HoverSentinel()
     private var hovered = false { didSet { applyLook() } }
     private var revealed = false
 
@@ -218,20 +217,27 @@ final class EdgeToggleControl: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !ShellHoverGate.suppressed else { return }
         hovered = true
         reveal(true)
-        // 吸边钮随让位滑动，同样会漏 mouseExited（见 HoverSentinel）
-        sentinel.watch(self) { [weak self] in
-            guard let self, self.hovered else { return }
-            self.hovered = false
-            self.reveal(self.revealed)
-        }
     }
 
     override func mouseExited(with event: NSEvent) {
-        sentinel.stop()
         hovered = false
         reveal(revealed)
+    }
+
+    func resyncHover() {
+        updateTrackingAreas()
+        // 感应区比 bounds 大（见 updateTrackingAreas），用同一放大矩形判定
+        let inside: Bool = {
+            guard let window, window.isKeyWindow else { return false }
+            let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            return bounds.insetBy(dx: -10, dy: -6).contains(local)
+        }()
+        guard hovered != inside else { return }
+        hovered = inside
+        reveal(inside || revealed)
     }
 
     /// 命中区比视觉宽：左右各扩 10pt 容错，不影响渲染
