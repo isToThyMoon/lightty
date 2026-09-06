@@ -1248,6 +1248,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         guard let sidebar = workspaceSidebar else { return }
         endWorkspaceSidebarResize()
         workspaceSidebar = nil
+        // 关闭钮不跟着侧栏滑（磨砂块快速位移会拖出残影），原地淡出
+        if let control = workspaceEdgeControl {
+            workspaceEdgeControl = nil
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.12
+                control.animator().alphaValue = 0
+            }, completionHandler: { control.removeFromSuperview() })
+        }
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let workspaceSidebarLeadingConstraint {
             targets.append((workspaceSidebarLeadingConstraint, -workspaceSidebarWidth))
@@ -1372,11 +1380,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         workspaceEdgeStrip = nil
         workspaceEdgeLeadingConstraint = nil
 
+        // 两态都垫在 task 卡片之下：侧栏从卡片下方穿行，开关随行时不能浮到卡片表面
+        func mount(_ v: NSView) {
+            if let taskPanel {
+                themeFrame.addSubview(v, positioned: .below, relativeTo: taskPanel)
+            } else {
+                themeFrame.addSubview(v)
+            }
+        }
+
         if let sidebar = workspaceSidebar {
             let button = EdgeToggleControl(pointing: .left)
             button.onTap = { [weak self] in self?.closeWorkspaceSidebar() }
             button.translatesAutoresizingMaskIntoConstraints = false
-            themeFrame.addSubview(button)
+            mount(button)
             NSLayoutConstraint.activate([
                 button.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
                 // 开/关两态都以整窗边界中线为纵向基准
@@ -1392,7 +1409,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         strip.onHoverChange = { [weak button] hovered in button?.reveal(hovered) }
         for v in [strip, button] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            themeFrame.addSubview(v)
+            mount(v)
         }
         let leading = button.leadingAnchor.constraint(
             equalTo: themeFrame.leadingAnchor, constant: workspaceSidebarOpenX)
