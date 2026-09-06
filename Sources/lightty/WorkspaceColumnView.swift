@@ -193,6 +193,7 @@ final class WorkspaceColumnView: NSView {
                 count: entry.panes.count,
                 isActive: entry.isActive,
                 isCollapsed: isCollapsed)
+            row.workspaceIndex = index
             row.onSelect = { [weak self] in
                 guard let self else { return }
                 if wasActive {
@@ -300,17 +301,23 @@ final class WorkspaceColumnView: NSView {
         let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
         let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
         addSubview(snap)
-        source.alphaValue = 0  // 真行隐身，浮层代它出镜
+        // 与任务列表同款：源行原地隐身但保留占位 = 随光标流动的空档，其余 pane
+        // 行让位。alpha 0（不是 isHidden）才会保住这条槽位当空档。
+        source.alphaValue = 0
 
         let cursorInSelf = convert(event.locationInWindow, from: nil)
         let grabOffsetY = cursorInSelf.y - startFrame.minY
 
-        // 命中候选：所有可接落点的兄弟行（排除源行自身）。
-        func rows() -> [SidebarPaneDropRow] {
-            rowsStack.arrangedSubviews.compactMap { $0 as? SidebarPaneDropRow }
-                .filter { $0 !== source }
+        // 源行在 arranged 序列中的插入位（以“排除源行后的其余行”为基准）。
+        func others() -> [NSView] { rowsStack.arrangedSubviews.filter { $0 !== source } }
+        func applied() -> Int {  // 源行当前落在 others 里的哪个插入位
+            let arranged = rowsStack.arrangedSubviews
+            let si = arranged.firstIndex(of: source) ?? 0
+            return arranged[..<si].filter { $0 !== source }.count
         }
-        var current: SidebarPaneDropRow?
+        // 起手时的邻居快照，用于结束时判空动（没真动就不折腾 split 树）。
+        let (origPrev, origNext) = neighborPaneIDs(of: source)
+        var lastIdx = applied()
 
         ReorderDrag.run(
             host: self,
@@ -319,22 +326,85 @@ final class WorkspaceColumnView: NSView {
             grabOffsetY: grabOffsetY,
             onMove: { [weak self] c in
                 guard let self else { return }
-                let hit = rows().first {
-                    self.convert($0.bounds, from: $0).contains(c) && $0.acceptsPaneDrop(paneID)
+                // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 目标插入位
+                let peers = others()
+                var idx = 0
+                for v in peers {
+                    if self.convert(v.bounds, from: v).midY > c.y { idx += 1 } else { break }
                 }
-                if hit !== current {
-                    current?.setDropHighlighted(false)
-                    current = hit
-                    hit?.setDropHighlighted(true)
+                idx = min(max(idx, 1), peers.count)  // 不越过第一条工作区标题
+                guard idx != lastIdx else { return }
+                lastIdx = idx
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.16
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    ctx.allowsImplicitAnimation = true
+                    self.rowsStack.removeArrangedSubview(source)
+                    self.rowsStack.insertArrangedSubview(source, at: idx)
+                    self.rowsStack.layoutSubtreeIfNeeded()
                 }
             },
-            dropFrame: { current == nil ? startFrame : nil },  // 无落点则弹回原位
-            onCommit: { current?.setDropHighlighted(false); _ = current?.performPaneDrop(paneID) },
+            dropFrame: { [weak self, weak source] in
+                guard let self, let source else { return nil }
+                return self.convert(source.bounds, from: source)  // 落进自己让出的空档
+            },
+            onCommit: { [weak self, weak source] in
+                guard let self, let source else { return }
+                self.commitPaneRowDrop(
+                    source: source, paneID: paneID, origPrev: origPrev, origNext: origNext)
+            },
             onEnd: { [weak self, weak source] in
                 source?.alphaValue = 1
                 self?.reload()
             }
         )
+    }
+
+    /// 源行在 arranged 序列里的同区上下相邻 pane（跨工作区标题即断，视为无邻居）。
+    private func neighborPaneIDs(of source: PaneRowView) -> (prev: UUID?, next: UUID?) {
+        let arranged = rowsStack.arrangedSubviews
+        guard let si = arranged.firstIndex(of: source) else { return (nil, nil) }
+        var prev: UUID?
+        for v in arranged[..<si].reversed() {
+            if v is WorkspaceRowView { break }
+            if let r = v as? PaneRowView { prev = r.paneID; break }
+        }
+        var next: UUID?
+        for v in arranged[(si + 1)...] {
+            if v is WorkspaceRowView { break }
+            if let r = v as? PaneRowView { next = r.paneID; break }
+        }
+        return (prev, next)
+    }
+
+    /// 把源行拖后的最终位置翻译成一次 split 树移动：优先落到“下方同区 pane 的左侧”，
+    /// 否则“上方同区 pane 的右侧”，都没有则整体移进上方那个工作区。没真动则跳过。
+    private func commitPaneRowDrop(
+        source: PaneRowView, paneID: UUID, origPrev: UUID?, origNext: UUID?
+    ) {
+        let (prev, next) = neighborPaneIDs(of: source)
+        guard prev != origPrev || next != origNext else { return }  // 没动，别折腾树
+        func pane(_ id: UUID?) -> PaneView? {
+            guard let id else { return nil }
+            return controller?.panes().first { $0.dragIdentifier == id }
+        }
+        if let dest = pane(next) {
+            _ = controller?.movePane(withID: paneID, to: dest, zone: .left)
+        } else if let dest = pane(prev) {
+            _ = controller?.movePane(withID: paneID, to: dest, zone: .right)
+        } else if let wsIndex = workspaceIndexAbove(source) {
+            _ = controller?.movePane(withID: paneID, toWorkspaceAt: wsIndex)
+        }
+    }
+
+    /// 源行上方最近的工作区标题的 index（落进空/首位时用）。
+    private func workspaceIndexAbove(_ source: PaneRowView) -> Int? {
+        let arranged = rowsStack.arrangedSubviews
+        guard let si = arranged.firstIndex(of: source) else { return nil }
+        for v in arranged[..<si].reversed() {
+            if let ws = v as? WorkspaceRowView { return ws.workspaceIndex }
+        }
+        return nil
     }
 
     private func add(_ row: NSView) {
@@ -362,6 +432,8 @@ private protocol SidebarPaneDropRow: NSView {
 }
 
 private final class WorkspaceRowView: NSView, SidebarPaneDropRow {
+    /// 拖拽落点映射用：空区落到本工作区时按此 index 走 movePane(toWorkspaceAt:)。
+    var workspaceIndex = 0
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
