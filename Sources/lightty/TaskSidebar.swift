@@ -121,12 +121,13 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         guard window != nil, let layer else { return }
         // 悬浮卡片质感（layer 配置延迟到挂窗后：backing layer 重建会吃掉
         // init 期配置；投影用 NSView.shadow，AppKit 维护不丢）
-        layer.cornerRadius = 12
+        // 贴边 6、圆角 16、轻投影：与 Notes 的浮空侧栏同一量级
+        layer.cornerRadius = 16
         layer.borderWidth = 1
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-        shadow.shadowBlurRadius = 32
-        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
+        shadow.shadowBlurRadius = 18
+        shadow.shadowOffset = NSSize(width: 0, height: -4)
         self.shadow = shadow
         applyAppearanceColors()
     }
