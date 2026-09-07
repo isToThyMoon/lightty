@@ -55,15 +55,17 @@ enum ShellMenuPopover {
         }
         menu.onDismiss = { dismiss() }
 
-        let size = menu.contentView?.fittingSize ?? NSSize(width: 224, height: 100)
+        let size = menu.cardSize
         let anchorRect = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
         let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? anchorRect
         var origin = NSPoint(x: anchorRect.maxX - size.width, y: anchorRect.minY - 6 - size.height)
         if origin.y < screen.minY { origin.y = anchorRect.maxY + 6 }  // 下方放不下 → 上方
         origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
-        let frame = NSRect(origin: origin, size: size)
-        menu.setFrame(frame, display: false)
-        menu.setBackdrop(Self.blurredBackdrop(of: parent, under: frame))
+        let cardFrame = NSRect(origin: origin, size: size)
+        // 窗口比卡片大一圈：自绘阴影要落在这圈透明边距里
+        menu.setFrame(cardFrame.insetBy(dx: -ShellMenuWindow.shadowMargin,
+                                        dy: -ShellMenuWindow.shadowMargin), display: false)
+        menu.setBackdrop(Self.blurredBackdrop(of: parent, under: cardFrame))
 
         window = menu
         parent.addChildWindow(menu, ordered: .above)
@@ -100,13 +102,23 @@ enum ShellMenuPopover {
     }
 }
 
-/// 菜单卡片窗口：无边框、透明底，内容是圆角磨砂卡（材质 + 细描边 + 系统投影）。
+/// 菜单卡片窗口：无边框、透明底。系统给无边框窗口的投影在边界上有一圈很实的暗边
+/// （1x 屏上像一道描边），所以关掉，改成卡片四周留透明边距、自绘宽而软的阴影。
 /// 成为 key window 以驱动行 hover；失去 key（点了别处）或 Esc 即关闭。
 private final class ShellMenuWindow: NSWindow {
+    static let shadowMargin: CGFloat = 28
+
     var onDismiss: (() -> Void)?
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
     private let controller: NSViewController
     private let backdrop = NSImageView()
+    private let shadowHost = MenuShadowView()
+
+    /// 卡片本体尺寸（不含阴影边距）
+    var cardSize: NSSize {
+        let size = controller.view.fittingSize
+        return NSSize(width: max(size.width, 224), height: size.height)
+    }
 
     func setBackdrop(_ image: NSImage?) {
         backdrop.image = image
@@ -119,16 +131,21 @@ private final class ShellMenuWindow: NSWindow {
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         animationBehavior = .utilityWindow
         isMovableByWindowBackground = false
+
+        // 根视图透明，卡片内缩 shadowMargin，阴影画在内缩出来的边距里
+        let root = NSView()
+        shadowHost.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(shadowHost)
 
         // 卡片 = 底色 → 模糊底图 → 高透抬升面罩 → 内容；圆角由 masksToBounds 裁齐
         let card = MenuCardView()
         card.wantsLayer = true
         card.layer?.cornerRadius = 14
         card.layer?.masksToBounds = true
-        // 发丝线：只为在同色底上勾一下轮廓，轮廓感主要交给窗口投影
+        // 发丝线：只为在同色底上勾一下轮廓，轮廓感交给阴影
         card.layer?.borderWidth = 0.5
         backdrop.imageScaling = .scaleAxesIndependently
         backdrop.translatesAutoresizingMaskIntoConstraints = false
@@ -152,7 +169,20 @@ private final class ShellMenuWindow: NSWindow {
             content.view.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             content.view.trailingAnchor.constraint(equalTo: card.trailingAnchor),
         ])
-        contentView = card
+        card.translatesAutoresizingMaskIntoConstraints = false
+        shadowHost.addSubview(card)
+        let margin = Self.shadowMargin
+        NSLayoutConstraint.activate([
+            card.topAnchor.constraint(equalTo: shadowHost.topAnchor),
+            card.bottomAnchor.constraint(equalTo: shadowHost.bottomAnchor),
+            card.leadingAnchor.constraint(equalTo: shadowHost.leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: shadowHost.trailingAnchor),
+            shadowHost.topAnchor.constraint(equalTo: root.topAnchor, constant: margin),
+            shadowHost.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -margin),
+            shadowHost.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: margin),
+            shadowHost.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -margin),
+        ])
+        contentView = root
     }
 
     override var canBecomeKey: Bool { true }
@@ -380,5 +410,35 @@ private final class MenuCardView: NSView {
         layer?.backgroundColor = ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
         layer?.borderColor = ShellStyle.primaryText.withAlphaComponent(0.08)
             .shellResolvedCGColor(for: effectiveAppearance)
+    }
+}
+
+/// 卡片阴影载体：宽而软（半径 18、下沉 6、浅色 16% / 深色 45%），无硬边。
+private final class MenuShadowView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowRadius = 18
+        layer?.shadowOffset = CGSize(width: 0, height: -6)
+        applyOpacity()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 14, cornerHeight: 14, transform: nil)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyOpacity()
+    }
+
+    private func applyOpacity() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        layer?.shadowOpacity = dark ? 0.45 : 0.16
     }
 }
