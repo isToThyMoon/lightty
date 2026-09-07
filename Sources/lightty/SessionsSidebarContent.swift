@@ -137,7 +137,8 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         }
         NSLayoutConstraint.activate([
             searchRow.topAnchor.constraint(equalTo: topAnchor),
-            scroll.topAnchor.constraint(equalTo: searchRow.bottomAnchor, constant: searchMode ? 14 : 8),
+            scroll.topAnchor.constraint(equalTo: searchMode ? searchRow.bottomAnchor : topAnchor,
+                constant: searchMode ? 14 : 0),
             scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -4),
             status.heightAnchor.constraint(equalToConstant: 16),
             status.bottomAnchor.constraint(equalTo: more.topAnchor, constant: -4),

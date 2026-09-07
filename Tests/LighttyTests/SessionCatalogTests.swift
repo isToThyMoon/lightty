@@ -631,6 +631,11 @@ final class PrimarySidebarTests: XCTestCase {
                 let list = try XCTUnwrap(descendants(panel).compactMap { $0 as? SidebarListScrollView }
                     .first { !$0.isHiddenOrHasHiddenAncestor })
                 let listFrame = panel.convert(list.bounds, from: list)
+                if let content = descendants(panel).first(where: { $0 is SessionsSidebarContent && !$0.isHiddenOrHasHiddenAncestor }) {
+                    let contentFrame = panel.convert(content.bounds, from: content)
+                    XCTAssertEqual(listFrame.maxY, contentFrame.maxY, accuracy: 0.5,
+                                   "Sessions must not reserve space for the removed inline search field")
+                }
                 XCTAssertEqual(listFrame.minX, SidebarListScrollView.leadingMargin, accuracy: 0.5)
                 XCTAssertEqual(panel.bounds.maxX - listFrame.maxX, SidebarListScrollView.trailingMargin, accuracy: 0.5)
                 let texts = descendants(panel).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }
