@@ -81,8 +81,17 @@ enum ShellStyle {
     static let accent = NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
     /// 重点色上的前景：开关滑块、落在重点底上的勾
     static let onAccent = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
-    /// 重点色淡底：活跃行、拖拽落点区
+    /// 重点色淡底
     static func accentTint(_ alpha: CGFloat) -> NSColor { accent.withAlphaComponent(alpha) }
+
+    /// 导航色：另一套体系，只管「你现在在哪」——标签页侧栏的活跃标签页、活跃 pane 行、
+    /// 拖拽落点。与设置页的中性重点色分开：导航需要一眼扫到，用带色相的蔚蓝；
+    /// 刻意比状态色里的「思考」周蓝（4E6EF2）更清亮，避免和圆点撞色。
+    /// 自己定值、不跟系统强调色（那是用户偏好，换机器会变）。改这一行全局生效。
+    static let navigationAccent = NSColor.shellDynamic(light: 0x1F6FEB, dark: 0x58A6FF)
+    static func navigationTint(_ alpha: CGFloat) -> NSColor {
+        navigationAccent.withAlphaComponent(alpha)
+    }
 
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
