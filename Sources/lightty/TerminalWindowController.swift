@@ -1210,13 +1210,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 红绿灯行中线距窗口顶边的距离（unified 空 toolbar 下为 26）。侧栏 chrome
     /// 都以这一行为基准：task 卡片头部行与它同线，标签页侧栏头部落在它下方。
     /// 不用 contentLayoutRect：空 toolbar 让它多让出一整行，与红绿灯无关。
+    private var lastTrafficLightRowCenterFromTop: CGFloat = 26
+
     private func trafficLightRowCenterFromTop(in window: NSWindow) -> CGFloat {
-        guard let zoom = window.standardWindowButton(.zoomButton),
+        // 全屏会把红绿灯移到独立的标题栏窗口，切换期间也可能暂时脱离窗口。
+        // 此时跨树 convert 会把按钮局部 y 当作主窗口坐标，算出接近整窗高度的
+        // 顶部留白；侧栏的最小高度继而反向撑大系统容器，裁掉终端顶部。
+        guard !window.styleMask.contains(.fullScreen),
+              let zoom = window.standardWindowButton(.zoomButton),
+              zoom.window === window,
               let titlebar = zoom.superview,
-              let themeFrame = window.contentView?.superview else { return 26 }
+              let themeFrame = window.contentView?.superview,
+              zoom.isDescendant(of: themeFrame) else { return lastTrafficLightRowCenterFromTop }
         let frame = themeFrame.convert(zoom.frame, from: titlebar)
         let fromTop = themeFrame.bounds.maxY - frame.midY
-        return fromTop > 0 ? fromTop : 26
+        if fromTop > 0, fromTop <= titlebar.bounds.height {
+            lastTrafficLightRowCenterFromTop = fromTop
+        }
+        return lastTrafficLightRowCenterFromTop
     }
 
     /// 标签页侧栏（docked）的顶部避让：表头行中线对齐 task 卡片的「任务」小节

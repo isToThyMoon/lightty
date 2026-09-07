@@ -4,6 +4,54 @@ import XCTest
 
 @MainActor
 final class SidebarControlsTests: XCTestCase {
+    func testOpeningTabSidebarWithDetachedTrafficLightsKeepsContentInsideWindow() throws {
+        let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sidebar-detached-titlebar-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: taskDirectory) }
+        _ = NSApplication.shared
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        let controller = TerminalWindowController()
+        let window = try XCTUnwrap(controller.window)
+        let host = try XCTUnwrap(window.contentView?.superview)
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while !host.subviews.contains(where: { $0 is TaskSidebar }), Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+        // 收敛初始任务侧栏动画；仅任务侧栏打开是实际复现的前置状态。
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+        let pane = try XCTUnwrap(controller.panes().first)
+        let terminalBefore = pane.terminal.convert(pane.terminal.bounds, to: host)
+        let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
+        let originalParent = try XCTUnwrap(zoom.superview)
+        let originalFrame = zoom.frame
+        let detachedTitlebar = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 32))
+        detachedTitlebar.addSubview(zoom)
+        zoom.frame = NSRect(x: 55, y: 9, width: 14, height: 14)
+        defer {
+            originalParent.addSubview(zoom)
+            zoom.frame = originalFrame
+        }
+        XCTAssertNil(zoom.window)
+        XCTAssertTrue(window.standardWindowButton(.zoomButton) === zoom)
+
+        controller.openTabSidebar(animated: false)
+        host.layoutSubtreeIfNeeded()
+
+        let sidebar = try XCTUnwrap(host.subviews.compactMap { $0 as? TabSidebarView }.first)
+        let newTab = try XCTUnwrap(descendantIconButtons(of: sidebar).first {
+            $0.toolTip == L("New tab")
+        })
+        let header = newTab.convert(newTab.bounds, to: host)
+        XCTAssertLessThan(host.bounds.maxY - header.maxY, 80,
+                          "Detached titlebar coordinates must not move the sidebar header to the bottom")
+        let terminalAfter = pane.terminal.convert(pane.terminal.bounds, to: host)
+        XCTAssertEqual(terminalAfter.maxY, terminalBefore.maxY, accuracy: 0.5,
+                       "Opening a horizontal sidebar must preserve the terminal top")
+        XCTAssertTrue(host.bounds.contains(terminalAfter), "Terminal must remain inside the window")
+    }
+
     /// 默认布局：task 侧栏（核心）打开、标签页侧栏收起。
     func testInitialWindowOpensTaskPanel() throws {
         let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
