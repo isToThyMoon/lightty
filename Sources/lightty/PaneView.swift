@@ -58,8 +58,18 @@ final class PaneView: NSView {
     /// pane header 拖到目标四边时，由目标窗口控制器原位重组 split tree。
     var onMoveRequest: ((UUID, PaneView, PaneDropZone) -> Bool)?
 
-    /// pane 名默认值的会话内计数器（pane 名不落盘，编号比一排「未命名」可辨认）。
+    /// pane 名默认值的会话内计数器（编号比一排「未命名」可辨认）。
     private static var paneCounter = 0
+
+    /// 会话恢复后把计数器抬到恢复出的默认名之上，新 pane 不与「终端 3」重名。
+    static func seedDefaultNameCounter(from names: [String]) {
+        let prefix = L("Terminal %d").replacingOccurrences(of: "%d", with: "")
+        let numbers = names.compactMap { name -> Int? in
+            guard name.hasPrefix(prefix) else { return nil }
+            return Int(name.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
+        }
+        if let top = numbers.max() { paneCounter = max(paneCounter, top) }
+    }
 
     init(surfaceConfiguration: TerminalSurfaceConfiguration = .init()) {
         let paneID = UUID()

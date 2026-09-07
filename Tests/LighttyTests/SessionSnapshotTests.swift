@@ -116,4 +116,87 @@ final class SessionSnapshotTests: XCTestCase {
 
         AppState.shared.windowControllers.removeAll()
     }
+
+    /// 最复杂场景：两个窗口、各两个标签页、**非活跃**标签页里有嵌套分屏（左右套上下），
+    /// 整体快照 → 整体恢复 → 再快照，结构、命名、活跃标签页逐窗一致；恢复后新建 pane
+    /// 的默认名不与恢复出的重名。
+    func testMultiWindowNestedSplitsRoundTrip() throws {
+        let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("session-multi-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: taskDirectory) }
+        _ = NSApplication.shared
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+
+        let a = TerminalWindowController()
+        let b = TerminalWindowController()
+        AppState.shared.windowControllers = [a, b]
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        // 窗口 A：标签页 0 = [A1 | A2]，标签页 1 = [A3]（活跃）
+        let a1 = try XCTUnwrap(a.panes().first)
+        a1.header.title = "A1"
+        a.split(a1, direction: .right)
+        try XCTUnwrap(a.panes().last).header.title = "A2"
+        a.renameTab(at: 0, to: "A-first")
+        let a3 = PaneView()
+        a3.header.title = L("Terminal %d", 40)  // 默认名形态，用来验证计数器接续
+        a.addTab(initialPane: a3)
+        a.renameTab(at: 1, to: "A-second")
+
+        // 窗口 B：标签页 0 = [B1]（活跃），标签页 1 = [Q1 | (Q2 / Q3)] 收在后台
+        try XCTUnwrap(b.panes().first).header.title = "B1"
+        b.renameTab(at: 0, to: "B-first")
+        let q1 = PaneView()
+        q1.header.title = "Q1"
+        b.addTab(initialPane: q1)
+        b.renameTab(at: 1, to: "B-nested")
+        b.split(q1, direction: .right)
+        let q2 = try XCTUnwrap(b.panes().last)
+        q2.header.title = "Q2"
+        b.split(q2, direction: .down)
+        try XCTUnwrap(b.panes().last).header.title = "Q3"
+        b.selectTab(at: 0)
+        for c in [a, b] { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        let snapshot = SessionStore.capture()
+        XCTAssertEqual(snapshot.windows.count, 2)
+        XCTAssertEqual(snapshot.windows.map(\.activeTabIndex), [1, 0])
+        guard case .split(true, _, let kids) = snapshot.windows[1].tabs[1].root,
+              case .split(false, _, let inner) = kids[1] else {
+            return XCTFail("后台标签页应是 左右分屏 套 上下分屏")
+        }
+        XCTAssertEqual(kids[0].firstLeaf.name, "Q1")
+        XCTAssertEqual(inner.map(\.firstLeaf.name), ["Q2", "Q3"])
+
+        // 整体恢复到一组新窗口
+        let originals = AppState.shared.windowControllers
+        AppState.shared.windowControllers.removeAll()
+        let restored = SessionRestorer.restore(snapshot)
+        XCTAssertEqual(restored.count, 2)
+        for c in restored { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        let again = SessionStore.capture()
+        XCTAssertEqual(
+            again.windows.map { $0.tabs.map(\.title) },
+            snapshot.windows.map { $0.tabs.map(\.title) })
+        XCTAssertEqual(
+            again.windows.map { $0.tabs.map { $0.root.leaves.map(\.name) } },
+            snapshot.windows.map { $0.tabs.map { $0.root.leaves.map(\.name) } })
+        XCTAssertEqual(again.windows.map(\.activeTabIndex), snapshot.windows.map(\.activeTabIndex))
+        guard case .split(true, _, let kids2) = again.windows[1].tabs[1].root,
+              case .split(false, _, _) = kids2[1] else {
+            return XCTFail("恢复后后台标签页的嵌套分屏应保持")
+        }
+
+        // 计数器接续：新 pane 的默认名不撞恢复出的「Terminal 40」
+        let fresh = PaneView()
+        let existing = Set(snapshot.windows.flatMap { $0.tabs.flatMap { $0.root.leaves.map(\.name) } })
+        XCTAssertFalse(existing.contains(fresh.header.title))
+
+        _ = originals
+        AppState.shared.windowControllers.removeAll()
+    }
 }

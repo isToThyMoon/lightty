@@ -356,6 +356,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 侧栏跳转行里直接当身份用，窗口层不需要另起名字。
     private static var tabCounter = 0
 
+    /// 同 PaneView.seedDefaultNameCounter：恢复后新标签页不与「标签页 2」重名。
+    private static func seedTabCounter(from titles: [String]) {
+        let prefix = L("Tab %d").replacingOccurrences(of: "%d", with: "")
+        let numbers = titles.compactMap { title -> Int? in
+            guard title.hasPrefix(prefix) else { return nil }
+            return Int(title.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
+        }
+        if let top = numbers.max() { tabCounter = max(tabCounter, top) }
+    }
+
     /// core `new_tab`：当前窗口追加一个 tab（标签页 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
         if installPane { install(pane: initialPane) }
@@ -1527,6 +1537,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             appendTab(root: root, select: false, title: tabSnapshot.title)
         }
         selectTab(at: min(snapshot.activeTabIndex, tabs.count - 1))
+        Self.seedTabCounter(from: snapshot.tabs.map(\.title))
+        PaneView.seedDefaultNameCounter(from: snapshot.tabs.flatMap { $0.root.leaves.map(\.name) })
         pendingRestore = snapshot  // frame / 比例在 init 的首帧异步块里、侧栏就位后落
     }
 
