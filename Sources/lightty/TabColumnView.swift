@@ -569,8 +569,16 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
     }
 
     private func applyFill() {
-        // 活跃标签页不给填充（标题/图标已染强调色）；填充只表达 hover
-        let fill: NSColor = hovered ? ShellStyle.selectionFill : .clear
+        // 活跃标签页：导航色淡底（比活跃 pane 行更淡一档，两级同色系不打架）；
+        // hover 用中性选中底，压过活跃底以给出可点反馈。
+        let fill: NSColor
+        if hovered {
+            fill = ShellStyle.selectionFill
+        } else if isActive {
+            fill = ShellStyle.navigationTint(0.08)
+        } else {
+            fill = .clear
+        }
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
 
