@@ -97,23 +97,47 @@ private final class ShellMenuWindow: NSWindow {
         isMovableByWindowBackground = false
 
         let card = NSVisualEffectView()
-        card.material = .popover
+        // 系统菜单同款材质：比 popover 更亮更透。磨砂由窗口服务器合成，圆角必须走
+        // maskImage——layer.cornerRadius 只裁得到自己的子图层，裁不到磨砂，四角会露方。
+        card.material = .menu
         card.blendingMode = .behindWindow
         card.state = .active
+        card.maskImage = Self.roundedMask(radius: 12)
         card.wantsLayer = true
         card.layer?.cornerRadius = 12
-        card.layer?.masksToBounds = true
         card.layer?.borderWidth = 1
         card.layer?.borderColor = ShellStyle.divider.shellResolvedCGColor(for: card.effectiveAppearance)
+        // 磨砂之上再罩一层高透的抬升面色：系统材质自带的灰调偏脏，ChatGPT 那种
+        // 「亮白玻璃」是浅色下近白、深色下近黑的半透明罩 + 底下的模糊。
+        let tint = MenuTintOverlay()
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(tint)
         content.view.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(content.view)
         NSLayoutConstraint.activate([
+            tint.topAnchor.constraint(equalTo: card.topAnchor),
+            tint.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            tint.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             content.view.topAnchor.constraint(equalTo: card.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             content.view.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             content.view.trailingAnchor.constraint(equalTo: card.trailingAnchor),
         ])
         contentView = card
+    }
+
+    /// 可拉伸的圆角遮罩：四角固定、中间平铺
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     override var canBecomeKey: Bool { true }
@@ -297,4 +321,30 @@ private final class MenuRowButton: NSView {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func mouseDown(with event: NSEvent) { onTap?() }
+}
+
+/// 菜单卡的半透明罩：抬升面色 × 高透明度，随明暗重解析。
+private final class MenuTintOverlay: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        applyColor()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColor()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyColor()
+    }
+
+    private func applyColor() {
+        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.72)
+            .shellResolvedCGColor(for: effectiveAppearance)
+    }
 }
