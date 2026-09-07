@@ -316,7 +316,7 @@ final class SettingsView: NSView {
 
 // MARK: - 左栏导航行
 
-/// 图标 + 文字的一行：hover 浅底；可选中态 = 选中底 + 强调色描边（参考 ChatGPT）。
+/// 图标 + 文字的一行：hover 浅底；选中态 = 选中底 + 主文字色，不描边。
 final class SettingsNavRow: NSView {
     var onClick: (() -> Void)?
     var selectable = false
@@ -386,9 +386,6 @@ final class SettingsNavRow: NSView {
         let appearance = effectiveAppearance
         let fill: NSColor = isSelected ? ShellStyle.selectionFill : (hovered ? ShellStyle.hoverFill : .clear)
         layer?.backgroundColor = fill.shellResolvedCGColor(for: appearance)
-        layer?.borderWidth = isSelected ? 1 : 0
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7)
-            .shellResolvedCGColor(for: appearance)
         let text: NSColor = (isSelected || hovered) ? ShellStyle.primaryText : ShellStyle.secondaryText
         label.textColor = text
         icon.contentTintColor = text
