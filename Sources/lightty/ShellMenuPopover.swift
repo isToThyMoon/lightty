@@ -128,7 +128,8 @@ private final class ShellMenuWindow: NSWindow {
         card.wantsLayer = true
         card.layer?.cornerRadius = 14
         card.layer?.masksToBounds = true
-        card.layer?.borderWidth = 1
+        // 发丝线：只为在同色底上勾一下轮廓，轮廓感主要交给窗口投影
+        card.layer?.borderWidth = 0.5
         backdrop.imageScaling = .scaleAxesIndependently
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(backdrop)
@@ -377,7 +378,7 @@ private final class MenuCardView: NSView {
 
     private func applyColors() {
         layer?.backgroundColor = ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
-        layer?.borderColor = ShellStyle.divider.withAlphaComponent(0.55)
+        layer?.borderColor = ShellStyle.primaryText.withAlphaComponent(0.08)
             .shellResolvedCGColor(for: effectiveAppearance)
     }
 }
