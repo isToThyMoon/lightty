@@ -198,11 +198,12 @@ final class SettingsView: NSView {
         column.translatesAutoresizingMaskIntoConstraints = false
         column.setHuggingPriority(.init(1), for: .horizontal)
         pageHost.addSubview(column)
-        // 内容列：常态左右各留 56、宽 ≤ 720；窗口窄时先把留白退到 24，再压内容宽。
-        let leading = column.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor, constant: 56)
-        leading.priority = .init(800)
-        let trailing = column.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor, constant: -56)
-        trailing.priority = .init(800)
+        // 内容列：在内容区里居中，宽 = 区宽 − 112 且 ≤ 720（参考 ChatGPT：宽窗口时
+        // 内容居中封顶，不贴任何一边）；窗口窄时留白退到 24，再压内容宽。
+        let centered = column.centerXAnchor.constraint(equalTo: pageHost.centerXAnchor)
+        centered.priority = .init(800)
+        let fill = column.widthAnchor.constraint(equalTo: pageHost.widthAnchor, constant: -112)
+        fill.priority = .init(750)
         let minWidth = column.widthAnchor.constraint(greaterThanOrEqualToConstant: 300)
         minWidth.priority = .init(900)
         NSLayoutConstraint.activate([
@@ -210,7 +211,7 @@ final class SettingsView: NSView {
             column.leadingAnchor.constraint(greaterThanOrEqualTo: pageHost.leadingAnchor, constant: 24),
             column.trailingAnchor.constraint(lessThanOrEqualTo: pageHost.trailingAnchor, constant: -24),
             column.widthAnchor.constraint(lessThanOrEqualToConstant: 720),
-            leading, trailing, minWidth,
+            centered, fill, minWidth,
         ])
 
         let title = NSTextField(labelWithString: page.title)
