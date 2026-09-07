@@ -39,21 +39,92 @@ enum ShellMenuPopover {
         static var separator: Item { Item(kind: .separator) }
     }
 
-    private static var popover: NSPopover?
+    private static var window: ShellMenuWindow?
 
+    /// 贴锚点下方、右缘对齐的自绘卡片（ChatGPT 桌面版式，无气泡小三角）。
+    /// 不用 NSPopover：它的三角是固有外观关不掉。空间不够时翻到锚点上方。
     static func present(from anchor: NSView, items: [Item]) {
-        popover?.close()
+        dismiss()
+        guard let parent = anchor.window else { return }
         let content = MenuController(items: items)
-        let pop = NSPopover()
-        pop.contentViewController = content
-        pop.behavior = .transient
-        content.onDone = { [weak pop] action in
-            pop?.close()
+        let menu = ShellMenuWindow(content: content)
+        content.onDone = { action in
+            dismiss()
             // 先关再执行：动作可能弹下一个气泡（如重命名输入框）
             DispatchQueue.main.async { action?() }
         }
-        popover = pop
-        pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        menu.onDismiss = { dismiss() }
+
+        let size = menu.contentView?.fittingSize ?? NSSize(width: 224, height: 100)
+        let anchorRect = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+        let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? anchorRect
+        var origin = NSPoint(x: anchorRect.maxX - size.width, y: anchorRect.minY - 6 - size.height)
+        if origin.y < screen.minY { origin.y = anchorRect.maxY + 6 }  // 下方放不下 → 上方
+        origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
+        menu.setFrame(NSRect(origin: origin, size: size), display: false)
+
+        window = menu
+        parent.addChildWindow(menu, ordered: .above)
+        menu.makeKeyAndOrderFront(nil)
+    }
+
+    static func dismiss() {
+        guard let menu = window else { return }
+        window = nil
+        let parent = menu.parent
+        parent?.removeChildWindow(menu)
+        menu.orderOut(nil)
+        parent?.makeKey()
+    }
+}
+
+/// 菜单卡片窗口：无边框、透明底，内容是圆角磨砂卡（材质 + 细描边 + 系统投影）。
+/// 成为 key window 以驱动行 hover；失去 key（点了别处）或 Esc 即关闭。
+private final class ShellMenuWindow: NSWindow {
+    var onDismiss: (() -> Void)?
+    /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
+    private let controller: NSViewController
+
+    init(content: NSViewController) {
+        controller = content
+        super.init(
+            contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        isReleasedWhenClosed = false
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        animationBehavior = .utilityWindow
+        isMovableByWindowBackground = false
+
+        let card = NSVisualEffectView()
+        card.material = .popover
+        card.blendingMode = .behindWindow
+        card.state = .active
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 12
+        card.layer?.masksToBounds = true
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = ShellStyle.divider.shellResolvedCGColor(for: card.effectiveAppearance)
+        content.view.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(content.view)
+        NSLayoutConstraint.activate([
+            content.view.topAnchor.constraint(equalTo: card.topAnchor),
+            content.view.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            content.view.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            content.view.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+        ])
+        contentView = card
+    }
+
+    override var canBecomeKey: Bool { true }
+
+    override func resignKey() {
+        super.resignKey()
+        onDismiss?()
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        onDismiss?()
     }
 }
 
