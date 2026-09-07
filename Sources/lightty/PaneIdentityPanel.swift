@@ -171,7 +171,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskScrollView.autohidesScrollers = true
         taskScrollView.scrollerStyle = .overlay
         taskScrollView.contentView.drawsBackground = false
-        taskRowsView.translatesAutoresizingMaskIntoConstraints = false
+        // 文档视图不能用约束钉在裁剪视图上：滚动改的是裁剪视图的 bounds，Auto Layout
+        // 每次布局都会把文档顶边拽回裁剪视图顶边，滚起来一跳一跳。宽随裁剪视图，
+        // 高由行数决定，都走 frame。
+        taskRowsView.autoresizingMask = [.width]
         taskScrollView.documentView = taskRowsView
 
         for v in [dotView, nameField] {
@@ -192,8 +195,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         let listHeightConstraint = listContainer.heightAnchor.constraint(
             equalToConstant: listHeight)
         self.listHeightConstraint = listHeightConstraint
-        let rowsHeightConstraint = taskRowsView.heightAnchor.constraint(equalToConstant: 0)
-        self.rowsHeightConstraint = rowsHeightConstraint
 
         let fixedContentLeadingConstraint = fixedContent.leadingAnchor.constraint(
             equalTo: leadingAnchor)
@@ -269,13 +270,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             taskScrollView.bottomAnchor.constraint(
                 equalTo: listContainer.bottomAnchor, constant: -6),
 
-            taskRowsView.topAnchor.constraint(
-                equalTo: taskScrollView.contentView.topAnchor),
-            taskRowsView.leadingAnchor.constraint(
-                equalTo: taskScrollView.contentView.leadingAnchor),
-            taskRowsView.widthAnchor.constraint(
-                equalTo: taskScrollView.contentView.widthAnchor),
-            rowsHeightConstraint,
         ])
     }
 
@@ -503,7 +497,9 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             rowViews.append(row)
         }
         // 岛体最多展示七行；更多任务留在原生滚动视口内，不能继续撑高透明面板。
-        rowsHeightConstraint?.constant = max(CGFloat(rowViews.count) * 26 - 2, 0)
+        taskRowsView.frame = NSRect(
+            x: 0, y: 0, width: taskScrollView.contentSize.width,
+            height: max(CGFloat(rowViews.count) * 26 - 2, 0))
         listHeightConstraint?.constant = listHeight
 
         setHighlight(0)
@@ -512,7 +508,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     }
 
     private var listHeightConstraint: NSLayoutConstraint?
-    private var rowsHeightConstraint: NSLayoutConstraint?
 
     private func attach(row: TaskRowView, below previous: NSView?) {
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -530,12 +525,14 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         NSLayoutConstraint.activate(constraints)
     }
 
-    private func setHighlight(_ index: Int) {
+    /// `scroll`：只有键盘移动高亮时才把行滚进视口。鼠标 hover 触发的高亮绝不能滚——
+    /// 用户滚轮滚动时指针不断经过新行，每次都 scrollToVisible 会把列表往回拽。
+    private func setHighlight(_ index: Int, scroll: Bool = false) {
         highlighted = index
         for (i, row) in rowViews.enumerated() {
             row.highlighted = i == index
         }
-        if rowViews.indices.contains(index) {
+        if scroll, rowViews.indices.contains(index) {
             rowViews[index].scrollToVisible(rowViews[index].bounds)
         }
     }
@@ -637,10 +634,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             }
             return true
         case #selector(NSResponder.moveDown(_:)) where control === searchField:
-            setHighlight(min(highlighted + 1, max(rowViews.count - 1, 0)))
+            setHighlight(min(highlighted + 1, max(rowViews.count - 1, 0)), scroll: true)
             return true
         case #selector(NSResponder.moveUp(_:)) where control === searchField:
-            setHighlight(max(highlighted - 1, 0))
+            setHighlight(max(highlighted - 1, 0), scroll: true)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             if control === taskEditor {

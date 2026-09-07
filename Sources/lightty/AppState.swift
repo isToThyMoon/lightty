@@ -10,7 +10,10 @@ final class AppState {
     var windowControllers: [TerminalWindowController] = []
 
     init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true) {
-        let dir = taskDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+        // LIGHTTY_TASK_DIR：调试用的任务目录覆盖（跑一套假任务而不动 ~/.lightty/tasks）
+        let override = ProcessInfo.processInfo.environment["LIGHTTY_TASK_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let dir = taskDirectory ?? override ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".lightty/tasks", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.taskStore = TaskStore(directory: dir)
