@@ -51,7 +51,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let listContainer = NSView()
     private let searchField = NSTextField()
     private let listSeparator = NSView()
-    private let taskScrollView = NSScrollView()
+    private let taskScrollView = WheelAwareScrollView()
     private let taskRowsView = FlippedRowsView()
     private var rowViews: [TaskRowView] = []
     private var choices: [TaskChoice] = []
@@ -165,6 +165,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.delegate = self
 
         taskScrollView.drawsBackground = false
+        taskScrollView.onWheel = { [weak self] in self?.noteScrollActivity() }
         taskScrollView.borderType = .noBorder
         taskScrollView.hasHorizontalScroller = false
         taskScrollView.hasVerticalScroller = true
@@ -463,7 +464,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 destructive: false,
                 foreground: foreground)
             row.onTap = { [weak self] in self?.pick(index) }
-            row.onHover = { [weak self] in self?.setHighlight(index) }
+            row.onHover = { [weak self] in self?.hoverHighlight(index) }
             attach(row: row, below: previous)
             previous = row
             rowViews.append(row)
@@ -477,7 +478,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 foreground: foreground)
             row.onTap = { [weak self] in self?.createFromQuery() }
             let rowIndex = rowViews.count
-            row.onHover = { [weak self] in self?.setHighlight(rowIndex) }
+            row.onHover = { [weak self] in self?.hoverHighlight(rowIndex) }
             attach(row: row, below: previous)
             previous = row
             rowViews.append(row)
@@ -492,7 +493,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 self?.closeTaskList()
             }
             let rowIndex = rowViews.count
-            row.onHover = { [weak self] in self?.setHighlight(rowIndex) }
+            row.onHover = { [weak self] in self?.hoverHighlight(rowIndex) }
             attach(row: row, below: previous)
             rowViews.append(row)
         }
@@ -523,6 +524,24 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             constraints.append(row.topAnchor.constraint(equalTo: taskRowsView.topAnchor))
         }
         NSLayoutConstraint.activate(constraints)
+    }
+
+    // 滚动（含回弹）期间行从静止指针下经过，会连发 mouseEntered；此时高亮条会
+    // 跟着行跳来跳去，看起来像在和系统回弹抢位。滚动活动结束 150ms 后才恢复 hover。
+    private var isScrolling = false
+    private var scrollSettle: DispatchWorkItem?
+
+    private func noteScrollActivity() {
+        isScrolling = true
+        scrollSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.isScrolling = false }
+        scrollSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func hoverHighlight(_ index: Int) {
+        guard !isScrolling else { return }
+        setHighlight(index)
     }
 
     /// `scroll`：只有键盘移动高亮时才把行滚进视口。鼠标 hover 触发的高亮绝不能滚——
@@ -817,4 +836,14 @@ final class IdentityIslandView: NSView {
     private static let blurHeight: CGFloat = 1200
 
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// 任务列表的滚动视图：每一发滚轮/回弹事件都上报，供宿主在滚动期间屏蔽 hover。
+private final class WheelAwareScrollView: NSScrollView {
+    var onWheel: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        onWheel?()
+        super.scrollWheel(with: event)
+    }
 }
