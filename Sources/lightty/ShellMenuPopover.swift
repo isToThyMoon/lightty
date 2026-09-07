@@ -102,11 +102,12 @@ private final class ShellMenuWindow: NSWindow {
         card.material = .menu
         card.blendingMode = .behindWindow
         card.state = .active
-        card.maskImage = Self.roundedMask(radius: 12)
+        card.maskImage = Self.roundedMask(radius: 14)
         card.wantsLayer = true
-        card.layer?.cornerRadius = 12
+        card.layer?.cornerRadius = 14
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = ShellStyle.divider.shellResolvedCGColor(for: card.effectiveAppearance)
+        card.layer?.borderColor = ShellStyle.divider.withAlphaComponent(0.55)
+            .shellResolvedCGColor(for: card.effectiveAppearance)
         // 磨砂之上再罩一层高透的抬升面色：系统材质自带的灰调偏脏，ChatGPT 那种
         // 「亮白玻璃」是浅色下近白、深色下近黑的半透明罩 + 底下的模糊。
         let tint = MenuTintOverlay()
@@ -192,7 +193,7 @@ private final class MenuController: NSViewController {
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 3
+        stack.spacing = 2
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         var constraints = [
@@ -206,7 +207,7 @@ private final class MenuController: NSViewController {
             constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor))
         }
         for button in buttons {
-            constraints.append(button.heightAnchor.constraint(equalToConstant: 27))
+            constraints.append(button.heightAnchor.constraint(equalToConstant: 30))
         }
         // 分组标题左对齐带内缩
         for case let label as NSTextField in rows {
@@ -244,14 +245,14 @@ private final class MenuRowButton: NSView {
         check.isHidden = !item.checked
 
         titleLabel.stringValue = item.title
-        titleLabel.font = .systemFont(ofSize: 12)
+        titleLabel.font = .systemFont(ofSize: 13)
         titleLabel.lineBreakMode = .byTruncatingTail
 
         detailLabel.stringValue = item.detail ?? ""
         detailLabel.font = .systemFont(ofSize: 10.5)
 
         swatch.wantsLayer = true
-        swatch.layer?.cornerRadius = 5
+        swatch.layer?.cornerRadius = 6
         swatch.isHidden = item.swatch == nil
 
         for v in [swatch, check, titleLabel, detailLabel] {
@@ -259,14 +260,14 @@ private final class MenuRowButton: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             swatch.centerYAnchor.constraint(equalTo: centerYAnchor),
-            swatch.widthAnchor.constraint(equalToConstant: 10),
-            swatch.heightAnchor.constraint(equalToConstant: 10),
+            swatch.widthAnchor.constraint(equalToConstant: 12),
+            swatch.heightAnchor.constraint(equalToConstant: 12),
 
             titleLabel.leadingAnchor.constraint(
                 equalTo: item.swatch == nil ? leadingAnchor : swatch.trailingAnchor,
-                constant: item.swatch == nil ? 10 : 8),
+                constant: item.swatch == nil ? 12 : 10),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: detailLabel.leadingAnchor, constant: -8),
@@ -344,7 +345,7 @@ private final class MenuTintOverlay: NSView {
     }
 
     private func applyColor() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.72)
+        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.84)
             .shellResolvedCGColor(for: effectiveAppearance)
     }
 }
