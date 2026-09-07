@@ -155,6 +155,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         // —— 内联任务选择器（默认隐藏；打开时岛体向下生长露出）
         listContainer.isHidden = true
         listContainer.wantsLayer = true
+        listContainer.layer?.masksToBounds = true  // 展开动画中列表只露出岛体已长到的部分
         listContainer.layer?.masksToBounds = true
         listSeparator.wantsLayer = true
         searchField.font = .systemFont(ofSize: 11)
@@ -402,8 +403,32 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.stringValue = ""
         listOpen = true
         listContainer.isHidden = false
-        applyFilter("")
+        applyFilter("")  // 定好列表目标高度，并触发岛体形变（PaneView 里 0.18s easeOut）
         applyColors()
+        layoutSubtreeIfNeeded()
+        // 列表本身不动，用一块从顶边向下长的遮罩逐步露出它，与岛体同时长、同曲线：
+        // 行只会在岛体已长到的范围内出现——不再出现"先出列表再长岛"。
+        // 不改高度约束：重排会让滚动视口里的行在过程中跳位。
+        // 显式动画而不是隐式：刚挂进层树的图层在同一事务里没有 presentation，
+        // 隐式改 frame 会直接落到终态。锚点钉在顶边，只动高度。
+        let full = listContainer.bounds
+        let mask = CALayer()
+        mask.backgroundColor = NSColor.black.cgColor
+        mask.anchorPoint = CGPoint(x: 0.5, y: 1)
+        mask.position = CGPoint(x: full.midX, y: full.height)
+        mask.bounds = full
+        listContainer.layer?.mask = mask
+        let grow = CABasicAnimation(keyPath: "bounds.size.height")
+        grow.fromValue = 0
+        grow.toValue = full.height
+        grow.duration = 0.18
+        grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak listContainer] in
+            if listContainer?.layer?.mask === mask { listContainer?.layer?.mask = nil }
+        }
+        mask.add(grow, forKey: "reveal")
+        CATransaction.commit()
         window?.makeFirstResponder(searchField)
     }
 
@@ -759,40 +784,40 @@ private final class HoverRowButton: NSButton {
 
 /// 灵动岛岛体：窗口内模糊 + 高透抬升面罩，子层随 frame 形变（morph 动画改 frame）。
 final class IdentityIslandView: NSView {
+    /// 圆角裁切层：窗口内模糊是层树里的普通 backdrop 层，祖先的 masksToBounds 裁得到，
+    /// 不必给磨砂设 maskImage——形变动画中逐帧拉伸遮罩图会让边缘闪。
+    private let clip = NSView()
     private let blur = NSVisualEffectView()
     let tint = NSView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        clip.wantsLayer = true
+        clip.layer?.cornerRadius = 8
+        clip.layer?.masksToBounds = true
         blur.material = .menu
         blur.blendingMode = .withinWindow
         blur.state = .active
-        blur.maskImage = Self.roundedMask(radius: 8)
         tint.wantsLayer = true
-        tint.layer?.cornerRadius = 8
-        tint.layer?.masksToBounds = true
         // 走 autoresizing 而不是手动同步 frame：岛体 morph 用 animator 改 frame，
-        // AppKit 在同一个动画组里给 autoresizing 子视图也套隐式动画，两层才会同步形变；
+        // AppKit 在同一个动画组里给 autoresizing 子视图也套隐式动画，各层才会同步形变；
         // 手动在 setFrameSize 里赋值会让子层瞬间跳到终态，看起来像另一座岛飞过来。
-        for v in [blur, tint] {
-            v.frame = bounds
-            v.autoresizingMask = [.width, .height]
-            addSubview(v)
-        }
+        clip.frame = bounds
+        clip.autoresizingMask = [.width, .height]
+        addSubview(clip)
+        // 磨砂层不随岛体形变改尺寸：backdrop 每帧重建很贵，会把 0.18s 的形变拖成
+        // 半秒且顶部闪烁。做成固定超高、顶边钉在裁切层顶边（底边距弹性），
+        // 岛体长高只是裁切层露出更多，磨砂本身静止。
+        blur.frame = NSRect(x: 0, y: bounds.height - Self.blurHeight,
+                            width: bounds.width, height: Self.blurHeight)
+        blur.autoresizingMask = [.width, .minYMargin]
+        clip.addSubview(blur)
+        tint.frame = clip.bounds
+        tint.autoresizingMask = [.width, .height]
+        clip.addSubview(tint)
     }
+
+    private static let blurHeight: CGFloat = 1200
 
     required init?(coder: NSCoder) { fatalError() }
-
-    /// 可拉伸的圆角遮罩：磨砂由合成器画，layer.cornerRadius 裁不到它
-    private static func roundedMask(radius: CGFloat) -> NSImage {
-        let side = radius * 2 + 1
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
-    }
 }
