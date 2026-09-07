@@ -771,23 +771,17 @@ final class IdentityIslandView: NSView {
         tint.wantsLayer = true
         tint.layer?.cornerRadius = 8
         tint.layer?.masksToBounds = true
-        addSubview(blur)
-        addSubview(tint)
+        // 走 autoresizing 而不是手动同步 frame：岛体 morph 用 animator 改 frame，
+        // AppKit 在同一个动画组里给 autoresizing 子视图也套隐式动画，两层才会同步形变；
+        // 手动在 setFrameSize 里赋值会让子层瞬间跳到终态，看起来像另一座岛飞过来。
+        for v in [blur, tint] {
+            v.frame = bounds
+            v.autoresizingMask = [.width, .height]
+            addSubview(v)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        blur.frame = bounds
-        tint.frame = bounds
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        blur.frame = bounds
-        tint.frame = bounds
-    }
 
     /// 可拉伸的圆角遮罩：磨砂由合成器画，layer.cornerRadius 裁不到它
     private static func roundedMask(radius: CGFloat) -> NSImage {
