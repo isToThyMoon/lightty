@@ -106,7 +106,8 @@ enum ShellMenuPopover {
 /// （1x 屏上像一道描边），所以关掉，改成卡片四周留透明边距、自绘宽而软的阴影。
 /// 成为 key window 以驱动行 hover；失去 key（点了别处）或 Esc 即关闭。
 private final class ShellMenuWindow: NSWindow {
-    static let shadowMargin: CGFloat = 28
+    /// 阴影可见范围约为半径 ×2.5 再加下沉量，边距必须比它大，否则被窗口边界切平
+    static let shadowMargin: CGFloat = 56
 
     var onDismiss: (() -> Void)?
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
@@ -186,6 +187,17 @@ private final class ShellMenuWindow: NSWindow {
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// 透明边距也属于本窗口，落在那里的点击不会传给父窗口；按菜单惯例，
+    /// 点在卡片之外即关闭（不转发给底下的控件）。
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown,
+           !shadowHost.frame.contains(event.locationInWindow) {
+            onDismiss?()
+            return
+        }
+        super.sendEvent(event)
+    }
 
     override func resignKey() {
         super.resignKey()
