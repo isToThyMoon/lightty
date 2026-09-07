@@ -71,6 +71,19 @@ enum ShellStyle {
     static let actionHoverFill = NSColor.shellDynamic(light: 0x242321, dark: 0xF8F6FA)
     static let actionText = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
 
+    // MARK: 重点色（全局唯一入口）
+
+    /// 应用自己的重点色，**不跟随系统强调色**（原生控件的蓝就是用户系统偏好里的
+    /// 强调色，换台机器就变）。所有「当前 / 选中 / 开启」的着色——标签页侧栏活跃态、
+    /// 开关开启态、下拉勾选、拖拽落点——都从这里取，改这一行全局生效。
+    /// 默认取 Codex / ChatGPT 式的中性深色（与主按钮同色），界面里只让状态色带色相。
+    /// 品牌黄（图标 #FFDB00）在浅底上对比度约 1.4:1，做不了文字/细线色，故不进界面。
+    static let accent = NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
+    /// 重点色上的前景：开关滑块、落在重点底上的勾
+    static let onAccent = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
+    /// 重点色淡底：活跃行、拖拽落点区
+    static func accentTint(_ alpha: CGFloat) -> NSColor { accent.withAlphaComponent(alpha) }
+
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
     // 圆点配色以前在 5 个地方各写各的（pane 头、标签页侧栏行、任务侧栏、搜索浮层、

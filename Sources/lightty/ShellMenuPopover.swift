@@ -176,7 +176,7 @@ private final class MenuRowButton: NSView {
     private func applyColors() {
         titleLabel.textColor = item.destructive ? .systemRed : ShellStyle.primaryText
         detailLabel.textColor = ShellStyle.tertiaryText
-        check.contentTintColor = ShellStyle.primaryText
+        check.contentTintColor = ShellStyle.accent
         applyFill()
     }
 

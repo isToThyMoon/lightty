@@ -237,20 +237,16 @@ final class SettingsView: NSView {
 
     private func buildGeneral(into column: NSStackView) {
         let group = SettingsGroup()
-        // 下拉靠行右端、只占自身宽度（行约束保证不拉伸），与左侧标签之间留白
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.bezelStyle = .rounded
-        popup.controlSize = .regular
-        popup.font = .systemFont(ofSize: 12.5)
-        for option in LanguagePreference.allCases {
-            popup.addItem(withTitle: option.title)
-            popup.lastItem?.representedObject = option.rawValue
+        // 自绘下拉（ShellDropdown）：颜色走 ShellStyle，靠行右端、只占自身宽度
+        let dropdown = ShellDropdown(
+            options: LanguagePreference.allCases.map {
+                ShellDropdown.Option(id: $0.rawValue, title: $0.title)
+            },
+            selectedID: LanguagePreference.current().rawValue)
+        dropdown.onChange = { id in
+            if let option = LanguagePreference(rawValue: id) { LanguagePreference.set(option) }
         }
-        popup.selectItem(
-            at: LanguagePreference.allCases.firstIndex(of: LanguagePreference.current()) ?? 0)
-        popup.target = self
-        popup.action = #selector(languageChanged(_:))
-        group.addRow(title: L("Language"), control: popup)
+        group.addRow(title: L("Language"), control: dropdown)
         column.addArrangedSubview(group)
         group.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         column.setCustomSpacing(12, after: group)
@@ -261,12 +257,6 @@ final class SettingsView: NSView {
         hint.textColor = ShellStyle.tertiaryText
         column.addArrangedSubview(hint)
         hint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-    }
-
-    @objc private func languageChanged(_ sender: NSPopUpButton) {
-        guard let raw = sender.selectedItem?.representedObject as? String,
-              let option = LanguagePreference(rawValue: raw) else { return }
-        LanguagePreference.set(option)
     }
 
     // —— Appearance ——
@@ -295,11 +285,12 @@ final class SettingsView: NSView {
         column.addArrangedSubview(sectionLabel(L("Terminal")))
         column.setCustomSpacing(14, after: column.arrangedSubviews.last!)
         let group = SettingsGroup()
-        let toggle = NSSwitch()
-        toggle.controlSize = .small
-        toggle.state = TerminalThemePreference.usesBuiltInTheme() ? .on : .off
-        toggle.target = self
-        toggle.action = #selector(terminalThemeToggled(_:))
+        let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
+        toggle.onChange = { on in
+            TerminalThemePreference.setUsesBuiltInTheme(on)
+            GhosttyRuntime.shared.reloadGlobalConfig()
+            PreferenceKind.terminalTheme.post()
+        }
         group.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
         column.addArrangedSubview(group)
         group.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
@@ -310,11 +301,6 @@ final class SettingsView: NSView {
         showPage(.appearance)
     }
 
-    @objc private func terminalThemeToggled(_ sender: NSSwitch) {
-        TerminalThemePreference.setUsesBuiltInTheme(sender.state == .on)
-        GhosttyRuntime.shared.reloadGlobalConfig()
-        PreferenceKind.terminalTheme.post()
-    }
 }
 
 // MARK: - 左栏导航行

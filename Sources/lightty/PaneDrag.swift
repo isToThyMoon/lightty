@@ -53,7 +53,7 @@ final class PaneDropOverlayView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor
+        layer?.backgroundColor = ShellStyle.accentTint(0.3).shellResolvedCGColor(for: effectiveAppearance)
     }
 
     required init?(coder: NSCoder) { fatalError() }

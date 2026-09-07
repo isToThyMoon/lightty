@@ -475,7 +475,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
 
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        label.textColor = isActive ? .controlAccentColor : ShellStyle.primaryText
+        label.textColor = isActive ? ShellStyle.accent : ShellStyle.secondaryText
         label.lineBreakMode = .byTruncatingTail
 
         disclosureButton.isBordered = false
@@ -564,7 +564,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
                 accessibilityDescription: L("Tab"))?
                 .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
             disclosureButton.contentTintColor =
-                isActive ? .controlAccentColor : ShellStyle.secondaryText
+                isActive ? ShellStyle.accent : ShellStyle.secondaryText
         }
     }
 
@@ -631,7 +631,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
     func setDropHighlighted(_ on: Bool) {
         layer?.borderWidth = on ? 1.5 : 0
         layer?.borderColor =
-            on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
+            on ? ShellStyle.accentTint(0.7).shellResolvedCGColor(for: effectiveAppearance) : nil
     }
 }
 
@@ -909,9 +909,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
         // `done` 给一层极淡的同色底——侧栏是"哪个 pane 完事了"的扫读面，
         // 一个 6pt 的点在满屏行里不够抓眼，整行透一点色才扫得出来。
         if isActive {
-            layer?.backgroundColor = NSColor.controlAccentColor
+            layer?.backgroundColor = ShellStyle.accentTint(0.12)
                 .shellResolvedCGColor(for: effectiveAppearance)
-                .copy(alpha: 0.16)
         } else if hovered {
             layer?.backgroundColor = ShellStyle.controlFill
                 .shellResolvedCGColor(for: effectiveAppearance)
@@ -1006,6 +1005,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
     func setDropHighlighted(_ on: Bool) {
         layer?.borderWidth = on ? 1.5 : 0
         layer?.borderColor =
-            on ? NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor : nil
+            on ? ShellStyle.accentTint(0.7).shellResolvedCGColor(for: effectiveAppearance) : nil
     }
 }

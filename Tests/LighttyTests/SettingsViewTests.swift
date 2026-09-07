@@ -67,6 +67,28 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(labels(in: view).contains("返回应用"))
     }
 
+    /// 自绘控件：下拉标题跟随选中项并回调；开关翻转并回调。
+    func testShellControlsReportChanges() {
+        let dropdown = ShellDropdown(
+            options: [.init(id: "a", title: "Alpha"), .init(id: "b", title: "Beta")],
+            selectedID: "a")
+        var picked: [String] = []
+        dropdown.onChange = { picked.append($0) }
+        XCTAssertEqual(dropdown.selectedTitle, "Alpha")
+        dropdown.select("b")
+        XCTAssertEqual(dropdown.selectedTitle, "Beta")
+        dropdown.select("b")  // 重选同项不重复回调
+        dropdown.select("zzz")  // 未知项忽略
+        XCTAssertEqual(picked, ["b"])
+
+        let toggle = ShellToggle(isOn: false)
+        var states: [Bool] = []
+        toggle.onChange = { states.append($0) }
+        XCTAssertTrue(toggle.accessibilityPerformPress())
+        XCTAssertTrue(toggle.isOn)
+        XCTAssertEqual(states, [true])
+    }
+
     private func labels(in view: NSView) -> [String] {
         view.subviews.flatMap { child -> [String] in
             let own = (child as? NSTextField).map { [$0.stringValue] } ?? []
