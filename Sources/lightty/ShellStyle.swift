@@ -61,6 +61,7 @@ enum ShellStyle {
     static let raisedSurface = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x2E2C33)
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
+    static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)
     static let pressedFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x44414A)
     static let divider = NSColor.shellDynamic(light: 0xE5E1DF, dark: 0x3B3841)
     static let primaryText = NSColor.shellDynamic(light: 0x302E2D, dark: 0xE9E7EC)
@@ -176,33 +177,36 @@ extension NSColor {
 /// 悬停光标。cursor rects（addCursorRect）在本工程 layer-backed + autolayout +
 /// 动态重建行的组合下系统性失效（实测全 app 无手型），改用 .cursorUpdate
 /// tracking area：owner 收事件设光标，.inVisibleRect 让命中区自动跟随布局，
-/// 行重建后无需手动 invalidate。视图持有 tracking area，owner 为共享单例。
+/// 行重建后无需手动 invalidate。tracking area 保持 owner，owner 弱引用视图。
 final class HoverCursor: NSResponder {
     private let cursor: NSCursor
-    private init(_ cursor: NSCursor) {
+    private weak var view: NSView?
+    private init(_ cursor: NSCursor, view: NSView) {
         self.cursor = cursor
+        self.view = view
         super.init()
     }
     required init?(coder: NSCoder) { fatalError() }
-    override func cursorUpdate(with event: NSEvent) { cursor.set() }
+    override func cursorUpdate(with event: NSEvent) {
+        guard let view else { return }
+        let scrolling = (view.enclosingScrollView as? SidebarListScrollView)?.suppressesPointerFeedback == true
+        (scrolling || ShellHoverGate.suppressed ? NSCursor.arrow : cursor).set()
+    }
 
-    private static let pointingHand = HoverCursor(.pointingHand)
-    private static let resizeLeftRight = HoverCursor(.resizeLeftRight)
-    private static let arrow = HoverCursor(.arrow)
-
-    static func installPointingHand(on view: NSView) { install(pointingHand, on: view) }
-    static func installResizeLeftRight(on view: NSView) { install(resizeLeftRight, on: view) }
+    static func installPointingHand(on view: NSView) { install(.pointingHand, on: view) }
+    static func installResizeLeftRight(on view: NSView) { install(.resizeLeftRight, on: view) }
     /// 覆盖在 terminal（整片 I-beam）之上的浮层用：夺回箭头
-    static func installArrow(on view: NSView) { install(arrow, on: view) }
+    static func installArrow(on view: NSView) { install(.arrow, on: view) }
 
-    private static func install(_ owner: HoverCursor, on view: NSView) {
+    private static func install(_ cursor: NSCursor, on view: NSView) {
+        let owner = HoverCursor(cursor, view: view)
         // .activeAlways：光标反馈不依赖 key 状态。气泡（NSPopover）弹出时
         // 主窗口让出 key，.activeInKeyWindow 的区域会集体停摆——点一下行
         // 之后整个列表的手型就没了。
         view.addTrackingArea(NSTrackingArea(
             rect: .zero,
             options: [.cursorUpdate, .activeAlways, .inVisibleRect],
-            owner: owner))
+            owner: owner, userInfo: ["cursorOwner": owner]))
     }
 }
 
@@ -427,14 +431,50 @@ final class ShellTextButton: NSButton {
     }
 }
 
+/// Drop targets use the app accent without native emphasized text/icon inversion.
+class ShellDropTargetRowView: NSTableRowView {
+    // AppKit paints regular drop targets through background/selection as well as
+    // destination feedback. Own all three passes so native blue cannot show underneath.
+    override func drawBackground(in dirtyRect: NSRect) {
+        backgroundColor.setFill()
+        NSBezierPath(rect: bounds).fill()
+    }
+
+    // Section headers are never selectable. Interactive subclasses own selection drawing.
+    override func drawSelection(in dirtyRect: NSRect) {}
+
+    override var interiorBackgroundStyle: NSView.BackgroundStyle {
+        isTargetForDropOperation ? .normal : super.interiorBackgroundStyle
+    }
+
+    override func drawDraggingDestinationFeedback(in dirtyRect: NSRect) {
+        guard isTargetForDropOperation else { return }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5),
+                                    xRadius: ShellStyle.rowCornerRadius, yRadius: ShellStyle.rowCornerRadius)
+            ShellStyle.accentTint(0.10).setFill()
+            path.fill()
+            ShellStyle.accentTint(0.55).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+}
+
 /// 任务行的圆角 hover / selection 背景，替换 NSTableView 默认的蓝色高亮。
-final class ShellTableRowView: NSTableRowView {
+final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     private var tracking: NSTrackingArea?
-    private var isHovered = false { didSet { needsDisplay = true } }
+    private var isHovered = false
     private var cursorInstalled = false
+    func setSidebarHovered(_ value: Bool) {
+        guard isHovered != value else { return }
+        isHovered = value
+        needsDisplay = true
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        setSidebarHovered(false)
         // 手型装在每一行而不是整个 tableView：cursorUpdate 只在跨区域边界时
         // 触发，表级单一大区域在「点击弹气泡把光标重置成箭头」之后，行间移动
         // 不再产生任何事件，手型一去不返；按行分区，换行即重触发。
@@ -454,8 +494,10 @@ final class ShellTableRowView: NSTableRowView {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func mouseEntered(with event: NSEvent) {
+        sidebarHoverEntered()
+    }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()

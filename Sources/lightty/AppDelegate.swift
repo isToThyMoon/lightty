@@ -15,6 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFontDownloadPreviewMode = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(self, selector: #selector(preferencesStorageFailed),
+            name: FilePreferences.failureNotification, object: FilePreferences.shared)
+        if FilePreferences.shared.lastError != nil {
+            DispatchQueue.main.async { [weak self] in self?.preferencesStorageFailed() }
+        }
         AppearancePreference.apply()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
@@ -46,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PaneStatusStore.shared.start()
         // 会话恢复：上次关窗/退出时的窗口、标签页、pane（含命名、cwd、任务绑定、
         // agent --resume）。没有快照或快照为空才开默认窗口。
-        let restored = SessionStore.shared.load().map(SessionRestorer.restore) ?? []
+        let restored = WorkspaceStore.shared.load().map(WorkspaceRestorer.restore) ?? []
         let first = restored.first ?? AppState.shared.newWindow()
         // 之后任何结构/命名/状态变化都刷快照（节流合并）
         for name in [Notification.Name.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
@@ -99,13 +104,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func scheduleSessionSave() {
-        SessionStore.shared.scheduleSave()
+        WorkspaceStore.shared.scheduleSave()
+    }
+
+    @objc private func preferencesStorageFailed() {
+        let alert = NSAlert()
+        alert.messageText = L("Preferences could not be saved.")
+        alert.informativeText = L("Check ~/.lightty/preferences.json and its permissions. An unreadable or newer file will not be overwritten.")
+        alert.runModal()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        FilePreferences.shared.flush()
         // cmd+Q 等路径窗口还都在，此刻定格会话；关最后一个窗口的路径已在
         // windowWillClose 定格过（frozen），这里不会覆盖。
-        SessionStore.shared.saveNow()
+        WorkspaceStore.shared.saveNow()
         // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
         // 但干净退出不该给下一次启动留活。
         PaneStatusStore.shared.stop()

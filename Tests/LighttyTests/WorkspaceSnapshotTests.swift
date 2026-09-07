@@ -1,9 +1,33 @@
 import AppKit
 import XCTest
+import LighttyCore
 @testable import lightty
 
 @MainActor
-final class SessionSnapshotTests: XCTestCase {
+final class WorkspaceSnapshotTests: XCTestCase {
+    func testCatalogConfigurationProvenanceSurvivesSnapshot() throws {
+        for location: SessionConfigurationLocation in [.standard, .custom("/fixture/.claude")] {
+            let snapshot = PaneSnapshot(name: "fixture", agentAlive: true,
+                catalogSession: .init(agent: .claude, sourceRoot: "/fixture/.claude", nativeID: "abc-123"),
+                catalogConfiguration: location)
+            let restored = try JSONDecoder().decode(PaneSnapshot.self, from: JSONEncoder().encode(snapshot))
+            XCTAssertEqual(restored, snapshot)
+        }
+    }
+
+    func testResumeRequestIsNotConfirmation() {
+        let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: "abc-123")
+        func status(agent: String = "codex", id: String = "abc-123", event: String = "SessionStart") -> PaneStatus {
+            PaneStatus(ts: Date(), state: .idle, agent: agent, sessionID: id, event: event)
+        }
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: nil, processExited: false), .unconfirmed)
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(), processExited: false), .confirmed)
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(), processExited: true), .ended)
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(event: "SessionEnd"), processExited: false), .ended)
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(agent: "claude"), processExited: false), .ended)
+        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(id: "other"), processExited: false), .ended)
+    }
+
     func testSnapshotCodableRoundTrip() throws {
         let pane = PaneSnapshot(
             name: "api", workingDirectory: "/tmp", taskFile: "/tmp/t.md",
@@ -15,7 +39,7 @@ final class SessionSnapshotTests: XCTestCase {
                 .split(vertical: false, fractions: [0.5, 0.5],
                        children: [.pane(pane), .pane(pane)]),
             ])
-        let snapshot = SessionSnapshot(windows: [
+        let snapshot = WorkspaceSnapshot(windows: [
             WindowSnapshot(
                 frame: CGRect(x: 10, y: 20, width: 800, height: 600),
                 activeTabIndex: 1,
@@ -23,7 +47,7 @@ final class SessionSnapshotTests: XCTestCase {
                 taskPanelOpen: false, tabSidebarOpen: true),
         ])
         let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: data)
+        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
         XCTAssertEqual(decoded, snapshot)
         XCTAssertEqual(tree.leaves.count, 3)
         XCTAssertEqual(tree.firstLeaf.name, "api")
@@ -33,18 +57,18 @@ final class SessionSnapshotTests: XCTestCase {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("session-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = SessionStore(fileURL: dir.appendingPathComponent("session.json"))
+        let store = WorkspaceStore(fileURL: dir.appendingPathComponent("workspace.json"))
         XCTAssertNil(store.load())
 
-        var snapshot = SessionSnapshot(windows: [])
+        var snapshot = WorkspaceSnapshot(windows: [])
         store.write(snapshot)
         XCTAssertEqual(store.load(), snapshot)
 
         snapshot.version = 99
-        store.write(snapshot)
+        try JSONEncoder().encode(snapshot).write(to: store.fileURL)
         XCTAssertNil(store.load(), "未知版本整体丢弃")
 
-        store.freeze(with: SessionSnapshot(windows: []))
+        store.freeze(with: WorkspaceSnapshot(windows: []))
         XCTAssertTrue(store.frozen)
     }
 
@@ -160,7 +184,7 @@ final class SessionSnapshotTests: XCTestCase {
         for c in [a, b] { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
-        let snapshot = SessionStore.capture()
+        let snapshot = WorkspaceStore.capture()
         XCTAssertEqual(snapshot.windows.count, 2)
         XCTAssertEqual(snapshot.windows.map(\.activeTabIndex), [1, 0])
         guard case .split(true, _, let kids) = snapshot.windows[1].tabs[1].root,
@@ -173,12 +197,12 @@ final class SessionSnapshotTests: XCTestCase {
         // 整体恢复到一组新窗口
         let originals = AppState.shared.windowControllers
         AppState.shared.windowControllers.removeAll()
-        let restored = SessionRestorer.restore(snapshot)
+        let restored = WorkspaceRestorer.restore(snapshot)
         XCTAssertEqual(restored.count, 2)
         for c in restored { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
 
-        let again = SessionStore.capture()
+        let again = WorkspaceStore.capture()
         XCTAssertEqual(
             again.windows.map { $0.tabs.map(\.title) },
             snapshot.windows.map { $0.tabs.map(\.title) })

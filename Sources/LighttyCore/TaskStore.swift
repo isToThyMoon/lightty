@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 public enum TaskStoreError: Error {
+    case invalidArchivePath
     /// rename(2) 失败（临时文件已清理）
     case atomicRenameFailed(path: String, errno: Int32)
 }
@@ -46,6 +47,40 @@ public final class TaskStore {
 
     public func load(at fileURL: URL) throws -> TaskFile {
         try TaskFile.parse(Data(contentsOf: fileURL))
+    }
+
+    public var archiveDirectory: URL { directory.appendingPathComponent("archive", isDirectory: true) }
+
+    public func archivedFiles() throws -> [URL] {
+        guard fm.fileExists(atPath: archiveDirectory.path) else { return [] }
+        guard archiveDirectory.resolvingSymlinksInPath().standardizedFileURL == archiveDirectory.standardizedFileURL else {
+            throw TaskStoreError.invalidArchivePath
+        }
+        return try fm.contentsOfDirectory(at: archiveDirectory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
+            .filter { $0.pathExtension == "md" && (try? validateArchived($0)) != nil }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func validateArchived(_ url: URL) throws {
+        guard url.standardizedFileURL.deletingLastPathComponent() == archiveDirectory.standardizedFileURL,
+              url.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL,
+              try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw TaskStoreError.invalidArchivePath
+        }
+    }
+
+    @discardableResult
+    public func restoreArchived(at url: URL) throws -> URL {
+        try validateArchived(url)
+        let task = try load(at: url)
+        let target = uniqueURL(for: task.name)
+        try fm.moveItem(at: url, to: target)
+        return target
+    }
+
+    public func permanentlyDeleteArchived(at url: URL) throws {
+        try validateArchived(url)
+        try fm.removeItem(at: url)
     }
 
     // MARK: - 写

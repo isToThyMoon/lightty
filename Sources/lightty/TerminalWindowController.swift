@@ -50,7 +50,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private var tabSidebarWidthConstraint: NSLayoutConstraint?
     private var tabSidebarWidth = TabSidebarWidthPreference.width()
     private var tabSidebarResizeActive = false
-    private var taskPanel: TaskSidebar?
+    private var taskPanel: PrimarySidebar?
+    private var primarySidebarMode = PrimarySidebarMode(rawValue:
+        FilePreferences.shared.string(forKey: "lightty.primarySidebarMode") ?? "") ?? .handoff
     /// 设置页（整窗覆盖，垫在标题栏容器之下）
     private var settingsView: SettingsView?
     private var settingsWidthConstraint: NSLayoutConstraint?
@@ -260,7 +262,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 标题栏那一枚隐藏（否则会落在卡片里的红绿灯旁边、与头部行按钮重复）。
     private func updateSidebarButtonState() {
         sidebarButton?.isHidden = taskPanel != nil || settingsView != nil
-        SessionStore.shared.scheduleSave()  // task 卡片开合入快照
+        WorkspaceStore.shared.scheduleSave()  // task 卡片开合入快照
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -542,7 +544,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
         }
         tabSidebar?.reload()
-        SessionStore.shared.scheduleSave()
+        WorkspaceStore.shared.scheduleSave()
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -627,7 +629,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let pane else { return }
             self.tabSidebar?.applyWorkingDirectory(
                 directory, for: pane.dragIdentifier)
-            SessionStore.shared.scheduleSave()
+            WorkspaceStore.shared.scheduleSave()
         }
     }
 
@@ -1360,8 +1362,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
               let themeFrame = contentView.superview else { return }
         // 卡片从窗口顶边起（只留 panelInset），把红绿灯收进自己的头部行；
         // 头部行按钮与红绿灯同一水平线。
-        let panel = TaskSidebar(
-            headerCenterY: trafficLightRowCenterFromTop(in: window) - ShellStyle.panelInset)
+        let panel = PrimarySidebar(
+            headerCenterY: trafficLightRowCenterFromTop(in: window) - ShellStyle.panelInset,
+            mode: primarySidebarMode, library: AppState.shared.sessionLibrary)
+        panel.onModeChanged = { [weak self] mode in
+            if self?.searchPalette != nil { self?.dismissSearchPalette() }
+            self?.primarySidebarMode = mode
+            FilePreferences.shared.set(mode.rawValue, forKey: "lightty.primarySidebarMode")
+            WorkspaceStore.shared.scheduleSave()
+        }
         panel.onRequestClose = { [weak self] in self?.closeTaskPanel() }
         panel.translatesAutoresizingMaskIntoConstraints = false
         // 垫在标题栏容器之下（三键浮在卡片上）、标签页侧栏之上（侧栏滑动时从卡片下穿行）
@@ -1439,7 +1448,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 关着：展开钮吸在主区左缘中点（task 卡片开着时就是卡片右侧的让位线），
     /// 默认低存在感、鼠标靠近边缘带才增强。侧栏开/关时重建。
     private func installTabEdgeControl() {
-        SessionStore.shared.scheduleSave()  // 标签页栏开合入快照
+        WorkspaceStore.shared.scheduleSave()  // 标签页栏开合入快照
         guard let themeFrame = window?.contentView?.superview else { return }
         tabEdgeControl?.removeFromSuperview()
         tabEdgeControl = nil
@@ -1507,7 +1516,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             activeTabIndex: min(max(activeTabIndex, 0), tabSnapshots.count - 1),
             tabs: tabSnapshots,
             taskPanelOpen: taskPanel != nil,
-            tabSidebarOpen: tabSidebar != nil)
+            tabSidebarOpen: tabSidebar != nil,
+            primarySidebarMode: primarySidebarMode.rawValue)
     }
 
     private func captureNode(_ view: NSView) -> SplitNodeSnapshot? {
@@ -1533,6 +1543,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         suppressesInitialSize = true
         initialTaskPanelOpen = snapshot.taskPanelOpen
         initialTabSidebarOpen = snapshot.tabSidebarOpen
+        primarySidebarMode = snapshot.primarySidebarMode.flatMap(PrimarySidebarMode.init(rawValue:)) ?? .handoff
 
         // 标签页 0：init 已把 initialPane 挂成树根；是分屏树时摘下来重新装进树里
         tabs[0].title = firstTab.title
@@ -1649,11 +1660,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let themeFrame = window?.contentView?.superview else { return }
         settingsWidthConstraint?.constant = themeFrame.bounds.width
-        SessionStore.shared.scheduleSave()
+        WorkspaceStore.shared.scheduleSave()
     }
 
     func windowDidMove(_ notification: Notification) {
-        SessionStore.shared.scheduleSave()
+        WorkspaceStore.shared.scheduleSave()
     }
 
     func hideSettings() {
@@ -1703,7 +1714,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - 全文搜索浮层（⇧⇧）
 
-    private var searchPalette: SearchPaletteView?
+    private var searchPalette: NSView?
 
     func toggleSearchPalette() {
         if searchPalette != nil { dismissSearchPalette() } else { showSearchPalette() }
@@ -1713,14 +1724,25 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         // 挂 themeFrame：浮层覆盖整窗（侧栏在 themeFrame 层级，挂 contentView
         // 会被它盖住且定位不含标题栏区）
         guard let themeFrame = window?.contentView?.superview else { return }
-        let palette = SearchPaletteView(controller: self)
-        palette.onDismiss = { [weak self] in self?.dismissSearchPalette() }
+        let palette: NSView
+        let focus: () -> Void
+        if primarySidebarMode == .sessions {
+            let sessions = SessionSearchPalette(library: AppState.shared.sessionLibrary)
+            sessions.onDismiss = { [weak self] in self?.dismissSearchPalette() }
+            palette = sessions
+            focus = { sessions.focusSearch() }
+        } else {
+            let tasks = SearchPaletteView(controller: self)
+            tasks.onDismiss = { [weak self] in self?.dismissSearchPalette() }
+            palette = tasks
+            focus = { tasks.focusSearch() }
+        }
         // 铺满用 autoresizing 而非约束：对 themeFrame 的约束会反向驱动窗口尺寸
         palette.frame = themeFrame.bounds
         palette.autoresizingMask = [.width, .height]
         themeFrame.addSubview(palette)
         searchPalette = palette
-        palette.focusSearch()
+        focus()
     }
 
     private func dismissSearchPalette() {
@@ -1763,11 +1785,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             // 必须在 pane 树拆掉之前定格，并防止随后的 applicationWillTerminate
             // 用空窗口列表把它覆盖掉。
             let windows = [snapshot()].compactMap { $0 }
-            SessionStore.shared.freeze(with: SessionSnapshot(windows: windows))
+            WorkspaceStore.shared.freeze(with: WorkspaceSnapshot(windows: windows))
         }
         AppState.shared.windowControllers.removeAll { $0 === self }
         // 主动关掉其中一个窗口 = 不要它了：快照只留其余窗口
-        if !others.isEmpty { SessionStore.shared.saveNow() }
+        if !others.isEmpty { WorkspaceStore.shared.saveNow() }
         // 整窗的绑定 pane 一起消失，其他窗口的侧栏活跃态需要跟着退
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }

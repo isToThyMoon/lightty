@@ -5,12 +5,13 @@ import AppKit
 /// 标题栏容器之下）。Esc 或「返回应用」关闭。
 final class SettingsView: NSView, NSTextFieldDelegate {
     enum Page: String, CaseIterable {
-        case general, appearance
+        case general, appearance, archive
 
         var title: String {
             switch self {
             case .general: return L("General")
             case .appearance: return L("Appearance")
+            case .archive: return L("Archive")
             }
         }
 
@@ -18,6 +19,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             switch self {
             case .general: return "gearshape"
             case .appearance: return "sun.max"
+            case .archive: return "archivebox"
             }
         }
     }
@@ -251,6 +253,12 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         switch page {
         case .general: buildGeneral(into: column)
         case .appearance: buildAppearance(into: column)
+        case .archive:
+            if let store = AppState.shared?.taskStore {
+                let archive = ArchivedTasksView(store: store)
+                column.addArrangedSubview(archive)
+                archive.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+            }
         }
     }
 
@@ -287,22 +295,15 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         hint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         column.setCustomSpacing(28, after: hint)
 
-        let terminalGroup = SettingsGroup()
-        let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
-        toggle.onChange = { on in
-            TerminalThemePreference.setUsesBuiltInTheme(on)
-            GhosttyRuntime.shared.reloadGlobalConfig()
-            PreferenceKind.terminalTheme.post()
-        }
-        terminalGroup.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
+        let hooksGroup = SettingsGroup()
         let hooksButton = NSButton(title: L("Manage…"), target: self,
                                    action: #selector(showHookSetup))
         hooksButton.bezelStyle = .rounded
         hooksButton.font = .systemFont(ofSize: 12)
-        terminalGroup.addRow(title: L("Agent status hooks"), control: hooksButton)
-        column.addArrangedSubview(terminalGroup)
-        terminalGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-        column.setCustomSpacing(28, after: terminalGroup)
+        hooksGroup.addRow(title: L("Agent status hooks"), control: hooksButton)
+        column.addArrangedSubview(hooksGroup)
+        hooksGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        column.setCustomSpacing(28, after: hooksGroup)
         column.addArrangedSubview(sectionLabel("Agent"))
         column.setCustomSpacing(12, after: column.arrangedSubviews.last!)
         let agents = SettingsGroup()
@@ -396,6 +397,13 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             if let option = AccentPreference(rawValue: id) { AccentPreference.set(option) }
         }
         accentGroup.addRow(title: L("Accent"), control: accentDropdown)
+        let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
+        toggle.onChange = { on in
+            TerminalThemePreference.setUsesBuiltInTheme(on)
+            GhosttyRuntime.shared.reloadGlobalConfig()
+            PreferenceKind.terminalTheme.post()
+        }
+        accentGroup.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
         column.addArrangedSubview(accentGroup)
         accentGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     }

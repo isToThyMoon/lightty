@@ -28,22 +28,22 @@ enum AgentLaunchPreference {
     private static let selectedKey = "lightty.agent.selected"
     private static func commandKey(_ agent: LaunchAgent) -> String { "lightty.agent.command.\(agent.rawValue)" }
 
-    static func selected(in defaults: UserDefaults = .standard) -> LaunchAgent {
+    static func selected(in defaults: PreferenceStorage = FilePreferences.shared) -> LaunchAgent {
         defaults.string(forKey: selectedKey).flatMap(LaunchAgent.init(rawValue:)) ?? .codex
     }
 
-    static func select(_ agent: LaunchAgent, in defaults: UserDefaults = .standard) {
+    static func select(_ agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(agent.rawValue, forKey: selectedKey)
     }
 
-    static func command(for agent: LaunchAgent, in defaults: UserDefaults = .standard) -> String {
+    static func command(for agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) -> String {
         guard agent != .terminal else { return "" }
         return defaults.string(forKey: commandKey(agent)) ?? agent.defaultCommand
     }
 
     @discardableResult
     static func setCommand(_ command: String, for agent: LaunchAgent,
-                           in defaults: UserDefaults = .standard) -> Bool {
+                           in defaults: PreferenceStorage = FilePreferences.shared) -> Bool {
         guard agent != .terminal,
               !command.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
         let trimmed = command.trimmingCharacters(in: .whitespaces)
@@ -52,11 +52,11 @@ enum AgentLaunchPreference {
         return true
     }
 
-    static func initialInput(for agent: LaunchAgent, in defaults: UserDefaults = .standard) -> String? {
+    static func initialInput(for agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) -> String? {
         agent == .terminal ? nil : command(for: agent, in: defaults) + "\n"
     }
 
-    static func resetCommands(in defaults: UserDefaults = .standard) {
+    static func resetCommands(in defaults: PreferenceStorage = FilePreferences.shared) {
         for agent in LaunchAgent.allCases { defaults.removeObject(forKey: commandKey(agent)) }
     }
 }

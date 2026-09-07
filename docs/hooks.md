@@ -3,7 +3,7 @@
 lightty 让 pane 显示里面的 agent 正在干什么（思考中 / 执行工具 / 需要你 / 已完成），
 并在 agent 跑完时提醒你。这一切靠给你已装的 coding agent 注册一个小 helper 实现。
 
-菜单：**lightty → Agent status hooks**。首次启动时若检测到你装了 agent 却没配过，
+入口：**设置 → 通用 → Agent 状态 hooks → 管理…**。首次启动时若检测到你装了 agent 却没配过，
 会主动弹一次引导。
 
 ## 它是怎么工作的
@@ -123,7 +123,7 @@ echo '{"hook_event_name":"Stop"}' | LIGHTTY_PANE_ID=$LIGHTTY_PANE_ID LIGHTTY_SOC
 > `login` 派生的进程环境，它会让一个正常工作的变量看起来"不存在"。要查就在 shell
 > 里直接 `echo`。
 
-**装好了但状态文件不变（Codex）** —— 多半是还没批准那个信任提示。跑一次 codex 看看。
+**装好了但状态不更新（Codex）** —— 检查是否批准了 hook 信任提示。实时状态通过 socket 传输，没有状态文件需要观察。
 
 **agent 会话是配置前起的** —— hook 配置在会话启动时读取，重开 claude/codex。
 
@@ -131,7 +131,7 @@ echo '{"hook_event_name":"Stop"}' | LIGHTTY_PANE_ID=$LIGHTTY_PANE_ID LIGHTTY_SOC
 
 ## 卸载
 
-**lightty → Agent status hooks → Uninstall**，或直接用它们自己的 CLI：
+**设置 → 通用 → Agent 状态 hooks → 管理… → 卸载**，或直接用它们自己的 CLI：
 
 ```sh
 claude plugin uninstall lightty@lightty
@@ -142,5 +142,5 @@ codex  plugin remove    lightty@lightty
 
 ## 相关文档
 
-- `docs/specs/pane-status.md` —— 设计与实施计划、契约、已验证事实（§2.1.1 是插件路线的实测记录）
+- `docs/specs/pane-status.md` —— 当前状态传输、展示与 Handoff 注入契约
 - `docs/task-format.md` —— 任务文件格式（其中的 `status` 字段与本机制**无关**，已弃用）

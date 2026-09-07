@@ -30,11 +30,11 @@ enum AppearancePreference: String, CaseIterable {
 
     static let defaultsKey = "lightty.appearance"
 
-    static func current(in defaults: UserDefaults = .standard) -> AppearancePreference {
+    static func current(in defaults: PreferenceStorage = FilePreferences.shared) -> AppearancePreference {
         defaults.string(forKey: defaultsKey).flatMap(AppearancePreference.init(rawValue:)) ?? .system
     }
 
-    static func set(_ value: AppearancePreference, in defaults: UserDefaults = .standard) {
+    static func set(_ value: AppearancePreference, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(value.rawValue, forKey: defaultsKey)
         apply(value)
         PreferenceKind.appearance.post()
@@ -75,11 +75,11 @@ enum LanguagePreference: String, CaseIterable {
     /// 指定语言 → 对应 lproj 子 bundle（找不到时退回 Bundle.module）。
     private(set) static var bundle: Bundle = resolveBundle(for: current())
 
-    static func current(in defaults: UserDefaults = .standard) -> LanguagePreference {
+    static func current(in defaults: PreferenceStorage = FilePreferences.shared) -> LanguagePreference {
         defaults.string(forKey: defaultsKey).flatMap(LanguagePreference.init(rawValue:)) ?? .system
     }
 
-    static func set(_ value: LanguagePreference, in defaults: UserDefaults = .standard) {
+    static func set(_ value: LanguagePreference, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(value.rawValue, forKey: defaultsKey)
         bundle = resolveBundle(for: value)
         PreferenceKind.language.post()
@@ -121,11 +121,11 @@ enum AccentPreference: String, CaseIterable {
     /// 未设置时的出厂值：粉色
     static let factory: AccentPreference = .pink
 
-    static func current(in defaults: UserDefaults = .standard) -> AccentPreference {
+    static func current(in defaults: PreferenceStorage = FilePreferences.shared) -> AccentPreference {
         defaults.string(forKey: defaultsKey).flatMap(AccentPreference.init(rawValue:)) ?? factory
     }
 
-    static func set(_ value: AccentPreference, in defaults: UserDefaults = .standard) {
+    static func set(_ value: AccentPreference, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(value.rawValue, forKey: defaultsKey)
         PreferenceKind.accent.post()
     }

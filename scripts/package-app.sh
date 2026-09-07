@@ -26,6 +26,8 @@ GHOSTTY_SHARE="$ROOT/vendor/ghostty/zig-out/share/ghostty"
 }
 
 # ── 构建（universal：xcframework 本身就是 arm64+x86_64 双架构）─────────────
+echo "▸ prepare pinned Claude session helper (build-time dependencies)"
+node "$ROOT/scripts/prepare-claude-helper.mjs" --all
 echo "▸ swift build -c release (arm64 + x86_64)"
 swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT"
 BIN="$ROOT/.build/apple/Products/Release/lightty"
@@ -45,6 +47,12 @@ cp "$HOOK" "$APP/Contents/MacOS/lightty-hook"
 # SwiftPM 资源包（本地化 strings 等）：Bundle.module 会在主 bundle 的
 # Resources 里按名查找
 cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
+# The SDK only lists local metadata. Do not bundle its optional Claude CLI binary.
+CLAUDE_HELPER="$APP/Contents/Resources/claude-session-helper"
+mkdir -p "$CLAUDE_HELPER"
+for item in list-sessions.mjs node_modules runtime-arm64 runtime-x64; do
+    cp -R "$ROOT/.build/claude-session-helper/$item" "$CLAUDE_HELPER/"
+done
 # Sparkle 动态框架：开发态靠 @loader_path 同目录找到，bundle 里进 Frameworks/
 # 并给可执行补 rpath
 mkdir -p "$APP/Contents/Frameworks"
@@ -112,6 +120,11 @@ if [ -z "$IDENTITY" ]; then
 fi
 if [ -n "$IDENTITY" ]; then
     echo "▸ codesign: $IDENTITY (hardened runtime)"
+    for arch in arm64 x64; do
+        codesign --force --sign "$IDENTITY" --options runtime --timestamp \
+            --entitlements "$ROOT/scripts/claude-session-helper/entitlements.plist" \
+            "$CLAUDE_HELPER/runtime-$arch/node"
+    done
     # 由内向外签：内嵌框架（--deep 覆盖 Sparkle 的 XPC/Autoupdate）→ hook helper
     # → app 本体。lightty-hook 是 Contents/MacOS 里的第二个 Mach-O，签 app bundle
     # 不会顺带签它，必须单独来一发，否则它在用户机上跑不起来（hook 静默失效）
@@ -122,6 +135,11 @@ if [ -n "$IDENTITY" ]; then
     codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP"
 else
     echo "▸ codesign: ad-hoc（未找到 Developer ID，仅本机可用）"
+    for arch in arm64 x64; do
+        codesign --force --sign - --options runtime \
+            --entitlements "$ROOT/scripts/claude-session-helper/entitlements.plist" \
+            "$CLAUDE_HELPER/runtime-$arch/node"
+    done
     codesign --force --sign - --deep "$APP/Contents/Frameworks/Sparkle.framework"
     codesign --force --sign - "$APP/Contents/MacOS/lightty-hook"
     codesign --force --sign - "$APP"

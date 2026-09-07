@@ -102,10 +102,10 @@ agent 手写文件常用 `completed` 等自然词，为死字段的取值校验�
 定义，而不是先造字段再找用途。
 
 **不要把 agent 的实时状态塞回这个字段。** pane 里 agent 正在做什么（思考中 /
-执行工具 / 需要介入 / 已完成）由 agent hook 驱动，落在
-`~/.lightty/panes/<pane-uuid>/status.json`，是**易失的运行时信号**，不进任务文件。
+执行工具 / 需要介入 / 已完成）由 agent hook 驱动，通过
+`~/.lightty/run/<pid>.sock` 传到应用内存，是**易失的运行时信号**，不进任务文件。
 两者的性质相反：这里的 `status` 是 agent 临别时手写的一次性判断（会滞后、会撒谎），
-那边是机器从生命周期事件派生的实时事实。详见 `docs/specs/pane-status.md`。
+那边是机器从生命周期事件派生的实时信号。详见 `docs/specs/pane-status.md`。
 
 ### 序列化顺序
 
@@ -134,7 +134,7 @@ agent 手写文件常用 `completed` 等自然词，为死字段的取值校验�
 
 ## 正文规范（handoff 内容）
 
-正文即任务的 handoff 文档，原则采纳自 mattpocock 的 handoff skill（详见 HANDOVER.md 第 8.3 节）：为接手的 agent 写、引用不复制（commit/路径/URL 指向已有产物）、脱敏（key/密码/PII 不落盘）、面向下一步裁剪。
+正文即任务的 handoff 文档：为接手的 agent 写、引用不复制（commit/路径/URL 指向已有产物）、脱敏（key/密码/PII 不落盘）、面向下一步裁剪。
 
 覆盖式快照按以下结构重写正文；人工里程碑另起日期段追加，不被快照覆盖。
 节头为英文（协议语言，2026-08-30 起；此前的中文节头由摘要解析兼容，旧文件无需迁移）：

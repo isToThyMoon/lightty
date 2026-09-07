@@ -26,7 +26,9 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
     // scrollableTextView 工厂：自带 text container 宽度跟踪（手工组装易得零宽不换行）
     private let bodyScroll = NSTextView.scrollableTextView()
     private var previewBody: NSTextView { bodyScroll.documentView as! NSTextView }
+    private let actionsScroll = NSScrollView()
     private let previewActions = NSStackView()
+    private var taskWorkflow: RestorePopoverController?
     private let hintLabel = NSTextField(labelWithString: "")
     private var results: [Result] = []
     private var selectedIndex = 0
@@ -42,16 +44,10 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         // backing layer 会被 AppKit 重建，init 里设置的 bg/shadow 会丢失。
         card.wantsLayer = true
 
-        let icon = NSImageView(image: NSImage(
-            systemSymbolName: "magnifyingglass", accessibilityDescription: nil)!
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))!)
-        icon.contentTintColor = ShellStyle.tertiaryText
+        let icon = SearchPaletteStyle.icon()
 
         searchField.placeholderString = L("Search task names and handoff content")
-        searchField.font = .systemFont(ofSize: 15)
-        searchField.isBezeled = false
-        searchField.drawsBackground = false
-        searchField.focusRingType = .none
+        SearchPaletteStyle.configure(searchField)
         searchField.delegate = self
         (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
@@ -88,11 +84,29 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         bodyScroll.autohidesScrollers = true
         bodyScroll.drawsBackground = false
 
+        actionsScroll.drawsBackground = false
+        actionsScroll.hasVerticalScroller = true
+        actionsScroll.autohidesScrollers = true
+        let actionsDocument = FlippedView()
+        actionsDocument.translatesAutoresizingMaskIntoConstraints = false
+        actionsScroll.documentView = actionsDocument
+        previewActions.translatesAutoresizingMaskIntoConstraints = false
+        actionsDocument.addSubview(previewActions)
+        NSLayoutConstraint.activate([
+            actionsDocument.widthAnchor.constraint(equalTo: actionsScroll.contentView.widthAnchor),
+            previewActions.topAnchor.constraint(equalTo: actionsDocument.topAnchor),
+            previewActions.leadingAnchor.constraint(equalTo: actionsDocument.leadingAnchor),
+            previewActions.trailingAnchor.constraint(equalTo: actionsDocument.trailingAnchor),
+            previewActions.bottomAnchor.constraint(equalTo: actionsDocument.bottomAnchor),
+        ])
+        let fittedActions = actionsScroll.heightAnchor.constraint(equalTo: previewActions.heightAnchor)
+        fittedActions.priority = .defaultHigh
+        fittedActions.isActive = true
         previewActions.orientation = .vertical
         previewActions.alignment = .leading
         previewActions.spacing = 4
 
-        hintLabel.stringValue = L("↩ Jump / new terminal · esc Close")
+        hintLabel.stringValue = L("↩ Go / start Agent · esc Close")
         hintLabel.font = .systemFont(ofSize: 10.5)
         hintLabel.textColor = ShellStyle.tertiaryText
 
@@ -101,7 +115,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
             v.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(v)
         }
-        for v in [previewTitle, previewTag, bodyScroll, previewActions] {
+        for v in [previewTitle, previewTag, bodyScroll, actionsScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             previewPane.addSubview(v)
         }
@@ -148,12 +162,13 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
             bodyScroll.trailingAnchor.constraint(
                 equalTo: previewPane.trailingAnchor, constant: -12),
 
-            previewActions.topAnchor.constraint(equalTo: bodyScroll.bottomAnchor, constant: 10),
-            previewActions.leadingAnchor.constraint(
+            actionsScroll.heightAnchor.constraint(lessThanOrEqualTo: previewPane.heightAnchor, multiplier: 0.7),
+            actionsScroll.topAnchor.constraint(equalTo: bodyScroll.bottomAnchor, constant: 10),
+            actionsScroll.leadingAnchor.constraint(
                 equalTo: previewPane.leadingAnchor, constant: 8),
-            previewActions.trailingAnchor.constraint(
+            actionsScroll.trailingAnchor.constraint(
                 equalTo: previewPane.trailingAnchor, constant: -8),
-            previewActions.bottomAnchor.constraint(
+            actionsScroll.bottomAnchor.constraint(
                 equalTo: previewPane.bottomAnchor, constant: -8),
 
             rowsStack.topAnchor.constraint(equalTo: document.topAnchor),
@@ -199,11 +214,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         // 投影用 NSView.shadow（AppKit 维护，backing layer 重建后自动重涂；
         // 直接写 layer.shadow* 会在挂窗/重建时丢失——已踩过）。
         // 大扩散 + 明显下坠 = Notion 式悬浮感。
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.30)
-        shadow.shadowBlurRadius = 48
-        shadow.shadowOffset = NSSize(width: 0, height: -12)
-        card.shadow = shadow
+        SearchPaletteStyle.decorate(card)
         // 预览区自身也是浮起的小卡片（Notion 式：抬升面 + 描边 + 轻投影）
         let previewShadow = NSShadow()
         previewShadow.shadowColor = NSColor.black.withAlphaComponent(0.14)
@@ -216,12 +227,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
     override func layout() {
         super.layout()
         // 卡片 frame 手动计算（相对窗口的 token 定位，对窗口尺寸零反压）
-        let w = min(bounds.width * ShellStyle.paletteWidthRatio, ShellStyle.paletteMaxWidth)
-        let h = min(bounds.height * ShellStyle.paletteHeightRatio, ShellStyle.paletteMaxHeight)
-        let x = (bounds.width - w) / 2
-        let topOffset = bounds.height * ShellStyle.paletteTopRatio
-        let y = isFlipped ? topOffset : bounds.height - topOffset - h
-        card.frame = NSRect(x: x, y: y, width: w, height: h).integral
+        card.frame = SearchPaletteStyle.frame(in: bounds, flipped: isFlipped)
     }
 
     func focusSearch() {
@@ -375,7 +381,8 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
     // MARK: - 右预览
 
     private func updatePreview() {
-        previewActions.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        taskWorkflow = nil
+        previewActions.arrangedSubviews.forEach { previewActions.removeArrangedSubview($0); $0.removeFromSuperview() }
         guard let result = results[safe: selectedIndex] else {
             previewPane.isHidden = true
             return
@@ -387,60 +394,19 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         previewTag.textColor = active ? ShellStyle.boundAccent : ShellStyle.tertiaryText
         previewBody.string = result.task.body
 
-        // 全文搜索保留显式目的地：用户已经进入详情预览，选择位置是有意动作。
-        for (index, entry) in result.running.enumerated() {
-            let tab = entry.controller.tabName(of: entry.pane)
-            let label = tab.map { "\($0) › \(entry.pane.header.title)" }
-                ?? entry.pane.header.title
-            addAction(L("Jump · %@", label)) { [weak self] in
-                guard let self, let target = self.results[safe: self.selectedIndex]?
-                    .running[safe: index] else { return }
-                target.controller.window?.makeKeyAndOrderFront(nil)
-                target.controller.reveal(pane: target.pane)
-                target.pane.flashReveal()
-                self.onDismiss?()
-            }
-        }
-        addAction(L("New terminal")) { [weak self] in
-            self?.open { controller, pane in controller.addPaneToActiveTab(pane) }
-        }
-        addAction(L("New tab")) { [weak self] in
-            self?.open { controller, pane in controller.addTab(initialPane: pane) }
-        }
-        addAction(L("New window")) { [weak self] in
-            self?.open { _, pane in AppState.shared.newWindow(initialPane: pane) }
-        }
+        guard let controller else { return }
+        let workflow = RestorePopoverController(fileURL: result.fileURL,
+            task: result.task, controller: controller, embedded: true)
+        workflow.onDone = { [weak self] in self?.onDismiss?() }
+        taskWorkflow = workflow
+        workflow.view.translatesAutoresizingMaskIntoConstraints = false
+        previewActions.addArrangedSubview(workflow.view)
+        workflow.view.widthAnchor.constraint(equalTo: previewActions.widthAnchor).isActive = true
     }
 
-    private func addAction(_ title: String, handler: @escaping () -> Void) {
-        let button = PaletteActionButton(title)
-        button.onTap = handler
-        button.translatesAutoresizingMaskIntoConstraints = false
-        previewActions.addArrangedSubview(button)
-        button.widthAnchor.constraint(equalTo: previewActions.widthAnchor).isActive = true
-    }
-
-    private func open(
-        _ place: (TerminalWindowController, PaneView) -> Void
-    ) {
-        guard let controller, let result = results[safe: selectedIndex] else { return }
-        let pane = PaneView.restoring(task: result.task, fileURL: result.fileURL)
-        place(controller, pane)
-        pane.focusTerminal()
-        onDismiss?()
-    }
-
-    /// 回车默认动作：活跃跳转（首个绑定 pane），休眠在当前标签页分屏打开
     private func commitDefault() {
-        guard let result = results[safe: selectedIndex] else { return }
-        if let target = result.running.first {
-            target.controller.window?.makeKeyAndOrderFront(nil)
-            target.controller.reveal(pane: target.pane)
-            target.pane.flashReveal()
-            onDismiss?()
-        } else {
-            open { controller, pane in controller.addPaneToActiveTab(pane) }
-        }
+        guard results.indices.contains(selectedIndex) else { return }
+        taskWorkflow?.performDefaultAction()
     }
 
     // MARK: - 键盘
@@ -489,7 +455,7 @@ extension Array {
 }
 
 /// 左列表行：任务名 + 活跃标签 + 命中摘录（hover/单击选中、双击提交）。
-private final class PaletteRowView: NSView {
+final class PaletteRowView: NSView, SidebarHoverRow {
     var onTap: (() -> Void)?
     var onDoubleTap: (() -> Void)?
     var onHover: (() -> Void)?
@@ -497,6 +463,10 @@ private final class PaletteRowView: NSView {
 
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
+    func setSidebarHovered(_ value: Bool) {
+        guard hovered != value else { return }
+        hovered = value
+    }
 
     init(name: String, tag: String, tagColor: NSColor, snippet: NSAttributedString?) {
         super.init(frame: .zero)
@@ -563,10 +533,11 @@ private final class PaletteRowView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        hovered = true
+        sidebarHoverEntered()
+        guard hovered else { return }
         onHover?()
     }
-    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -579,57 +550,3 @@ private final class PaletteRowView: NSView {
 }
 
 /// 预览区目的地行：与恢复气泡的目的地行同一视觉语言（左对齐、hover 提亮）。
-private final class PaletteActionButton: NSView {
-    var onTap: (() -> Void)?
-
-    private var tracking: NSTrackingArea?
-    private var hovered = false { didSet { applyFill() } }
-
-    init(_ title: String) {
-        super.init(frame: .zero)
-        HoverCursor.installPointingHand(on: self)
-        wantsLayer = true
-        layer?.cornerRadius = 6
-
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 11.5, weight: .medium)
-        label.textColor = ShellStyle.primaryText
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(equalToConstant: 24),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func applyFill() {
-        let fill: NSColor = hovered ? ShellStyle.selectionFill : .clear
-        layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyFill()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-
-    override func mouseDown(with event: NSEvent) { onTap?() }
-}

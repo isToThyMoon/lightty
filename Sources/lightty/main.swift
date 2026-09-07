@@ -1,6 +1,42 @@
 import AppKit
 import GhosttyKit
 
+// Must precede FilePreferences.shared, AppDelegate, workspace restoration and all terminals.
+// The optional diagnostic flag uses this same startup gate without opening the GUI.
+let migrationOnly = CommandLine.arguments.contains("--migrate-data")
+do {
+    let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".lightty")
+    let backup = try UserDataMigration.run(in: root, hasOtherInstance: {
+        NSWorkspace.shared.runningApplications.contains(where: {
+            $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                && $0.executableURL?.lastPathComponent == "lightty"
+        })
+    })
+    if migrationOnly {
+        print(backup.map { "Data upgraded. Backup: \($0.path)" } ?? "Data already uses the current format.")
+        exit(EXIT_SUCCESS)
+    }
+} catch {
+    fputs("Data upgrade failed: \(error.localizedDescription)\n", stderr)
+    if !migrationOnly {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        app.activate(ignoringOtherApps: true)
+        // Do not use L(): app language preferences must not be read before migration.
+        let chinese = Locale.preferredLanguages.first?.hasPrefix("zh") == true
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = chinese ? "无法升级 lightty 数据" : "Could not upgrade lightty data"
+        alert.informativeText = (chinese
+            ? "应用尚未打开任何终端。原文件或升级前备份已保留在 ~/.lightty/。请解决以下问题后重新打开：\n\n"
+            : "No terminals were opened. Original files or pre-upgrade backups remain in ~/.lightty/. Resolve the issue and reopen:\n\n")
+            + error.localizedDescription
+        alert.addButton(withTitle: chinese ? "退出" : "Quit")
+        alert.runModal()
+    }
+    exit(EXIT_FAILURE)
+}
+
 // 冒烟锚点：真实调用符号，防 SwiftPM 空链接假报 Build complete
 // （docs/libghostty-embedding.md 链接契约）
 let info = ghostty_info()

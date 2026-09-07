@@ -15,6 +15,7 @@ enum ShellMenuPopover {
         var title: String = ""
         var checked = false
         var detail: String?
+        var subtitle: String?
         var destructive = false
         /// 行首色点（重点色菜单用）
         var swatch: NSColor?
@@ -23,13 +24,14 @@ enum ShellMenuPopover {
             _ title: String,
             checked: Bool = false,
             detail: String? = nil,
+            subtitle: String? = nil,
             destructive: Bool = false,
             swatch: NSColor? = nil,
             handler: @escaping () -> Void
         ) -> Item {
             Item(
                 kind: .action(handler), title: title, checked: checked,
-                detail: detail, destructive: destructive, swatch: swatch)
+                detail: detail, subtitle: subtitle, destructive: destructive, swatch: swatch)
         }
 
         static func header(_ title: String) -> Item {
@@ -263,7 +265,7 @@ private final class MenuController: NSViewController {
             constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor))
         }
         for button in buttons {
-            constraints.append(button.heightAnchor.constraint(equalToConstant: 30))
+            constraints.append(button.heightAnchor.constraint(equalToConstant: button.preferredHeight))
         }
         // 分组标题左对齐带内缩
         for case let label as NSTextField in rows {
@@ -277,6 +279,7 @@ private final class MenuController: NSViewController {
 
 /// 菜单行：（色点 +）标题 + 尾注 + 尾部勾选，整行 hover 提亮（ChatGPT 桌面版式）。
 private final class MenuRowButton: NSView {
+    var preferredHeight: CGFloat { item.subtitle == nil ? 30 : 48 }
     var onTap: (() -> Void)?
     private let swatch = NSView()
 
@@ -284,6 +287,7 @@ private final class MenuRowButton: NSView {
     private let check = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
 
@@ -306,12 +310,16 @@ private final class MenuRowButton: NSView {
 
         detailLabel.stringValue = item.detail ?? ""
         detailLabel.font = .systemFont(ofSize: 10.5)
+        subtitleLabel.stringValue = item.subtitle ?? ""
+        subtitleLabel.font = .systemFont(ofSize: 10.5)
+        subtitleLabel.textColor = ShellStyle.secondaryText
+        subtitleLabel.lineBreakMode = .byTruncatingTail
 
         swatch.wantsLayer = true
         swatch.layer?.cornerRadius = 6
         swatch.isHidden = item.swatch == nil
 
-        for v in [swatch, check, titleLabel, detailLabel] {
+        for v in [swatch, check, titleLabel, detailLabel, subtitleLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -324,7 +332,10 @@ private final class MenuRowButton: NSView {
             titleLabel.leadingAnchor.constraint(
                 equalTo: item.swatch == nil ? leadingAnchor : swatch.trailingAnchor,
                 constant: item.swatch == nil ? 12 : 10),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor, constant: item.subtitle == nil ? 0 : -8),
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             titleLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: detailLabel.leadingAnchor, constant: -8),
 

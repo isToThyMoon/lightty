@@ -18,7 +18,7 @@ enum TabSidebarSizing {
 enum TabSidebarWidthPreference {
     static let defaultsKey = "lightty.workspaceSidebar.width"  // 历史键名，改了会丢已存宽度
 
-    static func width(in defaults: UserDefaults = .standard) -> CGFloat {
+    static func width(in defaults: PreferenceStorage = FilePreferences.shared) -> CGFloat {
         guard defaults.object(forKey: defaultsKey) != nil else {
             return TabSidebarSizing.minimumWidth
         }
@@ -27,7 +27,7 @@ enum TabSidebarWidthPreference {
         return TabSidebarSizing.clampedWidth(stored)
     }
 
-    static func setWidth(_ width: CGFloat, in defaults: UserDefaults = .standard) {
+    static func setWidth(_ width: CGFloat, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(Double(TabSidebarSizing.clampedWidth(width)), forKey: defaultsKey)
     }
 }
@@ -277,6 +277,18 @@ final class EdgeRevealStrip: NSView {
 /// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽；到达最小宽后继续
 /// 向左拖过阈值即关闭。同时保留边缘 hover 感应。
 private final class EdgeDragStrip: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        // The scroller now lives at the edge too. Give it pointer priority over resizing.
+        for case let column as TabColumnView in superview?.subviews ?? [] {
+            for case let scroll as NSScrollView in column.subviews {
+                if let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor,
+                   scroller.bounds.contains(scroller.convert(point, from: superview)) { return nil }
+            }
+        }
+        return hit
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         HoverCursor.installResizeLeftRight(on: self)

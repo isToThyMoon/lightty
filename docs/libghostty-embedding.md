@@ -112,12 +112,7 @@ git diff --check
 > `Contents/Resources/ghostty`。缺失时带名字的内置主题会报 `theme ... not found`，
 > background/foreground 随后保留为 libghostty 默认 `#282c34/#ffffff`。
 
-## 透明排查实录（2026-08-22，防复发）
+## 透明合成约束
 
-现象：窗口/层级全部非不透明、surface 像素 alpha 正确（实测 224），视觉仍不透明。
-
-根因：**layer 化后 NSView 自绘内容落在超出 bounds 的 ContentLayer 里**（实测 header 24pt 的绘制内容出现在全窗口尺寸的 ContentLayer 上），父 layer 不裁剪 → 半透明底色整张盖住终端。
-
-修复：自绘 NSView 必须 `clipsToBounds = true`（PaneHeaderView）。
-
-排查路径备忘：逐层排除（config 读取 → 像素 alpha 采样 → 官方壳同 core 对照 → 素窗口二分 → 层级对照 dump），最快路径其实是最后一步的**双窗口 layer 树 diff**——下次遇合成异常直接从它开始。
+自绘背景不得超出所属 view 的 bounds；PaneHeaderView 使用 `clipsToBounds = true`，防止 ContentLayer 的底色覆盖终端。
+合成异常时核查 config、surface alpha 与 layer 树，必要时与官方壳对照，不能仅凭窗口的 opaque 标志判断透明度。

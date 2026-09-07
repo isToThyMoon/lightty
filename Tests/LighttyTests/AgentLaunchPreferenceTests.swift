@@ -5,6 +5,36 @@ import XCTest
 
 @MainActor
 final class AgentLaunchPreferenceTests: XCTestCase {
+    func testSearchUsesSharedAgentWorkflowAndArchiveSettingsEntry() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        try AppState.shared.taskStore.create(name: "Search fixture", workdir: directory.path)
+        let controller = TerminalWindowController()
+        let palette = SearchPaletteView(controller: controller)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = palette
+        palette.frame = NSRect(x: 0, y: 0, width: 1100, height: 700)
+        palette.layoutSubtreeIfNeeded()
+        let buttons = descendants(palette).compactMap { $0 as? NSButton }
+        XCTAssertEqual(buttons.first { $0.title == L("New tab") }?.state, .on)
+        XCTAssertTrue(buttons.contains { $0.title == L("Split in current tab") })
+        XCTAssertFalse(buttons.contains { $0.title == L("New terminal") })
+        XCTAssertNotNil(descendants(palette).compactMap { $0 as? NSPopUpButton }.first)
+        XCTAssertEqual(controller.tabCount, 1)
+        let settings = SettingsView(page: .archive)
+        XCTAssertTrue(descendants(settings).contains { $0 is ArchivedTasksView })
+        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
+           let bitmap = palette.bitmapImageRepForCachingDisplay(in: palette.bounds) {
+            palette.cacheDisplay(in: palette.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to:
+                URL(fileURLWithPath: path).appendingPathComponent("search-agent-workflow.png"))
+        }
+    }
+
     func testLongPreviewCannotOpenAnUnclampedFieldEditor() throws {
         _ = NSApplication.shared
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -89,10 +119,10 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
         let key = "lightty.agent.selected"
-        let saved = UserDefaults.standard.object(forKey: key)
+        let saved = FilePreferences.shared.object(forKey: key)
         defer {
-            if let saved { UserDefaults.standard.set(saved, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
+            if let saved { FilePreferences.shared.set(saved, forKey: key) }
+            else { FilePreferences.shared.removeObject(forKey: key) }
         }
         AgentLaunchPreference.select(.claudeCode)
         let controller = TerminalWindowController()

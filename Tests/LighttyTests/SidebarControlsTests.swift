@@ -15,7 +15,7 @@ final class SidebarControlsTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let host = try XCTUnwrap(window.contentView?.superview)
         let deadline = Date(timeIntervalSinceNow: 2)
-        while !host.subviews.contains(where: { $0 is TaskSidebar }), Date() < deadline {
+        while !host.subviews.contains(where: { $0 is PrimarySidebar }), Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
         }
         // 收敛初始任务侧栏动画；仅任务侧栏打开是实际复现的前置状态。
@@ -76,23 +76,23 @@ final class SidebarControlsTests: XCTestCase {
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
         // 轮询而不是固定睡 50ms：整套测试跑起来主队列可能排着别的事，固定时长会偶发。
         let deadline = Date(timeIntervalSinceNow: 2)
-        while themeFrame.subviews.first(where: { $0 is TaskSidebar }) == nil, Date() < deadline {
+        while themeFrame.subviews.first(where: { $0 is PrimarySidebar }) == nil, Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
         }
         themeFrame.layoutSubtreeIfNeeded()
 
         // 默认打开 task 侧栏。
         let taskPanel = try XCTUnwrap(
-            themeFrame.subviews.compactMap { $0 as? TaskSidebar }.first,
+            themeFrame.subviews.compactMap { $0 as? PrimarySidebar }.first,
             "默认应打开 task 侧栏")
 
         // 卡片从窗口顶边起（只留 panelInset），把红绿灯收进自己的头部行；
         // 头部行右端是收起卡片的 sidebar.left 按钮，标题栏那枚随之隐藏。
         XCTAssertEqual(
             taskPanel.frame.maxY, themeFrame.bounds.maxY - ShellStyle.panelInset, accuracy: 0.5)
-        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Task Sidebar")))
+        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Primary sidebar")))
         let titlebarToggles = themeFrame.subviews
-            .filter { !($0 is TaskSidebar) }
+            .filter { !($0 is PrimarySidebar) }
             .flatMap { descendantIconButtons(of: $0) }
             .filter { $0.toolTip == L("Task Sidebar") }
         XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有 task 开关（只是隐藏）")

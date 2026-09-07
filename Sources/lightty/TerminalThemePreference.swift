@@ -4,14 +4,14 @@ import Foundation
 enum TerminalThemePreference {
     static let defaultsKey = "lightty.terminalTheme.useBuiltIn"
 
-    static func usesBuiltInTheme(in defaults: UserDefaults = .standard) -> Bool {
+    static func usesBuiltInTheme(in defaults: PreferenceStorage = FilePreferences.shared) -> Bool {
         defaults.register(defaults: [defaultsKey: true])
         return defaults.bool(forKey: defaultsKey)
     }
 
     static func setUsesBuiltInTheme(
         _ enabled: Bool,
-        in defaults: UserDefaults = .standard
+        in defaults: PreferenceStorage = FilePreferences.shared
     ) {
         defaults.set(enabled, forKey: defaultsKey)
     }

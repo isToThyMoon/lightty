@@ -47,6 +47,8 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertEqual(view.currentPage, .appearance)
         XCTAssertTrue(labels(in: view).contains(L("Appearance")))
         XCTAssertTrue(labels(in: view).contains(L("Theme")))
+        XCTAssertTrue(labels(in: view).contains(L("Use the built-in Lightty terminal theme")))
+        XCTAssertFalse(labels(in: view).contains(L("Agent status hooks")))
         XCTAssertTrue(labels(in: view).contains(L("Back to app")))
 
         view.showPage(.general)
@@ -54,6 +56,8 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertEqual(view.currentPage, .general)
         XCTAssertTrue(labels(in: view).contains(L("Language")))
         XCTAssertFalse(labels(in: view).contains(L("Theme")))
+        XCTAssertFalse(labels(in: view).contains(L("Use the built-in Lightty terminal theme")))
+        XCTAssertTrue(labels(in: view).contains(L("Agent status hooks")))
     }
 
     /// 语言变更通知到达后页面文案就地重建。
@@ -69,7 +73,7 @@ final class SettingsViewTests: XCTestCase {
 
     /// 重点色偏好：带色相的档位同时接管导航色；默认/白退回内置导航蓝。
     func testAccentPreferenceDrivesShellColors() {
-        defer { AccentPreference.set(.default, in: defaults); UserDefaults.standard.removeObject(forKey: AccentPreference.defaultsKey) }
+        defer { AccentPreference.set(.default, in: defaults); FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey) }
         func rgb(_ color: NSColor) -> [Int] {
             let c = color.usingColorSpace(.sRGB)!
             return [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) }
@@ -83,7 +87,7 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertNotEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "无色相：导航退回蔚蓝")
         XCTAssertFalse(AccentPreference.white.hasHue)
         XCTAssertEqual(AccentPreference.allCases.count, 8)
-        UserDefaults.standard.removeObject(forKey: AccentPreference.defaultsKey)
+        FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey)
         XCTAssertEqual(AccentPreference.current(), .pink, "出厂重点色是粉色")
     }
 

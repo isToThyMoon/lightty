@@ -41,7 +41,7 @@ final class HookSetupOverlay: NSView {
     /// 启动后自动调用。只有「装了 agent 却没装 hook」才值得打断——
     /// 没装 agent 的人看到这个只会困惑，装好了的人再看就是纯噪音。
     static func presentIfNeeded(in controller: TerminalWindowController) {
-        guard !UserDefaults.standard.bool(forKey: dismissedKey) else { return }
+        guard !FilePreferences.shared.bool(forKey: dismissedKey) else { return }
         let worthAsking = HookInstaller.reports().contains { report in
             guard report.isAgentPresent else { return false }
             switch report.state {
@@ -298,7 +298,7 @@ final class HookSetupOverlay: NSView {
 
     @objc private func closeTapped() {
         // 主动弹过就记下，之后从设置打开
-        UserDefaults.standard.set(true, forKey: Self.dismissedKey)
+        FilePreferences.shared.set(true, forKey: Self.dismissedKey)
         onDismiss?()
     }
 

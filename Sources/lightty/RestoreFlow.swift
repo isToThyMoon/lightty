@@ -4,6 +4,7 @@ import LighttyCore
 /// 任务启动流程：展示摘要与已打开的 pane，选择 Agent 和位置后再创建终端。
 enum RestoreFlow {
     private static var popover: NSPopover?
+    static func dismiss() { popover?.close(); popover = nil }
 
     static func begin(
         fileURL: URL,
@@ -61,6 +62,7 @@ final class RestorePopoverController: NSViewController {
 
     private let fileURL: URL
     private let task: TaskFile
+    private let embedded: Bool
     private weak var controller: TerminalWindowController?
     private var jumpTargets: [(controller: TerminalWindowController, pane: PaneView)] = []
     private var selectedAgent = AgentLaunchPreference.selected()
@@ -70,7 +72,8 @@ final class RestorePopoverController: NSViewController {
     private var selectedDestination = 1
     private let contextHint = NSTextField(wrappingLabelWithString: "")
 
-    init(fileURL: URL, task: TaskFile, controller: TerminalWindowController) {
+    init(fileURL: URL, task: TaskFile, controller: TerminalWindowController, embedded: Bool = false) {
+        self.embedded = embedded
         self.fileURL = fileURL
         self.task = task
         self.controller = controller
@@ -99,7 +102,7 @@ final class RestorePopoverController: NSViewController {
         summary.isSelectable = false
         summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        var rows: [NSView] = [title, taskName, summary]
+        var rows: [NSView] = embedded ? [] : [title, taskName, summary]
         var buttonRows: [NSButton] = []
         var sectionLabels: [NSView] = []
         var sectionDivider: NSView?
@@ -164,8 +167,10 @@ final class RestorePopoverController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        stack.setCustomSpacing(10, after: title)
-        stack.setCustomSpacing(10, after: taskName)
+        if !embedded {
+            stack.setCustomSpacing(10, after: title)
+            stack.setCustomSpacing(10, after: taskName)
+        }
         for label in sectionLabels {
             if let index = rows.firstIndex(where: { $0 === label }), index > 0 {
                 stack.setCustomSpacing(14, after: rows[index - 1])
@@ -178,12 +183,14 @@ final class RestorePopoverController: NSViewController {
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
-            root.widthAnchor.constraint(equalToConstant: 340),
-            summary.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            title.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            taskName.widthAnchor.constraint(equalTo: stack.widthAnchor),
             contextHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ]
+        if !embedded {
+            constraints += [root.widthAnchor.constraint(equalToConstant: 340),
+                summary.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                title.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                taskName.widthAnchor.constraint(equalTo: stack.widthAnchor)]
+        }
         for button in buttonRows {
             constraints.append(button.heightAnchor.constraint(
                 equalToConstant: button is RestoreRowButton ? 40 : 30))
@@ -258,6 +265,14 @@ final class RestorePopoverController: NSViewController {
         case 1: restoreInTab()
         default: restoreInWindow()
         }
+    }
+
+    func performDefaultAction() {
+        if !jumpTargets.isEmpty {
+            let sender = NSButton()
+            sender.tag = 0
+            jumpToPane(sender)
+        } else { launch() }
     }
 
     @objc private func restoreInPane() {

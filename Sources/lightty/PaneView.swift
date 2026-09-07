@@ -37,6 +37,9 @@ struct PaneIdentityMorphGeometry {
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
+    /// Identity of a catalog launch; it is not a handoff task binding.
+    var resumedSessionKey: AgentSessionKey?
+    var resumedSessionConfiguration: SessionConfigurationLocation?
     enum Binding {
         case unnamed                 // 灰点「未命名」
         case bound(fileURL: URL)     // 绿点，任务文件已存在
@@ -240,6 +243,9 @@ final class PaneView: NSView {
     /// 本 pane 的快照：名字、shell cwd、任务绑定、agent 会话（来自 hook 最后一发状态）。
     func snapshot() -> PaneSnapshot {
         let status = PaneStatusStore.shared.status(for: dragIdentifier)
+        let confirmed = resumedSessionKey.map {
+            SessionResumeFlow.activity(for: $0, status: status, processExited: terminal.processExited) == .confirmed
+        } ?? false
         return PaneSnapshot(
             name: header.title,
             workingDirectory: terminal.currentWorkingDirectory,
@@ -249,7 +255,9 @@ final class PaneView: NSView {
             agentCWD: status?.cwd,
             // 收到 SessionEnd = 用户退出了 agent；其余任何事件（含旧 hook 不带 event）
             // 都视为会话还在
-            agentAlive: status.map { $0.event != "SessionEnd" } ?? false)
+            agentAlive: status.map { $0.event != "SessionEnd" } ?? false,
+            catalogSession: confirmed ? resumedSessionKey : nil,
+            catalogConfiguration: confirmed ? resumedSessionConfiguration : nil)
     }
 
     /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
@@ -264,7 +272,24 @@ final class PaneView: NSView {
             configuration.workingDirectory = directory
         }
         configuration.initialInput = resume
+        // A catalog session must never fall back to the default CLI data root.
+        if snapshot.catalogSession != nil { configuration.initialInput = nil }
+        var restoredCatalogKey: AgentSessionKey?
+        if resume != nil, let key = snapshot.catalogSession,
+           let location = snapshot.catalogConfiguration,
+           let cwd = preferred, Self.isDirectory(cwd),
+           let executable = HookInstaller.locateExecutable(key.agent.rawValue) {
+            let record = AgentSession(key: key, title: "", workingDirectory: cwd, updatedAt: nil)
+            if let plan = try? SessionResumePlan(session: record, executable: executable, configuration: location) {
+                configuration.initialInput = plan.shellInput
+                restoredCatalogKey = key
+            } else {
+                configuration.initialInput = nil
+            }
+        }
         let pane = PaneView(surfaceConfiguration: configuration)
+        pane.resumedSessionKey = restoredCatalogKey
+        pane.resumedSessionConfiguration = restoredCatalogKey == nil ? nil : snapshot.catalogConfiguration
         pane.header.title = snapshot.name
         if let path = snapshot.taskFile {
             let url = URL(fileURLWithPath: path)

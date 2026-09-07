@@ -59,7 +59,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func install() {
         guard !installed else { return }
         installed = true
-        UserDefaults.standard.register(defaults: [Self.enabledDefaultsKey: true])
+        FilePreferences.shared.register(defaults: [Self.enabledDefaultsKey: true])
         menu.delegate = self
         // 分节标题要保持灰掉，不能被 AppKit 的自动 enable 逻辑点亮
         menu.autoenablesItems = false
@@ -72,11 +72,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - 开关
 
     var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
+        FilePreferences.shared.bool(forKey: Self.enabledDefaultsKey)
     }
 
     func setEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: Self.enabledDefaultsKey)
+        FilePreferences.shared.set(enabled, forKey: Self.enabledDefaultsKey)
         applyEnabledState()
     }
 

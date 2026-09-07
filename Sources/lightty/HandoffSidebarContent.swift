@@ -1,24 +1,22 @@
 import AppKit
 import LighttyCore
 
-/// 任务列表的手动序（拖拽排序的持久层）。存 UserDefaults 的文件名列表，
+/// 任务列表的手动序（拖拽排序的持久层）。存 preferences.json 的文件名列表，
 /// 不写进任务文件：frontmatter 保持纯任务语义，一次拖动也不该重写一串 md。
 /// 空列表 = 用户从未手动排过 → 列表维持派生序（活跃置顶 + 最近更新）；
 /// 拖过一次即整列入序、手动序接管。改名后文件名变化的任务视同新任务浮顶。
 enum TaskManualOrder {
     private static let key = "lightty.taskOrder"
     static func load() -> [String] {
-        UserDefaults.standard.stringArray(forKey: key) ?? []
+        FilePreferences.shared.stringArray(forKey: key) ?? []
     }
     static func save(_ fileNames: [String]) {
-        UserDefaults.standard.set(fileNames, forKey: key)
+        FilePreferences.shared.set(fileNames, forKey: key)
     }
 }
 
-/// 任务浮层卡片（Ulysses 式悬浮面板）：标题栏侧栏按钮控制开合。
-/// 与标签页侧栏是两套独立面板——task↔pane 是绑定关系而非层级，
-/// UI 上以"悬浮卡片"质感（抬升面 + 圆角 + 投影）与 docked 侧栏区隔。
-final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
+/// Handoff list content. PrimarySidebar owns chrome and mode switching.
+final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private struct Entry {
         let fileURL: URL
@@ -30,33 +28,13 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     // MARK: - 列表页
 
     private let listPage = NSView()
-    // 头部行 = 红绿灯行（Notes 同式）：卡片从窗口顶边起，三键落在头部行左侧，
-    // 右侧依次 搜索 / 建档 / 收起卡片 三枚图标按钮，与三键同一水平线。
-    // 搜索走全文浮层（⇧⇧ 或点按钮），侧栏不再有常驻输入框。
-    // 头部行之下是功能性小节标签「Tasks」（Finder「个人收藏」的角色，非品牌）。
-    private let headerCenterY: CGFloat
-    private let titleLabel = NSTextField(labelWithString: L("Tasks"))
-    private let searchButton = ShellIconButton(
-        symbol: "magnifyingglass", accessibilityLabel: L("Search tasks"),
-        target: nil, action: nil)
-    private let collapseButton = ShellIconButton(
-        symbol: "sidebar.left", accessibilityLabel: L("Task Sidebar"),
-        target: nil, action: nil)
     private let tableView = ReorderingTableView()
     private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
-    private let newTaskButton = ShellIconButton(
-        symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
 
-    /// 收起卡片：头部行 sidebar.left 按钮（与标题栏那枚同语义，卡片开着时它接管）
-    /// 与 Esc 都走这里。
-    var onRequestClose: (() -> Void)?
-
-    /// - Parameter headerCenterY: 头部行中线距卡片顶边的距离（= 红绿灯行中线）。
-    init(headerCenterY: CGFloat = 16) {
-        self.headerCenterY = headerCenterY
+    init() {
         super.init(frame: .zero)
 
         clipsToBounds = false
@@ -73,7 +51,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             listPage.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         reload()
-        applyAppearanceColors()
 
         // pane 命名/绑定落盘后实时刷新列表。
         NotificationCenter.default.addObserver(
@@ -100,40 +77,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             self?.reloadScheduled = false
             self?.reload()
         }
-    }
-
-    /// layer.backgroundColor 是 CGColor 快照，外观切换时必须按当前明暗重解析。
-    private func applyAppearanceColors() {
-        let appearance = effectiveAppearance
-        layer?.backgroundColor =
-            ShellStyle.raisedSurface.shellResolvedCGColor(for: appearance)
-        layer?.borderColor =
-            ShellStyle.divider.shellResolvedCGColor(for: appearance)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyAppearanceColors()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil, let layer else { return }
-        // 悬浮卡片质感（layer 配置延迟到挂窗后：backing layer 重建会吃掉
-        // init 期配置；投影用 NSView.shadow，AppKit 维护不丢）
-        // 贴边 6、圆角 16、轻投影：与 Notes 的浮空侧栏同一量级
-        layer.cornerRadius = 16
-        layer.borderWidth = 1
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
-        shadow.shadowBlurRadius = 18
-        shadow.shadowOffset = NSSize(width: 0, height: -4)
-        self.shadow = shadow
-        applyAppearanceColors()
-    }
-
-    override func cancelOperation(_ sender: Any?) {
-        onRequestClose?()
     }
 
     // MARK: - 数据
@@ -202,18 +145,6 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     // MARK: - 列表页
 
     private func buildListPage() {
-        newTaskButton.target = self
-        newTaskButton.action = #selector(newTask)
-
-        titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
-        titleLabel.textColor = ShellStyle.tertiaryText
-
-        searchButton.target = self
-        searchButton.action = #selector(openSearchPalette)
-
-        collapseButton.target = self
-        collapseButton.action = #selector(collapse)
-
         let column = NSTableColumn(identifier: .init("task"))
         tableView.addTableColumn(column)
         tableView.headerView = nil
@@ -249,52 +180,23 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         tableView.commitReorder = { [weak self] _ in self?.commitReorder() }
 
-        let scroll = NSScrollView()
+        let scroll = SidebarListScrollView()
         scroll.documentView = tableView
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = false
-        scroll.scrollerStyle = .overlay
 
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.textColor = ShellStyle.tertiaryText
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
 
-        for v in [titleLabel, searchButton, newTaskButton, collapseButton, scroll, emptyLabel] {
+        for v in [scroll, emptyLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listPage.addSubview(v)
         }
 
         NSLayoutConstraint.activate([
-            // 头部行：中线对齐红绿灯行；右起 收起卡片 / 建档 / 搜索，
-            // 横向统一 10 的边缘线。
-            collapseButton.centerYAnchor.constraint(
-                equalTo: listPage.topAnchor, constant: headerCenterY),
-            collapseButton.trailingAnchor.constraint(
-                equalTo: listPage.trailingAnchor, constant: -10),
-            collapseButton.widthAnchor.constraint(equalToConstant: 28),
-            collapseButton.heightAnchor.constraint(equalToConstant: 28),
-
-            newTaskButton.trailingAnchor.constraint(
-                equalTo: collapseButton.leadingAnchor, constant: -4),
-            newTaskButton.centerYAnchor.constraint(equalTo: collapseButton.centerYAnchor),
-            newTaskButton.widthAnchor.constraint(equalToConstant: 28),
-            newTaskButton.heightAnchor.constraint(equalToConstant: 28),
-
-            searchButton.trailingAnchor.constraint(equalTo: newTaskButton.leadingAnchor, constant: -4),
-            // 不做光学微调：底块只贴字形后，整钮偏 1pt 会直接暴露成框错位
-            searchButton.centerYAnchor.constraint(equalTo: newTaskButton.centerYAnchor),
-            searchButton.widthAnchor.constraint(equalToConstant: 28),
-            searchButton.heightAnchor.constraint(equalToConstant: 28),
-
-            // 小节标签落内容左轴 20，在头部行之下
-            titleLabel.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 20),
-            titleLabel.topAnchor.constraint(equalTo: newTaskButton.bottomAnchor, constant: 14),
-
-            scroll.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: 10),
-            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -10),
+            scroll.topAnchor.constraint(equalTo: listPage.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: listPage.leadingAnchor, constant: SidebarListScrollView.leadingMargin),
+            scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
             scroll.bottomAnchor.constraint(equalTo: listPage.bottomAnchor, constant: -8),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
@@ -302,14 +204,10 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ])
     }
 
-    @objc private func collapse() {
-        onRequestClose?()
-    }
-
     /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
-    @objc private func newTask() {
+    func newTask(from anchor: NSView) {
         NameEditorPopover.present(
-            from: newTaskButton, title: L("New task"), confirmLabel: L("Create")
+            from: anchor, title: L("New task"), confirmLabel: L("Create")
         ) { name in
             do {
                 _ = try AppState.shared.taskStore.create(
@@ -323,7 +221,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
         }
     }
-    @objc private func openSearchPalette() {
+    func openSearchPalette() {
         (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
     }
 
@@ -369,7 +267,7 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let subtitle = NSTextField(
             labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
         subtitle.font = .systemFont(ofSize: 10.5)
-        subtitle.textColor = ShellStyle.tertiaryText
+        subtitle.textColor = ShellStyle.secondaryText
         subtitle.lineBreakMode = .byTruncatingTail
 
         // 更多操作（⋯）：与行本体的"跳转/打开"语义分开——管理动作都在这个菜单里。
@@ -384,9 +282,8 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
             cell.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            // 行内衬 16：圆点落在卡片左轴 26（滚动区缘 10 + 16），比小节标签的 20
-            // 缩进一级
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 16),
+            // Align the leading status marker with the other primary-sidebar rows.
+            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
             dot.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
@@ -498,6 +395,14 @@ final class TaskSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 }
                 NotificationCenter.default.post(
                     name: .lighttyTasksDidChange, object: nil)
+                if !FilePreferences.shared.bool(forKey: "handoffArchiveNoticeShown") {
+                    FilePreferences.shared.set(true, forKey: "handoffArchiveNoticeShown")
+                    let alert = NSAlert()
+                    alert.messageText = L("Task archived")
+                    alert.informativeText = L("You can restore it or permanently delete it in Settings > Archive.")
+                    alert.addButton(withTitle: L("OK"))
+                    alert.runModal()
+                }
             } catch {
                 NSSound.beep()
                 NSLog("task archive failed: \(error)")

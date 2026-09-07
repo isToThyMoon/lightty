@@ -12,7 +12,7 @@ import LighttyCore
 /// 标签页行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
 /// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
-final class TabColumnView: NSView {
+final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
         symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"),
@@ -23,13 +23,19 @@ final class TabColumnView: NSView {
     private let newTabButton = ShellIconButton(
         symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New tab"),
         target: nil, action: nil)
-    private let scroll = NSScrollView()
-    private let rowsStack = NSStackView()
+    private let scroll = SidebarListScrollView()
+    private let table = NSTableView()
+    private struct RowItem {
+        enum Kind { case tab(Int), pane(UUID) }
+        let kind: Kind
+        let makeView: (NSView?) -> NSView
+    }
+    private var rowItems: [RowItem] = []
     private var reloadScheduled = false
     /// pane 行按 pane id 索引，供状态原地更新用。
     /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
     /// （一次工具调用就有 PreToolUse + PostToolUse 两发），拆建必闪。
-    private var paneRows: [UUID: PaneRowView] = [:]
+    private let paneRows = NSMapTable<NSUUID, PaneRowView>(keyOptions: .strongMemory, valueOptions: .weakMemory)
     /// 标签页没有持久化折叠语义；仅在当前侧栏实例内记忆，reload 不丢。
     private var collapsedTabIDs = Set<UUID>()
 
@@ -50,24 +56,26 @@ final class TabColumnView: NSView {
         newTabButton.target = self
         newTabButton.action = #selector(newTab)
 
-        rowsStack.orientation = .vertical
-        rowsStack.alignment = .leading
-        rowsStack.spacing = 2
-
-        let document = ColumnFlippedView()
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(rowsStack)
-        scroll.documentView = document
+        let column = NSTableColumn(identifier: .init("tab-tree"))
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.style = .plain
+        table.setAccessibilityLabel(L("Tabs"))
+        table.backgroundColor = .clear
+        table.selectionHighlightStyle = .none
+        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.dataSource = self
+        table.delegate = self
+        scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
-        scroll.scrollerStyle = .overlay
 
         for v in [sectionLabel, splitRightButton, splitDownButton, newTabButton, scroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        rowsStack.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
@@ -95,17 +103,11 @@ final class TabColumnView: NSView {
                 lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
 
             scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
-            // 两侧对称 12 = 边缘钮宽度：task 卡片关着时，窗口左缘的展开钮
-            // （EdgeToggleControl）正好落在左侧这条边沟里，行高亮到钮的圆角处止步。
+            // Keep the leading gutter; the shared trailing rail keeps scrolling clear of row actions.
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
-            rowsStack.topAnchor.constraint(equalTo: document.topAnchor),
-            rowsStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            rowsStack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            document.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            document.bottomAnchor.constraint(equalTo: rowsStack.bottomAnchor),
         ])
 
         // pane 绑定/改名/解绑经 lighttyTasksDidChange 广播；标签页结构变化
@@ -116,6 +118,38 @@ final class TabColumnView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rowItems.count }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        switch rowItems[row].kind {
+        case .tab: return row == 0 ? 30 : 36
+        case .pane: return 42
+        }
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let identifier: NSUserInterfaceItemIdentifier
+        switch rowItems[row].kind {
+        case .tab: identifier = .init("tab-row")
+        case .pane: identifier = .init("pane-row")
+        }
+        let container = tableView.makeView(withIdentifier: identifier, owner: nil) as? TabRowContainer ?? TabRowContainer()
+        container.identifier = identifier
+        container.bind(rowItems[row].makeView(container.content))
+        return container
+    }
+
+    override func layout() {
+        super.layout()
+        let width = scroll.contentSize.width
+        if table.frame.width != width {
+            table.setFrameSize(NSSize(width: width, height: table.frame.height))
+            table.tableColumns.first?.width = width
+        }
+    }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
@@ -131,26 +165,26 @@ final class TabColumnView: NSView {
 
     /// 单 pane 原地更新：通知带着变化的 pane，整列扫一遍是白做的
     func applyStatus(for paneID: UUID) {
-        paneRows[paneID]?.applyStatus(PaneStatusStore.shared.status(for: paneID))
+        paneRows.object(forKey: paneID as NSUUID)?.applyStatus(PaneStatusStore.shared.status(for: paneID))
     }
 
     /// 状态原地更新：只改圆点颜色与行底，不动视图树。
     func applyStatuses() {
-        for (paneID, row) in paneRows {
-            row.applyStatus(PaneStatusStore.shared.status(for: paneID))
+        for case let row as PaneRowView in paneRows.objectEnumerator() ?? NSEnumerator() {
+            row.applyStatus(PaneStatusStore.shared.status(for: row.paneID))
         }
     }
 
     /// pane 焦点变化只原地切换行底色，不拆建标签页树。
     func applyActivePane(_ paneID: UUID?) {
-        for (rowPaneID, row) in paneRows {
-            row.setActive(rowPaneID == paneID)
+        for case let row as PaneRowView in paneRows.objectEnumerator() ?? NSEnumerator() {
+            row.setActive(row.paneID == paneID)
         }
     }
 
     /// shell 的 OSC PWD 更新只改对应 pane 第二行，不重建标签页树。
     func applyWorkingDirectory(_ directory: String?, for paneID: UUID) {
-        paneRows[paneID]?.applyWorkingDirectory(directory)
+        paneRows.object(forKey: paneID as NSUUID)?.applyWorkingDirectory(directory)
     }
 
     @objc private func scheduleReload() {
@@ -182,74 +216,92 @@ final class TabColumnView: NSView {
 
     func reload() {
         guard let controller else { return }
-        rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        paneRows.removeAll()
-        let overview = controller.tabOverview()
-        let activePaneID = controller.activePane?.dragIdentifier
+        reload(overview: controller.tabOverview())
+    }
+
+    typealias OverviewEntry = (id: UUID, index: Int, title: String, isActive: Bool, panes: [PaneView])
+    private struct TabPresentation {
+        let id: UUID
+        let index: Int
+        let title: String
+        let isActive: Bool
+        let count: Int
+    }
+
+    func reload(overview: [OverviewEntry]) {
+        rowItems.removeAll(keepingCapacity: true)
+        paneRows.removeAllObjects()
         collapsedTabIDs.formIntersection(overview.map(\.id))
         for entry in overview {
-            let index = entry.index
-            let tabID = entry.id
-            let wasActive = entry.isActive
             let isCollapsed = collapsedTabIDs.contains(entry.id)
-            let row = TabRowView(
-                title: entry.title,
-                count: entry.panes.count,
-                isActive: entry.isActive,
-                isCollapsed: isCollapsed)
-            row.tabIndex = index
-            row.onSelect = { [weak self] in
-                guard let self else { return }
-                if wasActive {
-                    self.toggleTabCollapse(tabID)
-                } else {
-                    // 切到一个折叠着的标签页时顺手展开：选中它就是要看它的 pane
-                    self.collapsedTabIDs.remove(tabID)
-                    self.controller?.selectTab(at: index)
-                }
-            }
-            row.onToggleCollapse = { [weak self] in
-                self?.toggleTabCollapse(tabID)
-            }
-            row.onPaneDrop = { [weak self] paneID in
-                self?.controller?.movePane(withID: paneID, toTabAt: index) ?? false
-            }
-            row.onRename = { [weak self, weak row] in
-                guard let self, let anchor = row, let controller = self.controller else { return }
-                NameEditorPopover.present(
-                    from: anchor, title: L("Rename tab"),
-                    initial: entry.title, confirmLabel: L("Rename")
-                ) { name in controller.renameTab(at: index, to: name) }
-            }
-            row.onMenu = { [weak self, weak row] in
-                guard let self, let anchor = row else { return }
-                ShellMenuPopover.present(from: anchor, items: [
-                    .action(L("Rename tab")) { [weak self] in
-                        guard let controller = self?.controller else { return }
-                        NameEditorPopover.present(
-                            from: anchor, title: L("Rename tab"),
-                            initial: entry.title, confirmLabel: L("Rename")
-                        ) { name in controller.renameTab(at: index, to: name) }
-                    },
-                ])
-            }
-            row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
-            // 组与组之间加一档呼吸：紧凑单行 pane 后，块的边界靠这 8pt 成立
-            if let last = rowsStack.arrangedSubviews.last {
-                rowsStack.setCustomSpacing(8, after: last)
-            }
-            add(row)
+            let presentation = TabPresentation(id: entry.id, index: entry.index, title: entry.title,
+                isActive: entry.isActive, count: entry.panes.count)
+            rowItems.append(RowItem(kind: .tab(entry.index), makeView: { [weak self] existing in
+                self?.makeTabRow(presentation, isCollapsed: isCollapsed, reusing: existing as? TabRowView) ?? NSView()
+            }))
 
             guard !isCollapsed else { continue }
             for pane in entry.panes {
-                add(makePaneRow(
-                    for: pane, indented: true,
-                    isActive: pane.dragIdentifier == activePaneID))
+                rowItems.append(RowItem(kind: .pane(pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
+                    guard let self, let pane else { return NSView() }
+                    return self.makePaneRow(for: pane, indented: true,
+                        isActive: pane.dragIdentifier == self.controller?.activePane?.dragIdentifier,
+                        reusing: existing as? PaneRowView)
+                }))
             }
         }
-        // 重建后立刻补一次状态：新行默认是静息态，不补会闪一下再变回来
-        applyStatuses()
+        table.reloadData()
         window?.invalidateCursorRects(for: self)
+    }
+
+    private func makeTabRow(_ entry: TabPresentation, isCollapsed: Bool, reusing existing: TabRowView?) -> TabRowView {
+        let index = entry.index
+        let tabID = entry.id
+        let wasActive = entry.isActive
+        let row = existing ?? TabRowView(
+            title: entry.title,
+            count: entry.count,
+            isActive: entry.isActive,
+            isCollapsed: isCollapsed)
+        row.configure(title: entry.title, count: entry.count, isActive: entry.isActive, isCollapsed: isCollapsed)
+        row.tabIndex = index
+        row.onSelect = { [weak self] in
+            guard let self else { return }
+            if wasActive {
+                self.toggleTabCollapse(tabID)
+            } else {
+                // 切到一个折叠着的标签页时顺手展开：选中它就是要看它的 pane
+                self.collapsedTabIDs.remove(tabID)
+                self.controller?.selectTab(at: index)
+            }
+        }
+        row.onToggleCollapse = { [weak self] in
+            self?.toggleTabCollapse(tabID)
+        }
+        row.onPaneDrop = { [weak self] paneID in
+            self?.controller?.movePane(withID: paneID, toTabAt: index) ?? false
+        }
+        row.onRename = { [weak self, weak row] in
+            guard let self, let anchor = row, let controller = self.controller else { return }
+            NameEditorPopover.present(
+                from: anchor, title: L("Rename tab"),
+                initial: entry.title, confirmLabel: L("Rename")
+            ) { name in controller.renameTab(at: index, to: name) }
+        }
+        row.onMenu = { [weak self, weak row] in
+            guard let self, let anchor = row else { return }
+            ShellMenuPopover.present(from: anchor, items: [
+                .action(L("Rename tab")) { [weak self] in
+                    guard let controller = self?.controller else { return }
+                    NameEditorPopover.present(
+                        from: anchor, title: L("Rename tab"),
+                        initial: entry.title, confirmLabel: L("Rename")
+                    ) { name in controller.renameTab(at: index, to: name) }
+                },
+            ])
+        }
+        row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
+        return row
     }
 
     private func toggleTabCollapse(_ tabID: UUID) {
@@ -264,15 +316,22 @@ final class TabColumnView: NSView {
     private func makePaneRow(
         for pane: PaneView,
         indented: Bool,
-        isActive: Bool
+        isActive: Bool,
+        reusing existing: PaneRowView? = nil
     ) -> PaneRowView {
-        let paneRow = PaneRowView(
+        if let existing, paneRows.object(forKey: existing.paneID as NSUUID) === existing {
+            paneRows.removeObject(forKey: existing.paneID as NSUUID)
+        }
+        let paneRow = existing ?? PaneRowView(
             paneID: pane.dragIdentifier,
             name: pane.header.title,
             taskName: pane.header.titleOfBoundTask,
             bound: pane.header.titleOfBoundTask != nil,
             indented: indented,
             isActive: isActive,
+            workingDirectory: pane.terminal.currentWorkingDirectory)
+        paneRow.configure(paneID: pane.dragIdentifier, name: pane.header.title,
+            taskName: pane.header.titleOfBoundTask, isActive: isActive,
             workingDirectory: pane.terminal.currentWorkingDirectory)
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
@@ -288,11 +347,12 @@ final class TabColumnView: NSView {
             guard let self, let pane else { return false }
             return self.controller?.movePane(withID: sourceID, to: pane, zone: .right) ?? false
         }
-        paneRow.onBeginDrag = { [weak self, weak paneRow] event in
-            guard let self, let paneRow else { return }
+        paneRow.onBeginDrag = { [weak self, weak paneRow, weak pane] event in
+            guard let self, let paneRow, let pane else { return }
             self.beginPaneRowDrag(source: paneRow, paneID: pane.dragIdentifier, event: event)
         }
-        paneRows[pane.dragIdentifier] = paneRow
+        paneRow.applyStatus(PaneStatusStore.shared.status(for: pane.dragIdentifier))
+        paneRows.setObject(paneRow, forKey: pane.dragIdentifier as NSUUID)
         return paneRow
     }
 
@@ -315,11 +375,12 @@ final class TabColumnView: NSView {
         let grabOffsetY = cursorInSelf.y - startFrame.minY
 
         // 源行在 arranged 序列中的插入位（以“排除源行后的其余行”为基准）。
-        func others() -> [NSView] { rowsStack.arrangedSubviews.filter { $0 !== source } }
+        func others() -> [Int] {
+            let source = sourceIndex(paneID)
+            return rowItems.indices.filter { $0 != source }
+        }
         func applied() -> Int {  // 源行当前落在 others 里的哪个插入位
-            let arranged = rowsStack.arrangedSubviews
-            let si = arranged.firstIndex(of: source) ?? 0
-            return arranged[..<si].filter { $0 !== source }.count
+            sourceIndex(paneID) ?? 0
         }
         // 起手时的邻居快照，用于结束时判空动（没真动就不折腾 split 树）。
         let (origPrev, origNext) = neighborPaneIDs(of: source)
@@ -335,24 +396,22 @@ final class TabColumnView: NSView {
                 // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 目标插入位
                 let peers = others()
                 var idx = 0
-                for v in peers {
-                    if self.convert(v.bounds, from: v).midY > c.y { idx += 1 } else { break }
+                for index in peers {
+                    if self.convert(self.table.rect(ofRow: index), from: self.table).midY > c.y { idx += 1 } else { break }
                 }
                 idx = min(max(idx, 1), peers.count)  // 不越过第一条标签页标题
                 guard idx != lastIdx else { return }
                 lastIdx = idx
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.16
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    ctx.allowsImplicitAnimation = true
-                    self.rowsStack.removeArrangedSubview(source)
-                    self.rowsStack.insertArrangedSubview(source, at: idx)
-                    self.rowsStack.layoutSubtreeIfNeeded()
-                }
+                guard let from = self.sourceIndex(paneID) else { return }
+                let item = self.rowItems.remove(at: from)
+                self.rowItems.insert(item, at: idx)
+                self.table.beginUpdates()
+                self.table.moveRow(at: from, to: idx)
+                self.table.endUpdates()
             },
-            dropFrame: { [weak self, weak source] in
-                guard let self, let source else { return nil }
-                return self.convert(source.bounds, from: source)  // 落进自己让出的空档
+            dropFrame: { [weak self] in
+                guard let self, let index = self.sourceIndex(paneID) else { return nil }
+                return self.convert(self.table.rect(ofRow: index), from: self.table)
             },
             onCommit: { [weak self, weak source] in
                 guard let self, let source else { return }
@@ -368,17 +427,14 @@ final class TabColumnView: NSView {
 
     /// 源行在 arranged 序列里的同区上下相邻 pane（跨标签页标题即断，视为无邻居）。
     private func neighborPaneIDs(of source: PaneRowView) -> (prev: UUID?, next: UUID?) {
-        let arranged = rowsStack.arrangedSubviews
-        guard let si = arranged.firstIndex(of: source) else { return (nil, nil) }
+        guard let si = sourceIndex(source.paneID) else { return (nil, nil) }
         var prev: UUID?
-        for v in arranged[..<si].reversed() {
-            if v is TabRowView { break }
-            if let r = v as? PaneRowView { prev = r.paneID; break }
+        if si > 0, case .pane(let id) = rowItems[si - 1].kind {
+            prev = id
         }
         var next: UUID?
-        for v in arranged[(si + 1)...] {
-            if v is TabRowView { break }
-            if let r = v as? PaneRowView { next = r.paneID; break }
+        if si + 1 < rowItems.count, case .pane(let id) = rowItems[si + 1].kind {
+            next = id
         }
         return (prev, next)
     }
@@ -405,23 +461,19 @@ final class TabColumnView: NSView {
 
     /// 源行上方最近的标签页标题的 index（落进空/首位时用）。
     private func tabIndexAbove(_ source: PaneRowView) -> Int? {
-        let arranged = rowsStack.arrangedSubviews
-        guard let si = arranged.firstIndex(of: source) else { return nil }
-        for v in arranged[..<si].reversed() {
-            if let ws = v as? TabRowView { return ws.tabIndex }
+        guard let si = sourceIndex(source.paneID) else { return nil }
+        for item in rowItems[..<si].reversed() {
+            if case .tab(let index) = item.kind { return index }
         }
         return nil
     }
 
-    private func add(_ row: NSView) {
-        row.translatesAutoresizingMaskIntoConstraints = false
-        rowsStack.addArrangedSubview(row)
-        row.widthAnchor.constraint(equalTo: rowsStack.widthAnchor).isActive = true
+    private func sourceIndex(_ paneID: UUID) -> Int? {
+        rowItems.firstIndex {
+            if case .pane(let id) = $0.kind { return id == paneID }
+            return false
+        }
     }
-}
-
-private final class ColumnFlippedView: NSView {
-    override var isFlipped: Bool { true }
 }
 
 /// 标签页行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
@@ -437,7 +489,23 @@ private protocol SidebarPaneDropRow: NSView {
     func setDropHighlighted(_ on: Bool)
 }
 
-private final class TabRowView: NSView, SidebarPaneDropRow {
+private final class TabRowContainer: NSView {
+    private(set) var content: NSView?
+    func bind(_ view: NSView) {
+        guard content !== view else { return }
+        content?.removeFromSuperview()
+        content = view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+}
+
+private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// 拖拽落点映射用：空区落到本标签页时按此 index 走 movePane(toTabAt:)。
     var tabIndex = 0
     var onSelect: (() -> Void)?
@@ -448,8 +516,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
     /// pane 拖到标签页行：移进该标签页。返回是否接受。
     var onPaneDrop: ((UUID) -> Bool)?
 
-    private let isActive: Bool
-    private let isCollapsed: Bool
+    private var isActive: Bool
+    private var isCollapsed: Bool
+    private let label = NSTextField(labelWithString: "")
     private let disclosureButton = NSButton()
     private let countLabel = NSTextField(labelWithString: "")
     private let menuButton = NSButton()
@@ -457,6 +526,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
     private var tracking: NSTrackingArea?
     private var hovered = false {
         didSet {
+            guard oldValue != hovered else { return }
             applyFill()
             applyGlyph()
             menuButton.isHidden = !hovered
@@ -475,7 +545,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
         registerForDraggedTypes([.lighttyPaneID])
         HoverCursor.installPointingHand(on: self)
 
-        let label = NSTextField(labelWithString: title)
+        label.stringValue = title
         label.font = .systemFont(ofSize: 12.5, weight: .semibold)
         label.textColor = isActive ? ShellStyle.navigationAccent : ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
@@ -547,6 +617,20 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func toggleCollapse() { onToggleCollapse?() }
+    func configure(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {
+        sidebarHoverExited()
+        hovered = false
+        alphaValue = 1
+        setDropHighlighted(false)
+        self.isActive = isActive
+        self.isCollapsed = isCollapsed
+        label.stringValue = title
+        label.textColor = isActive ? ShellStyle.navigationAccent : ShellStyle.primaryText
+        countLabel.stringValue = "\(count)"
+        disclosureButton.toolTip = isCollapsed ? L("Expand tab") : L("Collapse tab")
+        applyGlyph()
+        applyFill()
+    }
     @objc private func menuTapped() { onMenu?() }
     @objc private func closeTapped() { onClose?() }
 
@@ -605,8 +689,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
+    func setSidebarHovered(_ value: Bool) { hovered = value }
+    override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { onRename?() } else { onSelect?() }
@@ -686,7 +771,7 @@ enum TabPaneStatusPresentation {
 /// 当前 pane 用强调色淡底——全侧栏唯一的填充高亮；hover 时行尾出 ✕
 /// （与标签页行的关闭位统一；内核关闭同路）。
 /// pane header 胶囊的"圆点变 ✕"交互独立保留，不受此处影响。
-private final class PaneRowView: NSView, SidebarPaneDropRow {
+private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
     /// 别的 pane 拖到本行：移到本 pane 右侧。返回是否接受。
@@ -697,13 +782,14 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
     /// 存 id 而不是 pane 引用：行只需要向 store 取状态，不需要够到 pane 本体，
     /// 少一条会让关掉的 pane 多活一会儿的强/弱引用。
-    let paneID: UUID
+    private(set) var paneID: UUID
 
     private let dotView = NSView()
     private let closeButton = NSButton()
     private var tracking: NSTrackingArea?
-    private let bound: Bool
-    private let taskName: String?
+    private var bound: Bool
+    private var taskName: String?
+    private let nameLabel = NSTextField(labelWithString: "")
     private let taskLabel = NSTextField(labelWithString: "")
     private let directoryLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -713,6 +799,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
     private var isActive: Bool
     private var hovered = false {
         didSet {
+            guard oldValue != hovered else { return }
             applyFill()
             closeButton.isHidden = !hovered
         }
@@ -753,7 +840,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
         closeButton.action = #selector(closeTapped)
         closeButton.toolTip = L("Close pane")
 
-        let nameLabel = NSTextField(labelWithString: name)
+        nameLabel.stringValue = name
         nameLabel.font = .systemFont(ofSize: 12)
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
@@ -838,6 +925,26 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
     func setActive(_ active: Bool) {
         guard isActive != active else { return }
         isActive = active
+        applyFill()
+    }
+
+    func configure(paneID: UUID, name: String, taskName: String?, isActive: Bool, workingDirectory: String?) {
+        sidebarHoverExited()
+        hovered = false
+        alphaValue = 1
+        setDropHighlighted(false)
+        self.paneID = paneID
+        self.taskName = taskName
+        bound = taskName != nil
+        self.isActive = isActive
+        terminalWorkingDirectory = workingDirectory
+        status = nil
+        nameLabel.stringValue = name
+        nameLabel.toolTip = name
+        taskLabel.toolTip = taskName
+        applyDotColor()
+        applyStatusLabel()
+        applyMetadataLine()
         applyFill()
     }
 
@@ -959,8 +1066,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
+    func setSidebarHovered(_ value: Bool) { hovered = value }
+    override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     // MARK: - 拖拽（源 + 落点）
 
