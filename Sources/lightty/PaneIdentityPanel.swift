@@ -35,7 +35,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     /// 岛体背景层：frame 由 PaneView 驱动；第一行身份内容与背景 frame 解耦，
     /// 展开时状态点和标题保持原位。
-    let island = NSView()
+    let island = IdentityIslandView()
     /// 扩展区（分隔线 + 任务行）：初次形变期间渐显/渐隐；第一行不参与。
     let extras = NSView()
 
@@ -82,12 +82,14 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         super.init(frame: .zero)
         wantsLayer = true
 
+        // 岛体材质与自绘菜单卡同一套：窗口内模糊（能糊到下层 Metal 终端画面）+
+        // 高透抬升面罩 + 发丝线 + 宽而软的阴影。不再取终端的背景色做底——
+        // 用户把终端底调成相近色时岛体会整个隐形，抬升面才能保证一直看得见。
         island.wantsLayer = true
         island.layer?.cornerRadius = 8
         island.layer?.borderWidth = 0.5
-        island.layer?.shadowOpacity = 0.18
-        island.layer?.shadowRadius = 14
-        island.layer?.shadowOffset = NSSize(width: 0, height: -4)
+        island.layer?.shadowRadius = 18
+        island.layer?.shadowOffset = NSSize(width: 0, height: -6)
         island.layer?.masksToBounds = false
         // 下层 terminal 声明了整片 I-beam，岛体夺回箭头；可点行/按钮各自装手型
         HoverCursor.installArrow(on: island)
@@ -304,9 +306,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         applyColors()
     }
 
+    /// 岛体已改用壳层抬升面材质，不再随终端主题取色；保留入口以便状态变化时重涂。
     func applyTerminalTheme(background: NSColor, foreground: NSColor) {
-        self.background = background
-        self.foreground = foreground
         applyColors()
     }
 
@@ -317,8 +318,18 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     }
 
     private func applyColors() {
-        island.layer?.backgroundColor = background.cgColor
-        island.layer?.borderColor = foreground.withAlphaComponent(0.14).cgColor
+        let appearance = effectiveAppearance
+        // 岛体上的文字与线条走壳层主文字色（随系统明暗），罩层是抬升面色，两者配套
+        foreground = NSColor(cgColor: ShellStyle.primaryText.shellResolvedCGColor(for: appearance))
+            ?? foreground
+        background = .clear
+        island.layer?.backgroundColor = NSColor.clear.cgColor
+        island.layer?.borderColor = ShellStyle.primaryText.withAlphaComponent(0.08)
+            .shellResolvedCGColor(for: appearance)
+        island.layer?.shadowOpacity =
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 0.45 : 0.16
+        island.tint.layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.6)
+            .shellResolvedCGColor(for: appearance)
         dotView.layer?.backgroundColor = (statusDotColor ?? dotColor)
             .shellResolvedCGColor(for: effectiveAppearance)
         separator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
@@ -744,4 +755,50 @@ private final class HoverRowButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
+}
+
+/// 灵动岛岛体：窗口内模糊 + 高透抬升面罩，子层随 frame 形变（morph 动画改 frame）。
+final class IdentityIslandView: NSView {
+    private let blur = NSVisualEffectView()
+    let tint = NSView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        blur.material = .menu
+        blur.blendingMode = .withinWindow
+        blur.state = .active
+        blur.maskImage = Self.roundedMask(radius: 8)
+        tint.wantsLayer = true
+        tint.layer?.cornerRadius = 8
+        tint.layer?.masksToBounds = true
+        addSubview(blur)
+        addSubview(tint)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        blur.frame = bounds
+        tint.frame = bounds
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        blur.frame = bounds
+        tint.frame = bounds
+    }
+
+    /// 可拉伸的圆角遮罩：磨砂由合成器画，layer.cornerRadius 裁不到它
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
 }
