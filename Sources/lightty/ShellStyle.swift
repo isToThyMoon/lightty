@@ -257,7 +257,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
     var onHoverChange: ((Bool) -> Void)?
 
     init(symbol: String, accessibilityLabel: String, target: AnyObject?, action: Selector?) {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel)
+        let image = SymbolImages.image(symbol, description: accessibilityLabel)
         super.init(frame: .zero)
         self.image = image
         self.target = target
@@ -302,13 +302,22 @@ final class ShellIconButton: NSButton, HoverResyncing {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
             owner: self)
         addTrackingArea(area)
         tracking = area
+    }
+
+    /// 闸门放开时重建：清掉 AppKit 记住的陈旧内外态（见 ShellHoverGate）。
+    private func rebuildTrackingArea() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = nil
+        updateTrackingAreas()
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -321,7 +330,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
     }
 
     func resyncHover() {
-        updateTrackingAreas()
+        rebuildTrackingArea()
         setHovered(shellPointerInside)
     }
 
@@ -393,7 +402,9 @@ final class ShellTextButton: NSButton {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
@@ -485,7 +496,9 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],

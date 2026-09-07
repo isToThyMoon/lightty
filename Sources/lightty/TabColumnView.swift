@@ -524,6 +524,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private let menuButton = NSButton()
     private let closeButton = NSButton()
     private var tracking: NSTrackingArea?
+    /// 当前字形的身份；未变化时不重设 image——`NSButtonCell.setImage` 会让整套
+    /// 按钮样式失效重算，而 `configure` 每次复用都会走到这里。
+    private var glyphKey: String?
     private var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
@@ -531,6 +534,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             applyGlyph()
             menuButton.isHidden = !hovered
             closeButton.isHidden = !hovered
+            // tooltip 只在 hover 时挂：NSToolTipManager 每帧都会重算所有已注册
+            // tooltip 的矩形，几十行常驻就是滚动期的一笔固定开销。
+            closeButton.toolTip = hovered ? L("Close tab") : nil
             // 计数与 ⋯/✕ 共用行尾，hover 时让位
             countLabel.isHidden = hovered
         }
@@ -563,9 +569,8 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         countLabel.textColor = ShellStyle.tertiaryText
 
-        menuButton.image = NSImage(
-            systemSymbolName: "ellipsis", accessibilityDescription: L("More actions"))?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        menuButton.image = SymbolImages.image(
+            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
         menuButton.isBordered = false
         menuButton.imagePosition = .imageOnly
         menuButton.focusRingType = .none
@@ -574,9 +579,8 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         menuButton.target = self
         menuButton.action = #selector(menuTapped)
 
-        closeButton.image = NSImage(
-            systemSymbolName: "xmark", accessibilityDescription: L("Close tab"))?
-            .withSymbolConfiguration(.init(pointSize: 8.5, weight: .bold))
+        closeButton.image = SymbolImages.image(
+            "xmark", pointSize: 8.5, weight: .bold, description: L("Close tab"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -584,7 +588,6 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         closeButton.isHidden = true
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
-        closeButton.toolTip = L("Close tab")
 
         for v in [disclosureButton, label, countLabel, menuButton, closeButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -638,17 +641,18 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// rectangle 组合），hover 换成折叠 chevron——同一个 18pt 插槽，不吃行宽。
     /// 折叠态在常态下不单独表达：pane 行消失 + 计数仍在，信息已经够了。
     private func applyGlyph() {
+        let key = hovered ? "chevron:\(isCollapsed)" : "tab:\(isActive)"
+        guard key != glyphKey else { return }
+        glyphKey = key
         if hovered {
-            disclosureButton.image = NSImage(
-                systemSymbolName: isCollapsed ? "chevron.right" : "chevron.down",
-                accessibilityDescription: disclosureButton.toolTip)?
-                .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+            disclosureButton.image = SymbolImages.image(
+                isCollapsed ? "chevron.right" : "chevron.down",
+                pointSize: 8, weight: .semibold,
+                description: isCollapsed ? L("Expand tab") : L("Collapse tab"))
             disclosureButton.contentTintColor = ShellStyle.secondaryText
         } else {
-            disclosureButton.image = NSImage(
-                systemSymbolName: "rectangle.on.rectangle",
-                accessibilityDescription: L("Tab"))?
-                .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+            disclosureButton.image = SymbolImages.image(
+                "rectangle.on.rectangle", pointSize: 10, weight: .medium, description: L("Tab"))
             disclosureButton.contentTintColor =
                 isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
         }
@@ -680,7 +684,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
@@ -802,6 +808,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             guard oldValue != hovered else { return }
             applyFill()
             closeButton.isHidden = !hovered
+            applyToolTips()
         }
     }
 
@@ -828,9 +835,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = 3
 
-        closeButton.image = NSImage(
-            systemSymbolName: "xmark", accessibilityDescription: L("Close pane"))?
-            .withSymbolConfiguration(.init(pointSize: 7.5, weight: .bold))
+        closeButton.image = SymbolImages.image(
+            "xmark", pointSize: 7.5, weight: .bold, description: L("Close pane"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -838,19 +844,16 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         closeButton.isHidden = true
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
-        closeButton.toolTip = L("Close pane")
 
         nameLabel.stringValue = name
         nameLabel.font = .systemFont(ofSize: 12)
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.toolTip = name
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
-        taskLabel.toolTip = taskName
         taskLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(740), for: .horizontal)
 
@@ -940,8 +943,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         terminalWorkingDirectory = workingDirectory
         status = nil
         nameLabel.stringValue = name
-        nameLabel.toolTip = name
-        taskLabel.toolTip = taskName
         applyDotColor()
         applyStatusLabel()
         applyMetadataLine()
@@ -989,14 +990,13 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         if let text = TabPaneStatusPresentation.text(for: status) {
             statusLabel.isHidden = false
             statusLabel.stringValue = text
-            statusLabel.toolTip = text
         } else {
             statusLabel.isHidden = true
             // hidden 不会自动退出 Auto Layout；清空 intrinsic width，
             // 空闲时把空间还给 pane 名。
             statusLabel.stringValue = ""
-            statusLabel.toolTip = nil
         }
+        applyToolTips()
     }
 
     /// 第二行同时保留任务映射和 cwd。空间不足时任务名从尾部截断、cwd 从头部
@@ -1012,7 +1012,19 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         } ?? ""
         directoryLabel.isHidden = displayDirectory == nil
         directoryLabel.stringValue = displayDirectory ?? ""
-        directoryLabel.toolTip = rawDirectory
+        applyToolTips()
+    }
+
+    /// tooltip 只在 hover 时挂：NSToolTipManager 每帧都会重算所有已注册 tooltip
+    /// 的矩形，几十行 × 四五个 tooltip 常驻是滚动期主线程的一笔固定开销。
+    /// tooltip 本来也只在指针停在行上时才会出现，行为不变。
+    private func applyToolTips() {
+        let on = hovered
+        closeButton.toolTip = on ? L("Close pane") : nil
+        nameLabel.toolTip = on ? nameLabel.stringValue : nil
+        taskLabel.toolTip = on ? taskName : nil
+        statusLabel.toolTip = on && !statusLabel.isHidden ? statusLabel.stringValue : nil
+        directoryLabel.toolTip = on ? (terminalWorkingDirectory ?? status?.cwd) : nil
     }
 
     private func applyDotColor() {
@@ -1057,7 +1069,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // .inVisibleRect 由 AppKit 自行跟随可见区，建一次即可。滚动时 AppKit 每帧
+        // 都会调到这里，反复 remove/add 是侧栏滚动期主线程的固定开销之一。
+        guard tracking == nil else { return }
         let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],

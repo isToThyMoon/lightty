@@ -402,10 +402,21 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             return view
         }
         switch rows[row] {
-        case .heading: return ShellDropTargetRowView()
+        case .heading: return reusableRowView(in: tableView, id: "shell-drop-row") { ShellDropTargetRowView() }
         case .projectsHeading, .emptyProjects: return NSTableRowView()
-        default: return ShellTableRowView()
+        default: return reusableRowView(in: tableView, id: "shell-row") { ShellTableRowView() }
         }
+    }
+    /// row view 与 cell 一样走 `makeView` 复用：每行新建会带上 tracking area、
+    /// 光标安装和 layer，滚动起手一次建十几行时这是可观的一笔。
+    private func reusableRowView<T: NSTableRowView>(
+        in tableView: NSTableView, id: String, make: () -> T
+    ) -> T {
+        let identifier = NSUserInterfaceItemIdentifier(id)
+        if let view = tableView.makeView(withIdentifier: identifier, owner: nil) as? T { return view }
+        let view = make()
+        view.identifier = identifier
+        return view
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if searchMode, case .session(let record, _) = rows[row] {
