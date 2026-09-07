@@ -237,17 +237,16 @@ final class SettingsView: NSView {
 
     private func buildGeneral(into column: NSStackView) {
         let group = SettingsGroup()
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.font = .systemFont(ofSize: 12.5)
-        popup.controlSize = .regular
-        for option in LanguagePreference.allCases {
-            popup.addItem(withTitle: option.title)
-            popup.lastItem?.representedObject = option.rawValue
-        }
-        popup.selectItem(at: LanguagePreference.allCases.firstIndex(of: LanguagePreference.current()) ?? 0)
-        popup.target = self
-        popup.action = #selector(languageChanged(_:))
-        group.addRow(title: L("Language"), control: popup)
+        // 三个固定选项用分段控件，不用下拉：一眼看全、点一下切换，控件宽度只随文字
+        let segments = NSSegmentedControl(
+            labels: LanguagePreference.allCases.map(\.title),
+            trackingMode: .selectOne, target: self, action: #selector(languageChanged(_:)))
+        segments.segmentStyle = .rounded
+        segments.controlSize = .regular
+        segments.font = .systemFont(ofSize: 12.5)
+        segments.selectedSegment =
+            LanguagePreference.allCases.firstIndex(of: LanguagePreference.current()) ?? 0
+        group.addRow(title: L("Language"), control: segments)
         column.addArrangedSubview(group)
         group.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         column.setCustomSpacing(12, after: group)
@@ -260,10 +259,9 @@ final class SettingsView: NSView {
         hint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     }
 
-    @objc private func languageChanged(_ sender: NSPopUpButton) {
-        guard let raw = sender.selectedItem?.representedObject as? String,
-              let option = LanguagePreference(rawValue: raw) else { return }
-        LanguagePreference.set(option)
+    @objc private func languageChanged(_ sender: NSSegmentedControl) {
+        guard LanguagePreference.allCases.indices.contains(sender.selectedSegment) else { return }
+        LanguagePreference.set(LanguagePreference.allCases[sender.selectedSegment])
     }
 
     // —— Appearance ——
@@ -445,8 +443,11 @@ final class SettingsGroup: NSView {
             label.topAnchor.constraint(greaterThanOrEqualTo: row.topAnchor, constant: 12),
             control.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
             control.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 16),
+            // 控件保持自身尺寸靠右，标签占左侧余量（可折行）；不把控件拉伸铺满
+            control.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 16),
         ])
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         row.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
