@@ -156,7 +156,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         listContainer.isHidden = true
         listContainer.wantsLayer = true
         listContainer.layer?.masksToBounds = true  // 展开动画中列表只露出岛体已长到的部分
-        listContainer.layer?.masksToBounds = true
         listSeparator.wantsLayer = true
         searchField.font = .systemFont(ofSize: 11)
         searchField.isBordered = false
@@ -165,7 +164,16 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.delegate = self
 
         taskScrollView.drawsBackground = false
-        taskScrollView.onWheel = { [weak self] in self?.noteScrollActivity() }
+        taskScrollView.onWheel = { [weak self] in
+            self?.pointerScrolled = true
+            self?.noteScrollActivity()
+        }
+        // 滚动活动以裁剪视图 bounds 变化为准，而不是只看滚轮事件：手指抬起后的
+        // 回弹动画、键盘上下键的 scrollToVisible 都没有事件，但行同样在指针下移动。
+        taskScrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(taskListDidScroll),
+            name: NSView.boundsDidChangeNotification, object: taskScrollView.contentView)
         taskScrollView.borderType = .noBorder
         taskScrollView.hasHorizontalScroller = false
         taskScrollView.hasVerticalScroller = true
@@ -397,16 +405,40 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         choices = taskProvider?() ?? []
         searchField.stringValue = ""
         listOpen = true
-        listContainer.isHidden = false
+        // 先建行再显示容器：rebuildRows 看到容器还是隐藏的，就按「从 0 长出」做露出遮罩。
         applyFilter("")  // 定好列表目标高度，并触发岛体形变（PaneView 里 0.18s easeOut）
+        listContainer.isHidden = false
         applyColors()
+        window?.makeFirstResponder(searchField)
+    }
+
+    /// 读取动画当前露出的列表高度；同一事务内尚无呈现层时，从遮罩起点衔接。
+    private var visibleListHeight: CGFloat {
+        guard !listContainer.isHidden else { return 0 }
+        // 动画可被连续输入打断，约束只代表目标，不能作为下一段动画的起点。
+        if let presented = island.layer?.presentation() {
+            return max(0, presented.frame.height - Self.baseHeight)
+        }
+        if let mask = listContainer.layer?.mask {
+            let animation = mask.animation(forKey: "reveal") as? CABasicAnimation
+            return mask.presentation()?.bounds.height
+                ?? (animation?.fromValue as? CGFloat)
+                ?? mask.bounds.height
+        }
+        return listHeightConstraint?.constant ?? 0
+    }
+
+    /// 列表布局固定，用顶边锚定的显式遮罩与岛体同步露出内容。
+    /// 不动画高度约束，避免重排让滚动视口内的行跳位。
+    private func revealList(from oldHeight: CGFloat) {
         layoutSubtreeIfNeeded()
-        // 列表本身不动，用一块从顶边向下长的遮罩逐步露出它，与岛体同时长、同曲线：
-        // 行只会在岛体已长到的范围内出现——不再出现"先出列表再长岛"。
-        // 不改高度约束：重排会让滚动视口里的行在过程中跳位。
-        // 显式动画而不是隐式：刚挂进层树的图层在同一事务里没有 presentation，
-        // 隐式改 frame 会直接落到终态。锚点钉在顶边，只动高度。
         let full = listContainer.bounds
+        // 收缩或反向动画也必须丢弃旧遮罩，它的顶边坐标属于旧容器。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        listContainer.layer?.mask = nil
+        CATransaction.commit()
+        guard full.height > oldHeight else { return }
         let mask = CALayer()
         mask.backgroundColor = NSColor.black.cgColor
         mask.anchorPoint = CGPoint(x: 0.5, y: 1)
@@ -414,7 +446,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         mask.bounds = full
         listContainer.layer?.mask = mask
         let grow = CABasicAnimation(keyPath: "bounds.size.height")
-        grow.fromValue = 0
+        grow.fromValue = oldHeight
         grow.toValue = full.height
         grow.duration = 0.18
         grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -424,18 +456,24 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
         mask.add(grow, forKey: "reveal")
         CATransaction.commit()
-        window?.makeFirstResponder(searchField)
     }
 
     private func closeTaskList() {
         listOpen = false
+        scrollSettle?.cancel()
+        scrollSettle = nil
+        isScrolling = false
+        pointerScrolled = false
         listContainer.isHidden = true
+        listContainer.layer?.mask = nil
         applyColors()
         onIslandHeightChange?(currentIslandHeight)
         window?.invalidateCursorRects(for: self)
     }
 
     private func applyFilter(_ query: String) {
+        pointerScrolled = false
+        noteScrollActivity()
         if query.isEmpty {
             filtered = choices
         } else {
@@ -452,6 +490,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     }
 
     private func rebuildRows() {
+        let visibleHeight = visibleListHeight
         rowViews.forEach { $0.removeFromSuperview() }
         rowViews = []
 
@@ -503,8 +542,12 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             height: max(CGFloat(rowViews.count) * 26 - 2, 0))
         listHeightConstraint?.constant = listHeight
 
-        setHighlight(0)
-        if listOpen { onIslandHeightChange?(currentIslandHeight) }
+        if listOpen {
+            onIslandHeightChange?(currentIslandHeight)
+            revealList(from: visibleHeight)
+        }
+        layoutSubtreeIfNeeded()
+        setHighlight(0, scroll: true)
         window?.invalidateCursorRects(for: self)
     }
 
@@ -528,15 +571,37 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     // 滚动（含回弹）期间行从静止指针下经过，会连发 mouseEntered；此时高亮条会
     // 跟着行跳来跳去，看起来像在和系统回弹抢位。滚动活动结束 150ms 后才恢复 hover。
+    // 键盘上下键触发的滚动同样屏蔽——否则指针停在列表上时，行一滚过指针，
+    // hover 就把键盘刚选中的行抢回去。
     private var isScrolling = false
     private var scrollSettle: DispatchWorkItem?
+    /// 这轮滚动是否由滚轮/触控板驱动：停稳后把高亮归到指针所在行；键盘滚动不归位。
+    private var pointerScrolled = false
+
+    @objc private func taskListDidScroll(_ note: Notification) {
+        noteScrollActivity()
+    }
 
     private func noteScrollActivity() {
+        guard listOpen else { return }
         isScrolling = true
         scrollSettle?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.isScrolling = false }
+        let work = DispatchWorkItem { [weak self] in self?.scrollDidSettle() }
         scrollSettle = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func scrollDidSettle() {
+        isScrolling = false
+        guard pointerScrolled else { return }
+        pointerScrolled = false
+        // 滚动期间吞掉的 mouseEntered 不会补发；停稳后按指针位置归位，
+        // 否则高亮会留在早已滚出视口的行上，回车会绑定一个看不见的任务。
+        guard let window, listOpen else { return }
+        let point = taskRowsView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard taskScrollView.documentVisibleRect.contains(point),
+              let index = rowViews.firstIndex(where: { $0.frame.contains(point) }) else { return }
+        setHighlight(index)
     }
 
     private func hoverHighlight(_ index: Int) {
@@ -544,9 +609,13 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         setHighlight(index)
     }
 
-    /// `scroll`：只有键盘移动高亮时才把行滚进视口。鼠标 hover 触发的高亮绝不能滚——
+    /// `scroll`：键盘移动或筛选重置高亮时把行滚进视口。鼠标 hover 触发的高亮绝不能滚——
     /// 用户滚轮滚动时指针不断经过新行，每次都 scrollToVisible 会把列表往回拽。
     private func setHighlight(_ index: Int, scroll: Bool = false) {
+        if scroll {
+            pointerScrolled = false
+            noteScrollActivity()
+        }
         highlighted = index
         for (i, row) in rowViews.enumerated() {
             row.highlighted = i == index
@@ -838,7 +907,7 @@ final class IdentityIslandView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// 任务列表的滚动视图：每一发滚轮/回弹事件都上报，供宿主在滚动期间屏蔽 hover。
+/// 任务列表的滚动视图：滚轮/触控板事件上报，宿主据此区分指针驱动与键盘驱动的滚动。
 private final class WheelAwareScrollView: NSScrollView {
     var onWheel: (() -> Void)?
 
