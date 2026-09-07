@@ -84,7 +84,7 @@ enum ShellMenuPopover {
         let source = CIImage(cgImage: cg)
         let scale = parent.backingScaleFactor
         let blurred = source.clampedToExtent()
-            .applyingGaussianBlur(sigma: 9 * scale)
+            .applyingGaussianBlur(sigma: 5 * scale)
             .cropped(to: source.extent)
         guard let output = CIContext().createCGImage(blurred, from: blurred.extent) else { return nil }
         return NSImage(cgImage: output, size: rootRect.size)
@@ -358,7 +358,7 @@ private final class MenuTintOverlay: NSView {
     }
 
     private func applyColor() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.72)
+        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.6)
             .shellResolvedCGColor(for: effectiveAppearance)
     }
 }
