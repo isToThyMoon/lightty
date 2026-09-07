@@ -1,3 +1,23 @@
+/* Agent 启动 */
+"Start working" = "Start working";
+"Go ↗" = "Go ↗";
+"Open another terminal" = "Open another terminal";
+"Go to %@" = "Go to %@";
+"%@ was not detected. Install it or set a launch command in Agent settings." = "%@ was not detected. Install it or set a launch command in Agent settings.";
+"Task context will be shared with the Agent automatically." = "Task context will be shared with the Agent automatically.";
+"Start working on “%@”" = "Start working on “%@”";
+"Terminal only" = "Terminal only";
+"Open terminal" = "Open terminal";
+"Launch %@" = "Launch %@";
+"Agent settings…" = "Agent settings…";
+"Split in current tab" = "Split in current tab";
+"Open a terminal with this task, without starting an Agent." = "Open a terminal with this task, without starting an Agent.";
+"Agent hooks share task context automatically. Configure them in Settings > General." = "Agent hooks share task context automatically. Configure them in Settings > General.";
+"Default Agent" = "Default Agent";
+"%@ launch command" = "%@ launch command";
+"Reset launch commands" = "Reset launch commands";
+"Commands run in the new terminal’s shell. You can include your own arguments." = "Commands run in the new terminal’s shell. You can include your own arguments.";
+
 /* 菜单栏 */
 "About lightty" = "About lightty";
 "Quit lightty" = "Quit lightty";

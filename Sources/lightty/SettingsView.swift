@@ -3,7 +3,7 @@ import AppKit
 /// 应用设置页：整窗覆盖的一页（ChatGPT / Codex 桌面版式），不是独立窗口。
 /// 左栏：返回 / 搜索 / 分组导航；右侧：当前页内容。红绿灯仍在左上（页面垫在
 /// 标题栏容器之下）。Esc 或「返回应用」关闭。
-final class SettingsView: NSView {
+final class SettingsView: NSView, NSTextFieldDelegate {
     enum Page: String, CaseIterable {
         case general, appearance
 
@@ -36,6 +36,7 @@ final class SettingsView: NSView {
     private let pageHost = NSView()
     private var navRows: [Page: SettingsNavRow] = [:]
     private let emptyLabel = NSTextField(labelWithString: L("No matching settings"))
+    private var agentCommandFields: [LaunchAgent: NSTextField] = [:]
 
     init(page: Page = .appearance) {
         currentPage = page
@@ -199,6 +200,7 @@ final class SettingsView: NSView {
         currentPage = page
         for (p, row) in navRows { row.isSelected = p == page }
         pageHost.subviews.forEach { $0.removeFromSuperview() }
+        agentCommandFields.removeAll()
 
         let column = NSStackView()
         column.orientation = .vertical
@@ -206,19 +208,36 @@ final class SettingsView: NSView {
         column.spacing = 0
         column.translatesAutoresizingMaskIntoConstraints = false
         column.setHuggingPriority(.init(1), for: .horizontal)
-        pageHost.addSubview(column)
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let document = SettingsDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        pageHost.addSubview(scroll)
+        document.addSubview(column)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: pageHost.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            document.bottomAnchor.constraint(equalTo: column.bottomAnchor, constant: 32),
+        ])
         // 内容列：在内容区里居中，宽 = 区宽 − 112 且 ≤ 720（参考 ChatGPT：宽窗口时
         // 内容居中封顶，不贴任何一边）；窗口窄时留白退到 24，再压内容宽。
-        let centered = column.centerXAnchor.constraint(equalTo: pageHost.centerXAnchor)
+        let centered = column.centerXAnchor.constraint(equalTo: document.centerXAnchor)
         centered.priority = .init(800)
-        let fill = column.widthAnchor.constraint(equalTo: pageHost.widthAnchor, constant: -112)
+        let fill = column.widthAnchor.constraint(equalTo: document.widthAnchor, constant: -112)
         fill.priority = .init(750)
         let minWidth = column.widthAnchor.constraint(greaterThanOrEqualToConstant: 300)
         minWidth.priority = .init(900)
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: pageHost.topAnchor, constant: 64),
-            column.leadingAnchor.constraint(greaterThanOrEqualTo: pageHost.leadingAnchor, constant: 24),
-            column.trailingAnchor.constraint(lessThanOrEqualTo: pageHost.trailingAnchor, constant: -24),
+            column.topAnchor.constraint(equalTo: document.topAnchor, constant: 64),
+            column.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: 24),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: document.trailingAnchor, constant: -24),
             column.widthAnchor.constraint(lessThanOrEqualToConstant: 720),
             centered, fill, minWidth,
         ])
@@ -283,6 +302,62 @@ final class SettingsView: NSView {
         terminalGroup.addRow(title: L("Agent status hooks"), control: hooksButton)
         column.addArrangedSubview(terminalGroup)
         terminalGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        column.setCustomSpacing(28, after: terminalGroup)
+        column.addArrangedSubview(sectionLabel("Agent"))
+        column.setCustomSpacing(12, after: column.arrangedSubviews.last!)
+        let agents = SettingsGroup()
+        let defaultAgent = ShellDropdown(
+            options: LaunchAgent.allCases.map { .init(id: $0.rawValue, title: $0.title) },
+            selectedID: AgentLaunchPreference.selected().rawValue)
+        defaultAgent.onChange = { id in
+            if let agent = LaunchAgent(rawValue: id) { AgentLaunchPreference.select(agent) }
+        }
+        agents.addRow(title: L("Default Agent"), control: defaultAgent)
+        for agent in [LaunchAgent.claudeCode, .codex] {
+            let field = NSTextField(string: AgentLaunchPreference.command(for: agent))
+            field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            field.placeholderString = agent.defaultCommand
+            field.cell?.isScrollable = true
+            field.cell?.wraps = false
+            field.delegate = self
+            field.widthAnchor.constraint(equalToConstant: 170).isActive = true
+            field.setAccessibilityLabel(L("%@ launch command", agent.title))
+            agentCommandFields[agent] = field
+            agents.addRow(title: agent.title, control: field)
+        }
+        column.addArrangedSubview(agents)
+        agents.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        column.setCustomSpacing(12, after: agents)
+        let reset = NSButton(title: L("Reset launch commands"), target: self,
+                             action: #selector(resetAgentCommands))
+        reset.bezelStyle = .rounded
+        column.addArrangedSubview(reset)
+        let commandHint = NSTextField(wrappingLabelWithString:
+            L("Commands run in the new terminal’s shell. You can include your own arguments."))
+        commandHint.font = .systemFont(ofSize: 11.5)
+        commandHint.textColor = ShellStyle.tertiaryText
+        column.setCustomSpacing(12, after: reset)
+        column.addArrangedSubview(commandHint)
+        commandHint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              let agent = agentCommandFields.first(where: { $0.value === field })?.key else { return }
+        if !AgentLaunchPreference.setCommand(field.stringValue, for: agent) { NSSound.beep() }
+        field.stringValue = AgentLaunchPreference.command(for: agent)
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              let agent = agentCommandFields.first(where: { $0.value === field })?.key else { return }
+        AgentLaunchPreference.setCommand(field.stringValue, for: agent)
+    }
+
+    @objc private func resetAgentCommands() {
+        window?.makeFirstResponder(self)
+        AgentLaunchPreference.resetCommands()
+        for (agent, field) in agentCommandFields { field.stringValue = agent.defaultCommand }
     }
 
     @objc private func showHookSetup() { onShowHookSetup?() }
@@ -330,6 +405,10 @@ final class SettingsView: NSView {
         showPage(.appearance)
     }
 
+}
+
+private final class SettingsDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 // MARK: - 左栏导航行

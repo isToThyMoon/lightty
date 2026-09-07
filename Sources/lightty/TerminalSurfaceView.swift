@@ -21,8 +21,8 @@ struct TerminalSurfaceConfiguration {
     /// 全局环境里塞东西。`inheriting` 初始化器不复制本字段——新 pane 必须拿到
     /// 属于自己的 id，继承反而是错的。
     var envVars: [String: String] = [:]
-    /// shell 起来后由 libghostty 写进 pty 的首段输入（会话恢复用它自动敲
-    /// `claude --resume <id>`）。`inheriting` 不复制：只有恢复出的 pane 才带。
+    /// shell 起来后由 libghostty 写进 pty 的首段输入，用于任务启动命令与会话恢复。
+    /// `inheriting` 不复制，普通新建或分屏不应重复执行已有 pane 的启动命令。
     var initialInput: String?
 
     init() {}

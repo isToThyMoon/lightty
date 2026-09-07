@@ -1,3 +1,23 @@
+/* Agent 启动 */
+"Start working" = "开始处理";
+"Go ↗" = "前往 ↗";
+"Open another terminal" = "另开终端";
+"Go to %@" = "前往 %@";
+"%@ was not detected. Install it or set a launch command in Agent settings." = "未检测到 %@。请先安装，或在 Agent 设置中修改启动命令。";
+"Task context will be shared with the Agent automatically." = "任务内容会自动传入 Agent。";
+"Start working on “%@”" = "开始处理「%@」";
+"Terminal only" = "仅打开终端";
+"Open terminal" = "打开终端";
+"Launch %@" = "启动 %@";
+"Agent settings…" = "Agent 设置…";
+"Split in current tab" = "当前标签页分屏";
+"Open a terminal with this task, without starting an Agent." = "创建关联此任务的终端，不启动 Agent。";
+"Agent hooks share task context automatically. Configure them in Settings > General." = "配置 Agent hooks 后会自动传入任务内容，可在「设置 > 通用」中管理。";
+"Default Agent" = "默认 Agent";
+"%@ launch command" = "%@ 启动命令";
+"Reset launch commands" = "恢复默认启动命令";
+"Commands run in the new terminal’s shell. You can include your own arguments." = "启动命令在新终端中执行，支持自定义命令和参数。";
+
 /* 菜单栏 */
 "About lightty" = "关于 lightty";
 "Quit lightty" = "退出 lightty";

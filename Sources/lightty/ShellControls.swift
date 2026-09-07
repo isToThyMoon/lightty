@@ -158,7 +158,7 @@ final class ShellToggle: NSView {
     private func applyLook(animated: Bool) {
         let appearance = effectiveAppearance
         let track: NSColor = isOn ? ShellStyle.accent : ShellStyle.pressedFill
-        let knobColor: NSColor = isOn ? ShellStyle.onAccent : ShellStyle.raisedSurface
+        let knobColor = NSColor.white
         let target = knobFrame(on: isOn)
         let apply = {
             self.layer?.backgroundColor = track.shellResolvedCGColor(for: appearance)

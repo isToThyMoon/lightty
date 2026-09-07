@@ -153,7 +153,7 @@ enum AccentPreference: String, CaseIterable {
         case .blue: return NSColor.shellDynamic(light: 0x2563EB, dark: 0x60A5FA)
         case .green: return NSColor.shellDynamic(light: 0x16A34A, dark: 0x4ADE80)
         case .yellow: return NSColor.shellDynamic(light: 0xCA8A04, dark: 0xFACC15)
-        case .pink: return NSColor.shellDynamic(light: 0xEC4899, dark: 0xF472B6)
+        case .pink: return NSColor.shellDynamic(light: 0xF077AF, dark: 0xF077AF)
         case .orange: return NSColor.shellDynamic(light: 0xEA580C, dark: 0xFB923C)
         case .purple: return NSColor.shellDynamic(light: 0x7C3AED, dark: 0xA78BFA)
         // 白：浅色下没法用白，退回中性深；深色下才是真白
