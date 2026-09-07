@@ -7,7 +7,7 @@ extension Notification.Name {
 }
 
 enum PreferenceKind: String {
-    case appearance, language, terminalTheme
+    case appearance, language, terminalTheme, accent
 
     static let userInfoKey = "kind"
 
@@ -106,6 +106,72 @@ enum LanguagePreference: String, CaseIterable {
         case .system: return L("System language")
         case .english: return "English"
         case .simplifiedChinese: return "简体中文"
+        }
+    }
+}
+
+/// 重点色：用户可选的命名色（ChatGPT 桌面版同款菜单）。驱动 ShellStyle.accent；
+/// 带色相的档位同时接管导航色（标签页侧栏活跃态），默认/白两档无色相时导航色
+/// 退回内置蔚蓝，保证「你在哪」始终扫得到。
+enum AccentPreference: String, CaseIterable {
+    case `default`, blue, green, yellow, pink, orange, purple, white
+
+    static let defaultsKey = "lightty.accent"
+
+    static func current(in defaults: UserDefaults = .standard) -> AccentPreference {
+        defaults.string(forKey: defaultsKey).flatMap(AccentPreference.init(rawValue:)) ?? .default
+    }
+
+    static func set(_ value: AccentPreference, in defaults: UserDefaults = .standard) {
+        defaults.set(value.rawValue, forKey: defaultsKey)
+        PreferenceKind.accent.post()
+    }
+
+    var title: String {
+        switch self {
+        case .default: return L("Default")
+        case .blue: return L("Blue")
+        case .green: return L("Green")
+        case .yellow: return L("Yellow")
+        case .pink: return L("Pink")
+        case .orange: return L("Orange")
+        case .purple: return L("Purple")
+        case .white: return L("White")
+        }
+    }
+
+    /// 有色相 = 可以充当导航色
+    var hasHue: Bool { self != .default && self != .white }
+
+    /// 重点色本体（明暗各一档，深色下提亮一档保证在深底上可读）
+    var color: NSColor {
+        switch self {
+        case .default: return NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
+        case .blue: return NSColor.shellDynamic(light: 0x2563EB, dark: 0x60A5FA)
+        case .green: return NSColor.shellDynamic(light: 0x16A34A, dark: 0x4ADE80)
+        case .yellow: return NSColor.shellDynamic(light: 0xCA8A04, dark: 0xFACC15)
+        case .pink: return NSColor.shellDynamic(light: 0xEC4899, dark: 0xF472B6)
+        case .orange: return NSColor.shellDynamic(light: 0xEA580C, dark: 0xFB923C)
+        case .purple: return NSColor.shellDynamic(light: 0x7C3AED, dark: 0xA78BFA)
+        // 白：浅色下没法用白，退回中性深；深色下才是真白
+        case .white: return NSColor.shellDynamic(light: 0x353331, dark: 0xFFFFFF)
+        }
+    }
+
+    /// 压在重点色上的前景（开关滑块、勾）
+    var foreground: NSColor {
+        switch self {
+        case .default, .white: return NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
+        default: return NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x1C1B1F)
+        }
+    }
+
+    /// 菜单里的色点
+    var swatch: NSColor {
+        switch self {
+        case .default: return NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x3B3841)
+        case .white: return NSColor.shellDynamic(light: 0xFFFFFF, dark: 0xFFFFFF)
+        default: return color
         }
     }
 }

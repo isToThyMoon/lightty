@@ -130,9 +130,17 @@ final class SettingsView: NSView {
         showPage(currentPage)
     }
 
-    /// 语言切换后整页文案重建（导航 + 当前页），选中页保持。
+    /// 语言切换后整页文案重建（导航 + 当前页），选中页保持；重点色变了只重画当前页。
     @objc private func preferencesDidChange(_ note: Notification) {
-        guard PreferenceKind.from(note) == .language else { return }
+        switch PreferenceKind.from(note) {
+        case .accent:
+            showPage(currentPage)
+            return
+        case .language:
+            break
+        default:
+            return
+        }
         backRow.title = L("Back to app")
         searchField.placeholderString = L("Search settings…")
         emptyLabel.stringValue = L("No matching settings")
@@ -280,7 +288,22 @@ final class SettingsView: NSView {
         }
         column.addArrangedSubview(cards)
         cards.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-        column.setCustomSpacing(36, after: cards)
+        column.setCustomSpacing(20, after: cards)
+
+        // 重点色：命名色下拉（行首色点 + 尾部勾选，ChatGPT 桌面版式）
+        let accentGroup = SettingsGroup()
+        let accentDropdown = ShellDropdown(
+            options: AccentPreference.allCases.map {
+                ShellDropdown.Option(id: $0.rawValue, title: $0.title, swatch: $0.swatch)
+            },
+            selectedID: AccentPreference.current().rawValue)
+        accentDropdown.onChange = { id in
+            if let option = AccentPreference(rawValue: id) { AccentPreference.set(option) }
+        }
+        accentGroup.addRow(title: L("Accent"), control: accentDropdown)
+        column.addArrangedSubview(accentGroup)
+        accentGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        column.setCustomSpacing(36, after: accentGroup)
 
         column.addArrangedSubview(sectionLabel(L("Terminal")))
         column.setCustomSpacing(14, after: column.arrangedSubviews.last!)

@@ -74,21 +74,24 @@ enum ShellStyle {
     // MARK: 重点色（全局唯一入口）
 
     /// 应用自己的重点色，**不跟随系统强调色**（原生控件的蓝就是用户系统偏好里的
-    /// 强调色，换台机器就变）。所有「当前 / 选中 / 开启」的着色——标签页侧栏活跃态、
-    /// 开关开启态、下拉勾选、拖拽落点——都从这里取，改这一行全局生效。
-    /// 默认取 Codex / ChatGPT 式的中性深色（与主按钮同色），界面里只让状态色带色相。
-    /// 品牌黄（图标 #FFDB00）在浅底上对比度约 1.4:1，做不了文字/细线色，故不进界面。
-    static let accent = NSColor.shellDynamic(light: 0x353331, dark: 0xE9E7EC)
+    /// 强调色，换台机器就变）；由设置页的 AccentPreference 决定（默认中性深色，
+    /// 可选蓝/绿/黄/粉/橙/紫/白）。所有「选中 / 开启」的着色——开关开启态、下拉勾选——
+    /// 都从这里取。品牌黄（图标 #FFDB00）在浅底上对比度约 1.4:1，做不了文字色，
+    /// 菜单里的「黄」是压深过的琥珀。
+    static var accent: NSColor { AccentPreference.current().color }
     /// 重点色上的前景：开关滑块、落在重点底上的勾
-    static let onAccent = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x26242B)
+    static var onAccent: NSColor { AccentPreference.current().foreground }
     /// 重点色淡底
     static func accentTint(_ alpha: CGFloat) -> NSColor { accent.withAlphaComponent(alpha) }
 
-    /// 导航色：另一套体系，只管「你现在在哪」——标签页侧栏的活跃标签页、活跃 pane 行、
-    /// 拖拽落点。与设置页的中性重点色分开：导航需要一眼扫到，用带色相的蔚蓝；
-    /// 刻意比状态色里的「思考」周蓝（4E6EF2）更清亮，避免和圆点撞色。
-    /// 自己定值、不跟系统强调色（那是用户偏好，换机器会变）。改这一行全局生效。
-    static let navigationAccent = NSColor.shellDynamic(light: 0x1F6FEB, dark: 0x58A6FF)
+    /// 导航色：只管「你现在在哪」——标签页侧栏的活跃标签页、活跃 pane 行、拖拽落点。
+    /// 用户选了带色相的重点色就跟重点色走（一套色）；选默认/白这类无色相档位时，
+    /// 导航退回内置蔚蓝——导航必须一眼扫到，中性色做不到。蔚蓝刻意比状态色里的
+    /// 「思考」周蓝（4E6EF2）更清亮，避免和圆点撞色。
+    static var navigationAccent: NSColor {
+        AccentPreference.current().hasHue ? accent : navigationFallback
+    }
+    private static let navigationFallback = NSColor.shellDynamic(light: 0x1F6FEB, dark: 0x58A6FF)
     static func navigationTint(_ alpha: CGFloat) -> NSColor {
         navigationAccent.withAlphaComponent(alpha)
     }

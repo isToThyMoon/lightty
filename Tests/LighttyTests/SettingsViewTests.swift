@@ -67,6 +67,24 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(labels(in: view).contains("返回应用"))
     }
 
+    /// 重点色偏好：带色相的档位同时接管导航色；默认/白退回内置导航蓝。
+    func testAccentPreferenceDrivesShellColors() {
+        defer { AccentPreference.set(.default, in: defaults); UserDefaults.standard.removeObject(forKey: AccentPreference.defaultsKey) }
+        func rgb(_ color: NSColor) -> [Int] {
+            let c = color.usingColorSpace(.sRGB)!
+            return [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) }
+        }
+        AccentPreference.set(.pink)
+        XCTAssertEqual(AccentPreference.current(), .pink)
+        XCTAssertEqual(rgb(ShellStyle.accent), rgb(AccentPreference.pink.color))
+        XCTAssertEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "有色相：导航跟重点色")
+
+        AccentPreference.set(.default)
+        XCTAssertNotEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "无色相：导航退回蔚蓝")
+        XCTAssertFalse(AccentPreference.white.hasHue)
+        XCTAssertEqual(AccentPreference.allCases.count, 8)
+    }
+
     /// 自绘控件：下拉标题跟随选中项并回调；开关翻转并回调。
     func testShellControlsReportChanges() {
         let dropdown = ShellDropdown(

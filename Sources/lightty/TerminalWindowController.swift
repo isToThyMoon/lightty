@@ -1657,7 +1657,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// task 卡片 / 标签页侧栏 / 标题栏按钮（无动画，位置不变）。设置页若开着，
     /// 重建后要重新提到最上层（新建的卡片会插在它之上）。
     @objc private func preferencesDidChange(_ note: Notification) {
-        guard PreferenceKind.from(note) == .language,
+        let kind = PreferenceKind.from(note)
+        if kind == .accent {
+            tabSidebar?.reload()  // 导航色随重点色变，重建行即可
+            return
+        }
+        guard kind == .language,
               let window, let themeFrame = window.contentView?.superview else { return }
         let hadTask = taskPanel != nil
         let hadTab = tabSidebar != nil

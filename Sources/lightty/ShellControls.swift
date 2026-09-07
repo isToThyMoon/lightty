@@ -7,6 +7,8 @@ final class ShellDropdown: NSView {
     struct Option: Equatable {
         let id: String
         let title: String
+        /// 菜单行首的色点（可选）
+        var swatch: NSColor? = nil
     }
 
     var options: [Option] { didSet { refreshTitle() } }
@@ -29,7 +31,7 @@ final class ShellDropdown: NSView {
         label.font = .systemFont(ofSize: 12.5)
         label.lineBreakMode = .byTruncatingTail
         chevron.image = NSImage(
-            systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: nil)?
+            systemSymbolName: "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
         for v in [label, chevron] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -79,9 +81,9 @@ final class ShellDropdown: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let items = options.map { option in
-            ShellMenuPopover.Item.action(option.title, checked: option.id == selectedID) {
-                [weak self] in self?.select(option.id)
-            }
+            ShellMenuPopover.Item.action(
+                option.title, checked: option.id == selectedID, swatch: option.swatch
+            ) { [weak self] in self?.select(option.id) }
         }
         ShellMenuPopover.present(from: self, items: items)
     }

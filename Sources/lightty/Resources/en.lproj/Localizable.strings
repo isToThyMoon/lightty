@@ -192,3 +192,14 @@
 "Terminal" = "Terminal";
 "Use the built-in Lightty terminal theme" = "Use the built-in Lightty terminal theme";
 "No matching settings" = "No matching settings";
+
+/* 重点色 */
+"Accent" = "Accent";
+"Default" = "Default";
+"Blue" = "Blue";
+"Green" = "Green";
+"Yellow" = "Yellow";
+"Pink" = "Pink";
+"Orange" = "Orange";
+"Purple" = "Purple";
+"White" = "White";

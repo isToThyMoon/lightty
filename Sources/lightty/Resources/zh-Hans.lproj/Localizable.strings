@@ -196,3 +196,14 @@
 "Terminal" = "终端";
 "Use the built-in Lightty terminal theme" = "终端使用 Lightty 内置主题";
 "No matching settings" = "没有匹配的设置项";
+
+/* 重点色 */
+"Accent" = "重点色";
+"Default" = "默认";
+"Blue" = "蓝色";
+"Green" = "绿色";
+"Yellow" = "黄色";
+"Pink" = "粉色";
+"Orange" = "橙色";
+"Purple" = "紫色";
+"White" = "白色";

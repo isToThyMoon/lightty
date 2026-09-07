@@ -16,17 +16,20 @@ enum ShellMenuPopover {
         var checked = false
         var detail: String?
         var destructive = false
+        /// 行首色点（重点色菜单用）
+        var swatch: NSColor?
 
         static func action(
             _ title: String,
             checked: Bool = false,
             detail: String? = nil,
             destructive: Bool = false,
+            swatch: NSColor? = nil,
             handler: @escaping () -> Void
         ) -> Item {
             Item(
                 kind: .action(handler), title: title, checked: checked,
-                detail: detail, destructive: destructive)
+                detail: detail, destructive: destructive, swatch: swatch)
         }
 
         static func header(_ title: String) -> Item {
@@ -120,9 +123,10 @@ private final class MenuController: NSViewController {
     }
 }
 
-/// 菜单行：勾选区 + 标题 + 尾注，整行 hover 提亮。
+/// 菜单行：（色点 +）标题 + 尾注 + 尾部勾选，整行 hover 提亮（ChatGPT 桌面版式）。
 private final class MenuRowButton: NSView {
     var onTap: (() -> Void)?
+    private let swatch = NSView()
 
     private let item: ShellMenuPopover.Item
     private let check = NSImageView()
@@ -151,22 +155,34 @@ private final class MenuRowButton: NSView {
         detailLabel.stringValue = item.detail ?? ""
         detailLabel.font = .systemFont(ofSize: 10.5)
 
-        for v in [check, titleLabel, detailLabel] {
+        swatch.wantsLayer = true
+        swatch.layer?.cornerRadius = 5
+        swatch.isHidden = item.swatch == nil
+
+        for v in [swatch, check, titleLabel, detailLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            check.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            check.centerYAnchor.constraint(equalTo: centerYAnchor),
-            check.widthAnchor.constraint(equalToConstant: 12),
+            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            swatch.centerYAnchor.constraint(equalTo: centerYAnchor),
+            swatch.widthAnchor.constraint(equalToConstant: 10),
+            swatch.heightAnchor.constraint(equalToConstant: 10),
 
-            titleLabel.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 5),
+            titleLabel.leadingAnchor.constraint(
+                equalTo: item.swatch == nil ? leadingAnchor : swatch.trailingAnchor,
+                constant: item.swatch == nil ? 10 : 8),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: detailLabel.leadingAnchor, constant: -8),
 
-            detailLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            // 尾注与勾在行尾；未勾选时勾不占位
+            detailLabel.trailingAnchor.constraint(
+                equalTo: check.leadingAnchor, constant: item.checked ? -6 : 0),
             detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            check.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            check.centerYAnchor.constraint(equalTo: centerYAnchor),
+            check.widthAnchor.constraint(equalToConstant: item.checked ? 12 : 0),
         ])
         applyColors()
     }
@@ -176,7 +192,13 @@ private final class MenuRowButton: NSView {
     private func applyColors() {
         titleLabel.textColor = item.destructive ? .systemRed : ShellStyle.primaryText
         detailLabel.textColor = ShellStyle.tertiaryText
-        check.contentTintColor = ShellStyle.accent
+        check.contentTintColor = ShellStyle.primaryText
+        if let color = item.swatch {
+            swatch.layer?.backgroundColor = color.shellResolvedCGColor(for: effectiveAppearance)
+            // 浅色点在浅底上要有一圈边才看得见
+            swatch.layer?.borderWidth = 1
+            swatch.layer?.borderColor = ShellStyle.divider.shellResolvedCGColor(for: effectiveAppearance)
+        }
         applyFill()
     }
 
