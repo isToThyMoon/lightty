@@ -61,11 +61,33 @@ enum ShellMenuPopover {
         var origin = NSPoint(x: anchorRect.maxX - size.width, y: anchorRect.minY - 6 - size.height)
         if origin.y < screen.minY { origin.y = anchorRect.maxY + 6 }  // 下方放不下 → 上方
         origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
-        menu.setFrame(NSRect(origin: origin, size: size), display: false)
+        let frame = NSRect(origin: origin, size: size)
+        menu.setFrame(frame, display: false)
+        menu.setBackdrop(Self.blurredBackdrop(of: parent, under: frame))
 
         window = menu
         parent.addChildWindow(menu, ordered: .above)
         menu.makeKeyAndOrderFront(nil)
+    }
+
+    /// 卡片底图：父窗口在卡片区域下方的画面 + 小半径高斯模糊。
+    /// 不用 NSVisualEffectView 的 behindWindow 材质：它的模糊半径固定且很大，
+    /// 开关这类小元素被糊成一片、再罩一层就什么都看不见；ChatGPT 客户端那种
+    /// 「隐约看得出下面形状」的玻璃感是小半径模糊。自己截图自己糊，半径可控，
+    /// 也不受系统「减少透明度」影响。（Metal 承载的终端画面截不到，落到卡片底色。）
+    private static func blurredBackdrop(of parent: NSWindow, under frame: NSRect) -> NSImage? {
+        guard let root = parent.contentView?.superview else { return nil }
+        let rootRect = root.convert(parent.convertFromScreen(frame), from: nil)
+        guard let rep = root.bitmapImageRepForCachingDisplay(in: rootRect) else { return nil }
+        root.cacheDisplay(in: rootRect, to: rep)
+        guard let cg = rep.cgImage else { return nil }
+        let source = CIImage(cgImage: cg)
+        let scale = parent.backingScaleFactor
+        let blurred = source.clampedToExtent()
+            .applyingGaussianBlur(sigma: 9 * scale)
+            .cropped(to: source.extent)
+        guard let output = CIContext().createCGImage(blurred, from: blurred.extent) else { return nil }
+        return NSImage(cgImage: output, size: rootRect.size)
     }
 
     static func dismiss() {
@@ -84,6 +106,11 @@ private final class ShellMenuWindow: NSWindow {
     var onDismiss: (() -> Void)?
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
     private let controller: NSViewController
+    private let backdrop = NSImageView()
+
+    func setBackdrop(_ image: NSImage?) {
+        backdrop.image = image
+    }
 
     init(content: NSViewController) {
         controller = content
@@ -96,26 +123,25 @@ private final class ShellMenuWindow: NSWindow {
         animationBehavior = .utilityWindow
         isMovableByWindowBackground = false
 
-        let card = NSVisualEffectView()
-        // 系统菜单同款材质：比 popover 更亮更透。磨砂由窗口服务器合成，圆角必须走
-        // maskImage——layer.cornerRadius 只裁得到自己的子图层，裁不到磨砂，四角会露方。
-        card.material = .menu
-        card.blendingMode = .behindWindow
-        card.state = .active
-        card.maskImage = Self.roundedMask(radius: 14)
+        // 卡片 = 底色 → 模糊底图 → 高透抬升面罩 → 内容；圆角由 masksToBounds 裁齐
+        let card = MenuCardView()
         card.wantsLayer = true
         card.layer?.cornerRadius = 14
+        card.layer?.masksToBounds = true
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = ShellStyle.divider.withAlphaComponent(0.55)
-            .shellResolvedCGColor(for: card.effectiveAppearance)
-        // 磨砂之上再罩一层高透的抬升面色：系统材质自带的灰调偏脏，ChatGPT 那种
-        // 「亮白玻璃」是浅色下近白、深色下近黑的半透明罩 + 底下的模糊。
+        backdrop.imageScaling = .scaleAxesIndependently
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(backdrop)
         let tint = MenuTintOverlay()
         tint.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(tint)
         content.view.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(content.view)
         NSLayoutConstraint.activate([
+            backdrop.topAnchor.constraint(equalTo: card.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             tint.topAnchor.constraint(equalTo: card.topAnchor),
             tint.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             tint.leadingAnchor.constraint(equalTo: card.leadingAnchor),
@@ -126,19 +152,6 @@ private final class ShellMenuWindow: NSWindow {
             content.view.trailingAnchor.constraint(equalTo: card.trailingAnchor),
         ])
         contentView = card
-    }
-
-    /// 可拉伸的圆角遮罩：四角固定、中间平铺
-    private static func roundedMask(radius: CGFloat) -> NSImage {
-        let side = radius * 2 + 1
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
     }
 
     override var canBecomeKey: Bool { true }
@@ -345,7 +358,26 @@ private final class MenuTintOverlay: NSView {
     }
 
     private func applyColor() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.84)
+        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.72)
+            .shellResolvedCGColor(for: effectiveAppearance)
+    }
+}
+
+/// 菜单卡本体：底色与描边随明暗重解析（底图截不到的区域露出底色）。
+private final class MenuCardView: NSView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyColors()
+    }
+
+    private func applyColors() {
+        layer?.backgroundColor = ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
+        layer?.borderColor = ShellStyle.divider.withAlphaComponent(0.55)
             .shellResolvedCGColor(for: effectiveAppearance)
     }
 }
