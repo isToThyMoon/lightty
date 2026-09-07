@@ -3,12 +3,9 @@ import AppKit
 enum PrimarySidebarMode: String, Codable, CaseIterable {
     case handoff, sessions
     var title: String { self == .handoff ? L("Handoff tasks") : L("Sessions") }
-    var subtitle: String {
-        self == .handoff ? L("Manage your handoff tasks.") : L("Continue your Claude Code / Codex CLI sessions.")
-    }
     var hint: String {
-        self == .handoff ? L("Try asking your agent: “Summarize the current handoff task.”")
-            : L("Organize by project. Click to pick up where you left off.")
+        self == .handoff ? L("Start an agent with a task. Try saying: “Summarize the task.”")
+            : L("Click to resume your last session.")
     }
 }
 
@@ -18,7 +15,6 @@ final class PrimarySidebar: NSView {
     var onModeChanged: ((PrimarySidebarMode) -> Void)?
     private(set) var mode: PrimarySidebarMode
     private let titleButton = NSButton()
-    private let subtitle = NSTextField(wrappingLabelWithString: "")
     private let hint = NSTextField(wrappingLabelWithString: "")
     private let host = NSView()
     private let handoff = HandoffSidebarContent()
@@ -44,16 +40,13 @@ final class PrimarySidebar: NSView {
         titleButton.target = self
         titleButton.action = #selector(chooseMode)
         HoverCursor.installPointingHand(on: titleButton)
-        subtitle.font = .systemFont(ofSize: 11.5)
-        subtitle.textColor = ShellStyle.secondaryText
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = ShellStyle.tertiaryText
-        subtitle.isSelectable = false
         hint.isSelectable = false
         search.target = self; search.action = #selector(searchContent)
         create.target = self; create.action = #selector(newTask)
         collapse.target = self; collapse.action = #selector(closePanel)
-        for view in [titleButton, subtitle, hint, host, search, create, collapse] {
+        for view in [titleButton, hint, host, search, create, collapse] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -71,10 +64,7 @@ final class PrimarySidebar: NSView {
             titleButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             titleButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
             titleButton.heightAnchor.constraint(equalToConstant: 34),
-            subtitle.topAnchor.constraint(equalTo: titleButton.bottomAnchor, constant: 4),
-            subtitle.leadingAnchor.constraint(equalTo: titleButton.leadingAnchor),
-            subtitle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            hint.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 4),
+            hint.topAnchor.constraint(equalTo: titleButton.bottomAnchor, constant: 4),
             hint.leadingAnchor.constraint(equalTo: titleButton.leadingAnchor),
             hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             host.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 14),
@@ -99,7 +89,6 @@ final class PrimarySidebar: NSView {
         titleButton.title = mode.title
         titleButton.contentTintColor = ShellStyle.primaryText
         titleButton.setAccessibilityLabel(mode.title)
-        subtitle.stringValue = mode.subtitle
         hint.stringValue = mode.hint
         create.isHidden = false
         create.setAccessibilityLabel(mode == .handoff ? L("New task") : L("New session"))

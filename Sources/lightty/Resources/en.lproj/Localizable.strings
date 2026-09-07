@@ -227,10 +227,8 @@
 
 "Handoff tasks" = "Handoff tasks";
 "Sessions" = "Sessions";
-"Manage your handoff tasks." = "Manage your handoff tasks.";
-"Continue your Claude Code / Codex CLI sessions." = "Continue your Claude Code / Codex CLI sessions.";
-"Try asking your agent: “Summarize the current handoff task.”" = "Try asking your agent: “Summarize the current handoff task.”";
-"Organize by project. Click to pick up where you left off." = "Organize by project. Click to pick up where you left off.";
+"Start an agent with a task. Try saying: “Summarize the task.”" = "Start an agent with a task. Try saying: “Summarize the task.”";
+"Click to resume your last session." = "Click to resume your last session.";
 "Primary sidebar" = "Primary sidebar";
 "Manage handoff tasks" = "Manage handoff tasks";
 "Continue local CLI sessions" = "Continue local CLI sessions";

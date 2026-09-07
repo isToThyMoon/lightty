@@ -635,8 +635,8 @@ final class PrimarySidebarTests: XCTestCase {
                 XCTAssertEqual(panel.bounds.maxX - listFrame.maxX, SidebarListScrollView.trailingMargin, accuracy: 0.5)
                 let texts = descendants(panel).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }
                 let hint = try XCTUnwrap(texts.first { $0.stringValue == mode.hint })
-                let subtitle = try XCTUnwrap(texts.first { $0.stringValue == mode.subtitle })
-                XCTAssertLessThanOrEqual(hint.frame.maxY, subtitle.frame.minY + 1)
+                let title = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSButton }.first { $0.title == mode.title })
+                XCTAssertEqual(title.frame.minY - hint.frame.maxY, 4, accuracy: 0.5)
                 XCTAssertGreaterThan(hint.frame.height, 0)
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
                    let bitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) {

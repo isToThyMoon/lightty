@@ -231,10 +231,8 @@
 
 "Handoff tasks" = "Handoff 任务";
 "Sessions" = "Sessions 会话";
-"Manage your handoff tasks." = "管理你的 Handoff 任务";
-"Continue your Claude Code / Codex CLI sessions." = "继续你的 Claude Code / Codex CLI 会话";
-"Try asking your agent: “Summarize the current handoff task.”" = "试试在 Agent 中说：“总结当前 handoff task”";
-"Organize by project. Click to pick up where you left off." = "按项目整理，点击继续上次对话";
+"Start an agent with a task. Try saying: “Summarize the task.”" = "以task启动agent，试试说：“总结task”";
+"Click to resume your last session." = "点击继续上次会话";
 "Primary sidebar" = "第一侧栏";
 "Manage handoff tasks" = "管理 Handoff 任务";
 "Continue local CLI sessions" = "继续本机 CLI 会话";
