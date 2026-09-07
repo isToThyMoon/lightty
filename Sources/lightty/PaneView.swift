@@ -224,6 +224,52 @@ final class PaneView: NSView {
         return pane
     }
 
+    // MARK: - 会话快照（重启恢复）
+
+    /// 本 pane 的快照：名字、shell cwd、任务绑定、agent 会话（来自 hook 最后一发状态）。
+    func snapshot() -> PaneSnapshot {
+        let status = PaneStatusStore.shared.status(for: dragIdentifier)
+        return PaneSnapshot(
+            name: header.title,
+            workingDirectory: terminal.currentWorkingDirectory,
+            taskFile: taskFileURL?.path,
+            agent: status?.agent,
+            sessionID: status?.sessionID,
+            agentCWD: status?.cwd,
+            // 收到 SessionEnd = 用户退出了 agent；其余任何事件（含旧 hook 不带 event）
+            // 都视为会话还在
+            agentAlive: status.map { $0.event != "SessionEnd" } ?? false)
+    }
+
+    /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
+    /// 输入敲进去（此时 cwd 取 agent 自报目录——会话按项目目录归档，换目录找不到）；
+    /// 任务文件还在就重新绑定；名字原样回填。目录/文件已不存在则各自退回默认。
+    static func restored(from snapshot: PaneSnapshot) -> PaneView {
+        var configuration = TerminalSurfaceConfiguration()
+        let resume = AgentResume.command(
+            agent: snapshot.agent, sessionID: snapshot.sessionID, alive: snapshot.agentAlive)
+        let preferred = (resume != nil ? snapshot.agentCWD : nil) ?? snapshot.workingDirectory
+        if let directory = preferred, Self.isDirectory(directory) {
+            configuration.workingDirectory = directory
+        }
+        configuration.initialInput = resume
+        let pane = PaneView(surfaceConfiguration: configuration)
+        pane.header.title = snapshot.name
+        if let path = snapshot.taskFile {
+            let url = URL(fileURLWithPath: path)
+            if let task = try? AppState.shared?.taskStore.load(at: url) {
+                pane.bind(to: url, name: task.name)
+            }
+        }
+        return pane
+    }
+
+    private static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+
     // MARK: - 身份面板（灵动岛式展开）
 
     private var identityPanel: PaneIdentityPanel?

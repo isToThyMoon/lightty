@@ -30,6 +30,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private var tabStripHeightConstraint: NSLayoutConstraint?
     private var tabs: [TerminalTab] = []
     private var activeTabIndex = 0
+    /// 会话恢复出的窗口：frame 来自快照，不再由 core 的 INITIAL_SIZE 重设。
+    var suppressesInitialSize = false
+    /// 首帧侧栏布局（默认 task 开、标签页栏关；恢复时按快照）
+    private var initialTaskPanelOpen = true
+    private var initialTabSidebarOpen = false
+    /// 恢复中的快照：frame 与分隔线比例要等侧栏就位后再应用（侧栏展开会改布局，
+    /// 先设 frame 会被改回默认宽）。
+    private var pendingRestore: WindowSnapshot?
     private var activeTab: TerminalTab? {
         tabs.indices.contains(activeTabIndex) ? tabs[activeTabIndex] : nil
     }
@@ -178,9 +186,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let window else { return }
             self.installTitlebarAccessory(on: window)
             self.updateWindowTitle(for: self.activePane)
-            // 默认布局：task 侧栏（核心）打开，标签页侧栏收起。
-            self.openTaskPanel()
+            // 默认布局：task 侧栏（核心）打开，标签页侧栏收起；恢复的窗口按快照
+            // （不做滑入动画，随后一次性落 frame 和分隔线比例）。
+            let restoring = self.pendingRestore != nil
+            if self.initialTabSidebarOpen { self.openTabSidebar(animated: false) }
+            if self.initialTaskPanelOpen { self.openTaskPanel(animated: !restoring) }
             self.installTabEdgeControl()
+            if let snapshot = self.pendingRestore {
+                self.pendingRestore = nil
+                self.finishRestore(snapshot)
+            }
         }
     }
 
@@ -245,6 +260,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 标题栏那一枚隐藏（否则会落在卡片里的红绿灯旁边、与头部行按钮重复）。
     private func updateSidebarButtonState() {
         sidebarButton?.isHidden = taskPanel != nil || settingsView != nil
+        SessionStore.shared.scheduleSave()  // task 卡片开合入快照
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -342,11 +358,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// core `new_tab`：当前窗口追加一个 tab（标签页 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
-        emptyStateView?.isHidden = true  // 有标签页了，收起空态占位
         if installPane { install(pane: initialPane) }
+        appendTab(root: initialPane, select: select)
+    }
+
+    /// 新标签页的公共尾巴：root 可以是单 pane，也可以是恢复流程已经装好的整棵分屏树。
+    @discardableResult
+    private func appendTab(root: NSView, select: Bool, title: String? = nil) -> TerminalTab {
+        emptyStateView?.isHidden = true  // 有标签页了，收起空态占位
         let tab = TerminalTab()
         Self.tabCounter += 1
-        tab.title = L("Tab %d", Self.tabCounter)
+        tab.title = title ?? L("Tab %d", Self.tabCounter)
         contentHost.addSubview(tab.container)
         NSLayoutConstraint.activate([
             tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -355,13 +377,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             tab.container.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
         ])
         tabs.append(tab)
-        setRoot(initialPane, in: tab)
+        setRoot(root, in: tab)
         if select {
             selectTab(at: tabs.count - 1)
         } else {
             tab.container.isHidden = tabs.count > 1
             refreshTabStrip()
         }
+        return tab
     }
 
     func selectTab(at index: Int) {
@@ -509,6 +532,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
         }
         tabSidebar?.reload()
+        SessionStore.shared.scheduleSave()
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -593,6 +617,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let pane else { return }
             self.tabSidebar?.applyWorkingDirectory(
                 directory, for: pane.dragIdentifier)
+            SessionStore.shared.scheduleSave()
         }
     }
 
@@ -1357,7 +1382,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         animateSidebarLayout(targets)
     }
 
-    private func closeTaskPanel() {
+    private func closeTaskPanel(animated: Bool = true) {
         guard let panel = taskPanel else { return }
         taskPanel = nil
         updateSidebarButtonState()
@@ -1374,6 +1399,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         if let tabEdgeLeadingConstraint {
             targets.append((tabEdgeLeadingConstraint, tabSidebarOpenX))
         }
+        guard animated else {
+            stopSidebarAnimationDriver()
+            targets.forEach { $0.0.constant = $0.1 }
+            panel.removeFromSuperview()
+            window?.contentView?.superview?.layoutSubtreeIfNeeded()
+            return
+        }
         animateSidebarLayout(targets) { [weak self] in
             panel.removeFromSuperview()
             self?.activePane?.focusTerminal()
@@ -1386,6 +1418,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 关着：展开钮吸在主区左缘中点（task 卡片开着时就是卡片右侧的让位线），
     /// 默认低存在感、鼠标靠近边缘带才增强。侧栏开/关时重建。
     private func installTabEdgeControl() {
+        SessionStore.shared.scheduleSave()  // 标签页栏开合入快照
         guard let themeFrame = window?.contentView?.superview else { return }
         tabEdgeControl?.removeFromSuperview()
         tabEdgeControl = nil
@@ -1439,6 +1472,122 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabEdgeLeadingConstraint = leading
     }
 
+    // MARK: - 会话快照（重启恢复）
+
+    /// 本窗口的快照；没有标签页（空态）→ nil，不值得恢复。
+    func snapshot() -> WindowSnapshot? {
+        let tabSnapshots = tabs.compactMap { tab -> TabSnapshot? in
+            guard let root = tab.rootView, let node = captureNode(root) else { return nil }
+            return TabSnapshot(title: tab.title, root: node)
+        }
+        guard !tabSnapshots.isEmpty else { return nil }
+        return WindowSnapshot(
+            frame: window?.frame,
+            activeTabIndex: min(max(activeTabIndex, 0), tabSnapshots.count - 1),
+            tabs: tabSnapshots,
+            taskPanelOpen: taskPanel != nil,
+            tabSidebarOpen: tabSidebar != nil)
+    }
+
+    private func captureNode(_ view: NSView) -> SplitNodeSnapshot? {
+        if let pane = view as? PaneView { return .pane(pane.snapshot()) }
+        guard let split = view as? NSSplitView else { return nil }
+        let children = split.arrangedSubviews.compactMap(captureNode)
+        guard children.count == split.arrangedSubviews.count, !children.isEmpty else { return nil }
+        if children.count == 1 { return children[0] }
+        let sizes = split.arrangedSubviews.map { axisSize($0, vertical: split.isVertical) }
+        let total = sizes.reduce(0, +)
+        let fractions = total > 0
+            ? sizes.map { Double($0 / total) }
+            : Array(repeating: 1.0 / Double(children.count), count: children.count)
+        return .split(vertical: split.isVertical, fractions: fractions, children: children)
+    }
+
+    /// 按快照重建整窗：第一个标签页的树序首叶作 initialPane 走常规 init，
+    /// 其余叶子与分屏树、其他标签页随后装上；frame、活跃标签页、侧栏开合一并回填。
+    convenience init(restoring snapshot: WindowSnapshot) {
+        let firstTab = snapshot.tabs[0]
+        let initialPane = PaneView.restored(from: firstTab.root.firstLeaf)
+        self.init(initialPane: initialPane)
+        suppressesInitialSize = true
+        initialTaskPanelOpen = snapshot.taskPanelOpen
+        initialTabSidebarOpen = snapshot.tabSidebarOpen
+
+        // 标签页 0：init 已把 initialPane 挂成树根；是分屏树时摘下来重新装进树里
+        tabs[0].title = firstTab.title
+        if case .split = firstTab.root {
+            initialPane.removeFromSuperview()
+            tabs[0].rootView = nil
+            var reuse: PaneView? = initialPane
+            setRoot(buildNode(firstTab.root, reuse: &reuse), in: tabs[0])
+        }
+        for tabSnapshot in snapshot.tabs.dropFirst() {
+            var reuse: PaneView? = nil
+            let root = buildNode(tabSnapshot.root, reuse: &reuse)
+            appendTab(root: root, select: false, title: tabSnapshot.title)
+        }
+        selectTab(at: min(snapshot.activeTabIndex, tabs.count - 1))
+        pendingRestore = snapshot  // frame / 比例在 init 的首帧异步块里、侧栏就位后落
+    }
+
+    /// 侧栏就位后：落窗口 frame（仍在某个屏幕上才用）、摆分隔线比例、显形。
+    private func finishRestore(_ snapshot: WindowSnapshot) {
+        guard let window else { return }
+        if let frame = snapshot.frame,
+           NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
+            window.setFrame(frame, display: true)
+        }
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        for (tab, tabSnapshot) in zip(tabs, snapshot.tabs) {
+            if let root = tab.rootView { applyFractions(root, tabSnapshot.root) }
+        }
+        revealWindowIfNeeded()  // 恢复窗不等 INITIAL_SIZE
+    }
+
+    /// 递归建树。`reuse` 是已经存在（且已 install）的 pane，树序第一个叶子用它。
+    private func buildNode(_ node: SplitNodeSnapshot, reuse: inout PaneView?) -> NSView {
+        switch node {
+        case .pane(let paneSnapshot):
+            if let existing = reuse {
+                reuse = nil
+                return existing
+            }
+            let pane = PaneView.restored(from: paneSnapshot)
+            install(pane: pane)
+            return pane
+        case .split(let vertical, _, let children):
+            let split = makeSplit(vertical: vertical)
+            for child in children {
+                let view = buildNode(child, reuse: &reuse)
+                view.translatesAutoresizingMaskIntoConstraints = false
+                split.addArrangedSubview(view)
+            }
+            return split
+        }
+    }
+
+    private func applyFractions(_ view: NSView, _ node: SplitNodeSnapshot) {
+        guard case .split(_, let fractions, let children) = node,
+              let split = view as? NSSplitView,
+              fractions.count == children.count,
+              split.arrangedSubviews.count == children.count else { return }
+        split.layoutSubtreeIfNeeded()
+        let total = axisSize(split, vertical: split.isVertical)
+            - CGFloat(children.count - 1) * split.dividerThickness
+        if total > 0 {
+            var position: CGFloat = 0
+            for index in 0..<(children.count - 1) {
+                position += CGFloat(fractions[index]) * total
+                split.setPosition(position, ofDividerAt: index)
+                position += split.dividerThickness
+            }
+            split.layoutSubtreeIfNeeded()
+        }
+        for (child, childNode) in zip(split.arrangedSubviews, children) {
+            applyFractions(child, childNode)
+        }
+    }
+
     // MARK: - 设置页（整窗覆盖）
 
     func showSettings(page: SettingsView.Page = .appearance) {
@@ -1476,6 +1625,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let themeFrame = window?.contentView?.superview else { return }
         settingsWidthConstraint?.constant = themeFrame.bounds.width
+        SessionStore.shared.scheduleSave()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        SessionStore.shared.scheduleSave()
     }
 
     func hideSettings() {
@@ -1570,7 +1724,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        let others = AppState.shared.windowControllers.filter { $0 !== self }
+        if others.isEmpty {
+            // 最后一个窗口：关窗即退出，此刻的现场就是下次启动要恢复的会话。
+            // 必须在 pane 树拆掉之前定格，并防止随后的 applicationWillTerminate
+            // 用空窗口列表把它覆盖掉。
+            let windows = [snapshot()].compactMap { $0 }
+            SessionStore.shared.freeze(with: SessionSnapshot(windows: windows))
+        }
         AppState.shared.windowControllers.removeAll { $0 === self }
+        // 主动关掉其中一个窗口 = 不要它了：快照只留其余窗口
+        if !others.isEmpty { SessionStore.shared.saveNow() }
         // 整窗的绑定 pane 一起消失，其他窗口的侧栏活跃态需要跟着退
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
     }

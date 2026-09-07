@@ -21,6 +21,9 @@ struct TerminalSurfaceConfiguration {
     /// 全局环境里塞东西。`inheriting` 初始化器不复制本字段——新 pane 必须拿到
     /// 属于自己的 id，继承反而是错的。
     var envVars: [String: String] = [:]
+    /// shell 起来后由 libghostty 写进 pty 的首段输入（会话恢复用它自动敲
+    /// `claude --resume <id>`）。`inheriting` 不复制：只有恢复出的 pane 才带。
+    var initialInput: String?
 
     init() {}
 
@@ -60,6 +63,7 @@ struct TerminalSurfaceConfiguration {
         }
 
         if let workingDirectory { config.working_directory = borrow(workingDirectory) }
+        if let initialInput { config.initial_input = borrow(initialInput) }
 
         var pairs = envVars.map {
             ghostty_env_var_s(key: borrow($0.key), value: borrow($0.value))

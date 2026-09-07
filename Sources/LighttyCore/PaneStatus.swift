@@ -51,9 +51,13 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     /// 单行摘要（如文件路径）。**读方必须截断**，长度不可信。
     public let detail: String?
     public let cwd: String?
+    /// 原始 hook 事件名（可选）。`state` 把 SessionStart 与 SessionEnd 都折成 idle，
+    /// 会话恢复（重启后 `--resume`）需要分辨 agent 是「刚开场」还是「已退出」，
+    /// 只有这一个字段能说清。旧 hook 不发该字段 → nil，读方按「未知」处理。
+    public let event: String?
 
     enum CodingKeys: String, CodingKey {
-        case v, ts, state, agent, tool, detail, cwd
+        case v, ts, state, agent, tool, detail, cwd, event
         case sessionID = "session_id"
     }
 
@@ -65,7 +69,8 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         sessionID: String? = nil,
         tool: String? = nil,
         detail: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        event: String? = nil
     ) {
         self.v = v
         self.ts = ts
@@ -75,6 +80,7 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         self.tool = tool
         self.detail = detail
         self.cwd = cwd
+        self.event = event
     }
 
     // MARK: - 编解码

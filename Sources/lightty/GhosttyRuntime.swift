@@ -228,11 +228,16 @@ final class GhosttyRuntime {
             return target.target.surface
         }
 
-        func targetView() -> TerminalSurfaceView? {
+        // 目标视图在回调的同步阶段就解析好：多数动作把真正的工作推到主队列异步块里，
+        // 块执行时 surface 可能已经随 pane 释放（ghostty_surface_free），那时再拿
+        // target 里的裸指针去问 userdata 就是 use-after-free（测试里关窗后崩过）。
+        // 闭包持有的是 Swift 对象强引用，块跑完前视图与其 surface 都活着。
+        let resolvedTargetView: TerminalSurfaceView? = {
             guard let surface = targetSurface(),
                   let userdata = ghostty_surface_userdata(surface) else { return nil }
             return Unmanaged<TerminalSurfaceView>.fromOpaque(userdata).takeUnretainedValue()
-        }
+        }()
+        func targetView() -> TerminalSurfaceView? { resolvedTargetView }
 
         // target surface → (窗口控制器, pane)
         func locate() -> (TerminalWindowController, PaneView)? {
@@ -392,7 +397,8 @@ final class GhosttyRuntime {
                 // 无论是否满足单 pane 单 tab 的调整条件，此刻都必须显形。
                 defer { controller.revealWindowIfNeeded() }
                 guard controller.panes().count == 1,
-                      controller.tabCount == 1 else { return }
+                      controller.tabCount == 1,
+                      !controller.suppressesInitialSize else { return }
                 window.setContentSize(NSSize(
                     width: CGFloat(size.width),
                     height: CGFloat(size.height) + PaneHeaderView.height))

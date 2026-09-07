@@ -179,7 +179,8 @@ let status = PaneStatus(
     // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
     // PostToolUse 的同一份参数只是回声
     detail: event == "PreToolUse" ? detail(from: payload["tool_input"]) : nil,
-    cwd: string(payload["cwd"])
+    cwd: string(payload["cwd"]),
+    event: event
 )
 
 // 一发即走。返回值刻意丢弃：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、

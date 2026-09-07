@@ -44,7 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
         // LIGHTTY_SOCK，agent 随时可能打第一发；socket 没绑好那一发就发进虚空。
         PaneStatusStore.shared.start()
-        let first = AppState.shared.newWindow()
+        // 会话恢复：上次关窗/退出时的窗口、标签页、pane（含命名、cwd、任务绑定、
+        // agent --resume）。没有快照或快照为空才开默认窗口。
+        let restored = SessionStore.shared.load().map(SessionRestorer.restore) ?? []
+        let first = restored.first ?? AppState.shared.newWindow()
+        // 之后任何结构/命名/状态变化都刷快照（节流合并）
+        for name in [Notification.Name.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(scheduleSessionSave), name: name, object: nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
         // 主动引导：装了 agent 却没装 hook 时才弹，且只弹一次（用户按「暂不」后
         // 只走菜单）。推到下一个 runloop tick：蒙层挂在 themeFrame 上，同步调用时
@@ -90,7 +98,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func scheduleSessionSave() {
+        SessionStore.shared.scheduleSave()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        // cmd+Q 等路径窗口还都在，此刻定格会话；关最后一个窗口的路径已在
+        // windowWillClose 定格过（frozen），这里不会覆盖。
+        SessionStore.shared.saveNow()
         // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
         // 但干净退出不该给下一次启动留活。
         PaneStatusStore.shared.stop()

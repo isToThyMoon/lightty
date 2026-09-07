@@ -318,7 +318,8 @@ final class PaneStatusStore {
             sessionID: status.sessionID,
             tool: status.tool,
             detail: status.detail,
-            cwd: status.cwd
+            cwd: status.cwd,
+            event: status.event
         )
     }
 
