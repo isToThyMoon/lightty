@@ -138,14 +138,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(makeItem(L("Settings…"), #selector(showSettings)))
         appMenu.addItem(.separator())
-        appMenu.addItem(makeItem(L("Agent status hooks"), #selector(showHookSetup)))
-        let themeToggle = NSMenuItem(
-            title: L("Use Lightty Theme"),
-            action: #selector(toggleBuiltInTheme(_:)),
-            keyEquivalent: "")
-        themeToggle.target = self
-        themeToggle.state = TerminalThemePreference.usesBuiltInTheme() ? .on : .off
-        appMenu.addItem(themeToggle)
         let fontDownload = NSMenuItem(
             title: L("Download Maple Mono NF CN…"),
             action: #selector(downloadLighttyFont(_:)),
@@ -244,13 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
     @objc private func toggleTabSidebar() {
         AppState.shared.keyWindowController?.toggleTabSidebar()
-    }
-
-    @objc private func toggleBuiltInTheme(_ sender: NSMenuItem) {
-        let enabled = !TerminalThemePreference.usesBuiltInTheme()
-        TerminalThemePreference.setUsesBuiltInTheme(enabled)
-        sender.state = enabled ? .on : .off
-        GhosttyRuntime.shared.reloadGlobalConfig()
     }
 
     @objc private func downloadLighttyFont(_ sender: NSMenuItem) {
@@ -380,10 +365,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { alert.runModal() }
     }
 
-    @objc private func showHookSetup() {
-        guard let controller = AppState.shared.keyWindowController else { return }
-        HookSetupOverlay.present(in: controller)
-    }
 }
 
 extension AppDelegate: NSMenuDelegate {

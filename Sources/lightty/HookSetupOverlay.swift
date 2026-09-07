@@ -13,7 +13,7 @@ import AppKit
 /// 用蒙层而不是 NSWindow：独立窗口对一次性引导太重（要管层级、聚焦、多窗重复），
 /// 而 app 已经有成熟的窗内浮层语言（搜索面板、灵动岛）。
 final class HookSetupOverlay: NSView {
-    /// 主动弹过一次就不再弹。菜单项是唯一的回头路，文案里必须告诉用户。
+    /// 主动弹过一次就不再弹，之后可从设置的通用页重新打开。
     private static let dismissedKey = "lightty.hookSetup.dismissed"
 
     var onDismiss: (() -> Void)?
@@ -33,7 +33,7 @@ final class HookSetupOverlay: NSView {
 
     // MARK: - 入口
 
-    /// 菜单项走这里：无条件展示，忽略"已忽略"标记。
+    /// 无条件展示，忽略"已忽略"标记。
     static func present(in controller: TerminalWindowController) {
         controller.presentHookSetup()
     }
@@ -102,7 +102,7 @@ final class HookSetupOverlay: NSView {
         rootStack.addArrangedSubview(detailsStack)
 
         let footerHint = NSTextField(wrappingLabelWithString: L(
-            "You can reopen this any time from the lightty menu."))
+            "You can reopen this any time from Settings > General."))
         footerHint.font = .systemFont(ofSize: 10.5)
         footerHint.textColor = ShellStyle.tertiaryText
 
@@ -287,7 +287,7 @@ final class HookSetupOverlay: NSView {
     /// 这里另搞一套只会让人以为坏了）。卡内点击被吞掉，不穿透到终端。
     ///
     /// 早先刻意做成「卡外不关闭」，怕误触后关掉就再也不见。这个顾虑不成立：
-    /// 菜单项随时能重开，卡片底部也明写了这一句。
+    /// 设置页随时能重开，卡片底部也明写了这一句。
     override func mouseDown(with event: NSEvent) {
         let point = card.convert(event.locationInWindow, from: nil)
         guard !card.bounds.contains(point) else { return }
@@ -297,7 +297,7 @@ final class HookSetupOverlay: NSView {
     override func cancelOperation(_ sender: Any?) { closeTapped() }
 
     @objc private func closeTapped() {
-        // 主动弹过就记下，之后只走菜单
+        // 主动弹过就记下，之后从设置打开
         UserDefaults.standard.set(true, forKey: Self.dismissedKey)
         onDismiss?()
     }

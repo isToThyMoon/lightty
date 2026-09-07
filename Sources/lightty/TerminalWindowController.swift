@@ -1607,6 +1607,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
               let themeFrame = window.contentView?.superview else { return }
         let view = SettingsView(page: page)
         view.onDismiss = { [weak self] in self?.hideSettings() }
+        view.onShowHookSetup = { [weak self] in self?.presentHookSetup() }
         // 垫在标题栏容器之下：红绿灯仍在页面左上；盖住其余一切（侧栏、终端）
         if let titlebar = titlebarContainer(in: window, themeFrame: themeFrame) {
             themeFrame.addSubview(view, positioned: .below, relativeTo: titlebar)
@@ -1737,7 +1738,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func dismissHookSetup() {
         hookSetupOverlay?.removeFromSuperview()
         hookSetupOverlay = nil
-        activePane?.focusTerminal()
+        if let settingsView {
+            window?.makeFirstResponder(settingsView)
+        } else {
+            activePane?.focusTerminal()
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

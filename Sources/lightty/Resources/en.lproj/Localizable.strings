@@ -136,7 +136,8 @@
 
 /* agent 状态：安装引导蒙层 */
 "Know when your agents finish" = "Know when your agents finish";
-"You can reopen this any time from the lightty menu." = "You can reopen this any time from the lightty menu.";
+"You can reopen this any time from Settings > General." = "You can reopen this any time from Settings > General.";
+"Manage…" = "Manage…";
 "Not now" = "Not now";
 "Done" = "Done";
 

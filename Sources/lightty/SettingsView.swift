@@ -25,6 +25,7 @@ final class SettingsView: NSView {
     static let sidebarWidth: CGFloat = 240
 
     var onDismiss: (() -> Void)?
+    var onShowHookSetup: (() -> Void)?
     private(set) var currentPage: Page
 
     private let sidebar = ShellBackdropView(fill: ShellStyle.sidebarBackground)
@@ -133,7 +134,7 @@ final class SettingsView: NSView {
     /// 语言切换后整页文案重建（导航 + 当前页），选中页保持；重点色变了只重画当前页。
     @objc private func preferencesDidChange(_ note: Notification) {
         switch PreferenceKind.from(note) {
-        case .accent:
+        case .accent, .terminalTheme:
             showPage(currentPage)
             return
         case .language:
@@ -265,7 +266,26 @@ final class SettingsView: NSView {
         hint.textColor = ShellStyle.tertiaryText
         column.addArrangedSubview(hint)
         hint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        column.setCustomSpacing(28, after: hint)
+
+        let terminalGroup = SettingsGroup()
+        let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
+        toggle.onChange = { on in
+            TerminalThemePreference.setUsesBuiltInTheme(on)
+            GhosttyRuntime.shared.reloadGlobalConfig()
+            PreferenceKind.terminalTheme.post()
+        }
+        terminalGroup.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
+        let hooksButton = NSButton(title: L("Manage…"), target: self,
+                                   action: #selector(showHookSetup))
+        hooksButton.bezelStyle = .rounded
+        hooksButton.font = .systemFont(ofSize: 12)
+        terminalGroup.addRow(title: L("Agent status hooks"), control: hooksButton)
+        column.addArrangedSubview(terminalGroup)
+        terminalGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     }
+
+    @objc private func showHookSetup() { onShowHookSetup?() }
 
     // —— Appearance ——
 
@@ -303,20 +323,6 @@ final class SettingsView: NSView {
         accentGroup.addRow(title: L("Accent"), control: accentDropdown)
         column.addArrangedSubview(accentGroup)
         accentGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-        column.setCustomSpacing(36, after: accentGroup)
-
-        column.addArrangedSubview(sectionLabel(L("Terminal")))
-        column.setCustomSpacing(14, after: column.arrangedSubviews.last!)
-        let group = SettingsGroup()
-        let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
-        toggle.onChange = { on in
-            TerminalThemePreference.setUsesBuiltInTheme(on)
-            GhosttyRuntime.shared.reloadGlobalConfig()
-            PreferenceKind.terminalTheme.post()
-        }
-        group.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
-        column.addArrangedSubview(group)
-        group.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     }
 
     private func selectAppearance(_ option: AppearancePreference) {

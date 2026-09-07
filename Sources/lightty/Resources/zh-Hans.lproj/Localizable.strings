@@ -140,7 +140,8 @@
 
 /* agent 状态：安装引导蒙层 */
 "Know when your agents finish" = "Agent 跑完了告诉你";
-"You can reopen this any time from the lightty menu." = "随时可以从 lightty 菜单里重新打开。";
+"You can reopen this any time from Settings > General." = "随时可以从「设置 > 通用」里重新打开。";
+"Manage…" = "管理…";
 "Not now" = "暂不";
 "Done" = "完成";
 
