@@ -26,7 +26,11 @@ final class SidebarControlsTests: XCTestCase {
 
         // TerminalWindowController finishes installing its initial chrome on the
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        // 轮询而不是固定睡 50ms：整套测试跑起来主队列可能排着别的事，固定时长会偶发。
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while themeFrame.subviews.first(where: { $0 is TaskSidebar }) == nil, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
         themeFrame.layoutSubtreeIfNeeded()
 
         // 默认打开 task 侧栏。

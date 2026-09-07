@@ -203,6 +203,8 @@ final class TabColumnView: NSView {
                 if wasActive {
                     self.toggleTabCollapse(tabID)
                 } else {
+                    // 切到一个折叠着的标签页时顺手展开：选中它就是要看它的 pane
+                    self.collapsedTabIDs.remove(tabID)
                     self.controller?.selectTab(at: index)
                 }
             }
