@@ -110,7 +110,7 @@ enum LanguagePreference: String, CaseIterable {
     }
 }
 
-/// 重点色：用户可选的命名色（ChatGPT 桌面版同款菜单）。驱动 ShellStyle.accent；
+/// 重点色：用户可选的命名色（ChatGPT 桌面版同款菜单），出厂粉色。驱动 ShellStyle.accent；
 /// 带色相的档位同时接管导航色（标签页侧栏活跃态），默认/白两档无色相时导航色
 /// 退回内置蔚蓝，保证「你在哪」始终扫得到。
 enum AccentPreference: String, CaseIterable {
@@ -118,8 +118,11 @@ enum AccentPreference: String, CaseIterable {
 
     static let defaultsKey = "lightty.accent"
 
+    /// 未设置时的出厂值：粉色
+    static let factory: AccentPreference = .pink
+
     static func current(in defaults: UserDefaults = .standard) -> AccentPreference {
-        defaults.string(forKey: defaultsKey).flatMap(AccentPreference.init(rawValue:)) ?? .default
+        defaults.string(forKey: defaultsKey).flatMap(AccentPreference.init(rawValue:)) ?? factory
     }
 
     static func set(_ value: AccentPreference, in defaults: UserDefaults = .standard) {

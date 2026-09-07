@@ -83,6 +83,8 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertNotEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "无色相：导航退回蔚蓝")
         XCTAssertFalse(AccentPreference.white.hasHue)
         XCTAssertEqual(AccentPreference.allCases.count, 8)
+        UserDefaults.standard.removeObject(forKey: AccentPreference.defaultsKey)
+        XCTAssertEqual(AccentPreference.current(), .pink, "出厂重点色是粉色")
     }
 
     /// 自绘控件：下拉标题跟随选中项并回调；开关翻转并回调。
