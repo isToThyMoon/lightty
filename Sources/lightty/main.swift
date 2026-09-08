@@ -1,5 +1,32 @@
 import AppKit
+import Darwin
 import GhosttyKit
+
+// 抬高本进程的打开文件数上限（RLIMIT_NOFILE）。macOS 下 GUI 应用默认软限只有 256，
+// 每个 pane 的 shell 与其子进程（codex / claude）都继承这个软限；恢复时多个 agent
+// 同时启动、各自读一堆 skill 文件，很快就 EMFILE（"Too many open files"）。上游
+// Ghostty 在自己的 main 里做（os/file.zig fixMaxFiles），但 lightty 用的是自己的
+// main，必须在这里补上，且要在任何 surface / 子进程 spawn 之前。
+func raiseOpenFileLimit() {
+    // RLIM_INFINITY 是 C 宏，Swift 导不进来；按 <sys/resource.h> 定义手写：(1<<63)-1。
+    let infinity = rlim_t(1) << 63 - 1
+    var limit = rlimit()
+    guard getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < limit.rlim_max else { return }
+    if limit.rlim_max != infinity {
+        limit.rlim_cur = limit.rlim_max
+        _ = setrlimit(RLIMIT_NOFILE, &limit)
+        return
+    }
+    // 硬限无上界：二分找内核实际接受的最大软限（受 kern.maxfilesperproc 约束）。
+    var low = limit.rlim_cur
+    var high: rlim_t = 1 << 20
+    while low + 1 < high {
+        var trial = limit
+        trial.rlim_cur = low + (high - low) / 2
+        if setrlimit(RLIMIT_NOFILE, &trial) == 0 { low = trial.rlim_cur } else { high = trial.rlim_cur }
+    }
+}
+raiseOpenFileLimit()
 
 // Must precede FilePreferences.shared, AppDelegate, workspace restoration and all terminals.
 // The optional diagnostic flag uses this same startup gate without opening the GUI.
