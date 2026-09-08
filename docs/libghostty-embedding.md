@@ -97,7 +97,10 @@ appearance 强制。
 
 Terminal adapter 回归：运行 `scripts/check-terminal-adapter-parity.sh`。它拒绝任何
 AppKit 非空快捷键和 surface Home cwd override，并钉住 inherited config、IME、
-modifier、key-equivalent、display/occlusion 及常用 core host action 桥。完整本地验收：
+modifier、key-equivalent、display/occlusion 及常用 core host action 桥；tab 一侧钉的是
+窗口内自绘模型（`tabbingMode = .disallowed`，goto/close 走窗口控制器），退回原生
+tab group 会被拒。脚本 `set -e`，第一条不过就停——修完一条要重跑到 PASS，别把后面
+的检查一直遮着。完整本地验收：
 
 ```sh
 swift test

@@ -79,14 +79,21 @@ for action in \
     require_source "$action" "$RUNTIME" "missing core host action: $action"
 done
 
-# `new_tab` and `new_split` are distinct Ghostty host actions. A tab is a native
-# macOS tab group; it must never be flattened into the split tree again.
-require_source 'tabbingMode[[:space:]]*=[[:space:]]*\.preferred' "$WINDOW" \
-    "TerminalWindow must opt into native macOS tabs"
+# `new_tab` and `new_split` are distinct Ghostty host actions. A tab is one window's
+# self-drawn container of a pane tree (bc0514b: one window, one sidebar, N tabs); the
+# native macOS tab group would group several NSWindows behind a full-width tab bar and
+# contradict that sidebar. Neither concept may be flattened into the split tree.
+require_source 'tabbingMode[[:space:]]*=[[:space:]]*\.disallowed' "$WINDOW" \
+    "TerminalWindow must opt out of the native macOS tab group"
 require_source 'AppState\.shared\.newTab' "$RUNTIME" \
-    "core new_tab is not creating a native tab"
-require_source 'tabGroup\?\.windows' "$RUNTIME" \
-    "goto/close tab actions are not operating on the native tab group"
+    "core new_tab is not creating a tab in the window's own tab model"
+require_source 'controller\.gotoTab' "$RUNTIME" \
+    "core goto_tab is not driving the window's own tab model"
+require_source 'controller\.closeTabs' "$RUNTIME" \
+    "core close_tab is not driving the window's own tab model"
+if rg -n 'tabGroup|tabbingMode[[:space:]]*=[[:space:]]*\.preferred' "$SOURCES" | rg -v 'tabbingMode[[:space:]]*=[[:space:]]*\.disallowed'; then
+    fail "tabs must not fall back to the native macOS tab group"
+fi
 if rg -n 'newTaskPaneRight' "$SOURCES"; then
     fail "new_tab must not be remapped to a right-side split"
 fi
