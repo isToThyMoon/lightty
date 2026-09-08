@@ -128,6 +128,50 @@ final class PrimarySidebarTests: XCTestCase {
         }
     }
 
+    /// 按住一行时 AppKit 会把它报成「深色重点底」，行里的模板图标和 SF Symbol 随之
+    /// 反白——而这套侧栏的选中底一直是浅灰，图标就此消失。文字不受影响（各有写死的
+    /// 颜色），所以只能盯图标。
+    func testPressedRowKeepsItsIconsVisibleOnTheLightSelectionFill() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("pressed-row-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
+                                     providers: [FixtureCatalog(root: root)])
+        let content = SessionsSidebarContent(library: library)
+        content.activate()
+        spin { library.organizationReady && !library.loading }
+        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+        let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 3))
+        let cell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 3) as? NSTableCellView)
+        row.frame = NSRect(x: 0, y: 0, width: 260, height: 56)
+        cell.frame = row.bounds
+        row.addSubview(cell)
+        row.appearance = NSAppearance(named: .aqua)
+        row.isSelected = true
+        row.isEmphasized = true
+        row.layoutSubtreeIfNeeded()
+        XCTAssertEqual(row.interiorBackgroundStyle, .normal,
+                       "Light selection fill must never ask AppKit to invert the row's contents")
+        let icon = try XCTUnwrap(descendants(cell).compactMap { $0 as? NSImageView }
+            .first { $0.image != nil && !$0.isHidden })
+        let bitmap = try XCTUnwrap(row.bitmapImageRepForCachingDisplay(in: row.bounds))
+        row.cacheDisplay(in: row.bounds, to: bitmap)
+        // 位图按屏幕缩放取样，且原点在左上；视图坐标是左下，得换算。
+        let scale = CGFloat(bitmap.pixelsWide) / row.bounds.width
+        let frame = icon.convert(icon.bounds, to: row)
+        var darkest = 1.0
+        for x in Int(frame.minX * scale)..<Int(frame.maxX * scale) {
+            for y in Int((row.bounds.height - frame.maxY) * scale)..<Int((row.bounds.height - frame.minY) * scale)
+            where bitmap.pixelsWide > x && bitmap.pixelsHigh > y {
+                if let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) {
+                    darkest = min(darkest, Double(colour.brightnessComponent))
+                }
+            }
+        }
+        XCTAssertLessThan(darkest, 0.7, "Agent icon washed out to white on the pressed row")
+    }
+
     func testProjectRowsAreDisclosureOnlyNotSelectable() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("project-selection-\(UUID())")

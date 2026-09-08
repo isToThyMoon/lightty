@@ -77,6 +77,7 @@
 "Tabs" = "标签页";
 "Close tab" = "关闭标签页";
 "Collapse tab" = "折叠标签页";
+"Collapsed tab" = "已收起的标签页";
 "Expand tab" = "展开标签页";
 "Close pane" = "关闭 pane";
 "New tab" = "新标签页";

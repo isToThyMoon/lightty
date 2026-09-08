@@ -457,9 +457,12 @@ class ShellDropTargetRowView: NSTableRowView {
     // Section headers are never selectable. Interactive subclasses own selection drawing.
     override func drawSelection(in dirtyRect: NSRect) {}
 
-    override var interiorBackgroundStyle: NSView.BackgroundStyle {
-        isTargetForDropOperation ? .normal : super.interiorBackgroundStyle
-    }
+    // 选中、按住、拖拽目标，本类一律画成浅色圆角底，从来不是 AppKit 那种深色重点底。
+    // `.emphasized` 的意思正是「底色很深，里面的东西请反白」——NSTableRowView 在行被
+    // 选中且表处于 emphasized（按住一行就是）时会这么报，于是行里的模板图标和 SF
+    // Symbol 全被刷成白色，在浅底上就此消失（文字不受影响，它们有各自写死的颜色）。
+    // 这里的内部永远是浅底，所以永远是 `.normal`。
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 
     override func drawDraggingDestinationFeedback(in dirtyRect: NSRect) {
         guard isTargetForDropOperation else { return }

@@ -62,6 +62,46 @@ final class SidebarScrollHoverTests: XCTestCase {
         XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
     }
 
+    /// 标签页行前只有一个图标，hover 也不换成折叠箭头——同一个位置换图标会让人
+    /// 以为那里多了一个控件。折叠仍然点它触发，说明留在 tooltip 里。
+    func testTabRowKeepsOneGlyphAndNeverSwapsInAChevron() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        let controller = TerminalWindowController()
+        defer { controller.window?.close() }
+        let column = TabColumnView()
+        controller.window!.contentView!.addSubview(column)
+        column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
+        column.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+        ShellHoverGate.release(in: nil)
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        let row = try XCTUnwrap(descendants(column).first { $0 is SidebarHoverRow })
+        let glyph = try XCTUnwrap(descendants(row).compactMap { $0 as? NSButton }
+            .first { $0.toolTip == L("Collapse tab") || $0.toolTip == L("Expand tab") })
+        XCTAssertEqual(glyph.image?.accessibilityDescription, L("Tab"))
+        row.sidebarHoverEntered()
+        column.layoutSubtreeIfNeeded()
+        XCTAssertEqual(glyph.image?.accessibilityDescription, L("Tab"),
+                       "Hover must not swap the tab glyph for a chevron")
+        XCTAssertFalse(glyph.isHidden)
+        // 展开/收起靠同一形状的空心与实心区分，仍然只有一个图标。
+        glyph.performClick(nil)
+        column.layoutSubtreeIfNeeded()
+        let collapsed = try XCTUnwrap(descendants(column).compactMap { $0 as? NSButton }
+            .first { $0.toolTip == L("Expand tab") })
+        XCTAssertEqual(collapsed.image?.accessibilityDescription, L("Collapsed tab"))
+        collapsed.performClick(nil)
+        column.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try XCTUnwrap(descendants(column).compactMap { $0 as? NSButton }
+            .first { $0.toolTip == L("Collapse tab") }).image?.accessibilityDescription, L("Tab"))
+    }
+
     func testTabAndPaneHoverClearWithoutMouseExitedOnScroll() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

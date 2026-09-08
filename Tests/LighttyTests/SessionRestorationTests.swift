@@ -24,7 +24,9 @@ struct SessionAssociationTests {
         #expect(pane.header.title == "Conversation")
         #expect(pane.header.sessionAgent == agent)
         #expect(AgentSessionIcon.image(for: agent)?.isValid == true)
-        #expect(AgentSessionIcon.image(for: agent)?.isTemplate == true)
+        // Claude 的星芒用品牌橙，不跟随任何前景色；OpenAI 的标识本身是单色，保持
+        // template 由调用方按明暗着色。
+        #expect(AgentSessionIcon.image(for: agent)?.isTemplate == (agent == .codex))
         #expect(pane.snapshot().name == "My terminal")
         pane.refreshSessionTitle(records: [record("Renamed conversation")])
         #expect(pane.header.title == "Renamed conversation")

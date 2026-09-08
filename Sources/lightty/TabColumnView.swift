@@ -653,25 +653,20 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     @objc private func menuTapped() { onMenu?() }
     @objc private func closeTapped() { onClose?() }
 
-    /// Safari 标签页组同款：常态显示容器图标（与「新标签页」按钮同族的
-    /// rectangle 组合），hover 换成折叠 chevron——同一个 18pt 插槽，不吃行宽。
-    /// 折叠态在常态下不单独表达：pane 行消失 + 计数仍在，信息已经够了。
+    /// Safari 标签页组同款：始终显示容器图标（与「新标签页」按钮同族的 rectangle
+    /// 组合）。hover 不换成折叠 chevron——同一个位置换图标只会让人以为多了一个控件。
+    /// 折叠态改用同一形状的实心版表达：空心=展开（看得进去），实心=收起（pane 都
+    /// 收在里面）。形状不变，所以仍然只是「标签页图标」的两种样子。
     private func applyGlyph() {
-        let key = hovered ? "chevron:\(isCollapsed)" : "tab:\(isActive)"
+        let key = "tab:\(isActive):\(isCollapsed)"
         guard key != glyphKey else { return }
         glyphKey = key
-        if hovered {
-            disclosureButton.image = SymbolImages.image(
-                isCollapsed ? "chevron.right" : "chevron.down",
-                pointSize: 8, weight: .semibold,
-                description: isCollapsed ? L("Expand tab") : L("Collapse tab"))
-            disclosureButton.contentTintColor = ShellStyle.secondaryText
-        } else {
-            disclosureButton.image = SymbolImages.image(
-                "rectangle.on.rectangle", pointSize: 10, weight: .medium, description: L("Tab"))
-            disclosureButton.contentTintColor =
-                isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
-        }
+        disclosureButton.image = SymbolImages.image(
+            isCollapsed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle",
+            pointSize: 10, weight: .medium,
+            description: isCollapsed ? L("Collapsed tab") : L("Tab"))
+        disclosureButton.contentTintColor =
+            isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
     }
 
     private func applyFill() {
