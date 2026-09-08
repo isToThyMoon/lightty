@@ -47,15 +47,37 @@ private func summarize(_ raw: String, limit: Int = 80) -> String {
     return String(flat.prefix(limit - 1)) + "…"
 }
 
-/// 尽力而为地认 agent：hook 子进程继承 agent 自己设的环境变量。
+/// 认 agent：证据按可靠程度排序交给 `HookAgentDetection`——父进程链上的二进制名、
+/// `transcript_path` 的路径形状、最后才是环境变量（会从上层会话泄漏）。
 /// 认不出就留空——`agent` 是可选字段，猜错比留空更糟。
 private func detectAgent(payload: [String: Any]) -> String? {
-    let env = ProcessInfo.processInfo.environment
-    if env["CLAUDECODE"] != nil || env["CLAUDE_CODE_ENTRYPOINT"] != nil { return "claude" }
-    if env["CODEX_HOME"] != nil || env["CODEX_SANDBOX"] != nil { return "codex" }
-    // Claude Code 独有的 payload 字段，作为环境变量之外的兜底
-    if payload["transcript_path"] != nil { return "claude" }
-    return nil
+    HookAgentDetection.agent(
+        ancestorExecutablePaths: ancestorExecutablePaths(),
+        transcriptPath: string(payload["transcript_path"]),
+        environment: ProcessInfo.processInfo.environment)
+}
+
+/// 父进程链上每个进程的**可执行文件绝对路径**，最近的在前。走 `sysctl(KERN_PROC_PID)`
+/// 取 ppid、`proc_pidpath` 取路径；任一步失败就到此为止。最多向上 8 层，够穿过
+/// agent → shell → hook 的任何包装，又不会在深层进程树里白跑。
+///
+/// 要整条路径而不是 basename：claude 经 symlink 解析后可执行文件名是版本号
+/// （`.../share/claude/versions/2.1.263`），basename 认不出，但路径里含 `claude` 段。
+private func ancestorExecutablePaths(limit: Int = 8) -> [String] {
+    var paths: [String] = []
+    var pid = getppid()
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE 是算式宏，Swift 导不进来
+    while pid > 1, paths.count < limit {
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { break }
+        paths.append(String(cString: buffer))
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { break }
+        pid = info.kp_eproc.e_ppid
+    }
+    return paths
 }
 
 // MARK: - handoff 注入（§8）
