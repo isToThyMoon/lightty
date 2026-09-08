@@ -31,6 +31,7 @@ final class AppState {
     func newWindow(initialPane: PaneView = PaneView()) -> TerminalWindowController {
         let controller = TerminalWindowController(initialPane: initialPane)
         windowControllers.append(controller)
+        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: controller)
         controller.window?.makeKeyAndOrderFront(nil)
         initialPane.focusTerminal()
         return controller

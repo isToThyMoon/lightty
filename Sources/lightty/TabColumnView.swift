@@ -23,6 +23,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let newTabButton = ShellIconButton(
         symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New tab"),
         target: nil, action: nil)
+    private let clearTabsButton = ShellIconButton(
+        symbol: "ellipsis", accessibilityLabel: L("More actions"), target: nil, action: nil)
     private let scroll = SidebarListScrollView()
     private let table = NSTableView()
     private struct RowItem {
@@ -55,6 +57,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         splitDownButton.action = #selector(splitDown)
         newTabButton.target = self
         newTabButton.action = #selector(newTab)
+        clearTabsButton.target = self
+        clearTabsButton.action = #selector(clearTabs)
 
         let column = NSTableColumn(identifier: .init("tab-tree"))
         table.addTableColumn(column)
@@ -72,7 +76,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
 
-        for v in [sectionLabel, splitRightButton, splitDownButton, newTabButton, scroll] {
+        for v in [sectionLabel, clearTabsButton, splitRightButton, splitDownButton, newTabButton, scroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -80,7 +84,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         NSLayoutConstraint.activate([
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
             newTabButton.topAnchor.constraint(equalTo: topAnchor),
-            newTabButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            newTabButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
             newTabButton.widthAnchor.constraint(equalToConstant: 28),
             newTabButton.heightAnchor.constraint(equalToConstant: 28),
 
@@ -101,6 +105,10 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             sectionLabel.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
             sectionLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
+            clearTabsButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            clearTabsButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
+            clearTabsButton.widthAnchor.constraint(equalToConstant: 28),
+            clearTabsButton.heightAnchor.constraint(equalToConstant: 28),
 
             scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
             // Keep the leading gutter; the shared trailing rail keeps scrolling clear of row actions.
@@ -204,6 +212,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         } else {
             controller?.addTab(initialPane: PaneView())
         }
+    }
+
+    @objc private func clearTabs() {
+        ShellMenuPopover.present(from: clearTabsButton, items: [
+            .action(L("Close all tabs in this window"), destructive: true) { [weak self] in
+                self?.controller?.requestClearTabs()
+            },
+        ])
     }
 
     @objc private func splitRight() {
@@ -332,7 +348,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             workingDirectory: pane.terminal.currentWorkingDirectory)
         paneRow.configure(paneID: pane.dragIdentifier, name: pane.header.title,
             taskName: pane.header.titleOfBoundTask, isActive: isActive,
-            workingDirectory: pane.terminal.currentWorkingDirectory)
+            workingDirectory: pane.terminal.currentWorkingDirectory, sessionAgent: pane.header.sessionAgent)
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
@@ -796,6 +812,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private var bound: Bool
     private var taskName: String?
     private let nameLabel = NSTextField(labelWithString: "")
+    private let agentIcon = NSImageView()
+    private var agentIconWidth: NSLayoutConstraint!
+    private var agentIconGap: NSLayoutConstraint!
     private let taskLabel = NSTextField(labelWithString: "")
     private let directoryLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -876,7 +895,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         statusLabel.setContentHuggingPriority(.required, for: .horizontal)
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        for v in [dotView, closeButton, nameLabel, statusLabel, secondaryStack] {
+        agentIcon.contentTintColor = ShellStyle.primaryText
+        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
+        for v in [dotView, closeButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -895,7 +917,11 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             closeButton.widthAnchor.constraint(equalToConstant: 18),
             closeButton.heightAnchor.constraint(equalToConstant: 18),
 
-            nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
+            agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
+            agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            agentIcon.heightAnchor.constraint(equalToConstant: 12),
+            agentIconWidth,
+            agentIconGap,
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
@@ -931,7 +957,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyFill()
     }
 
-    func configure(paneID: UUID, name: String, taskName: String?, isActive: Bool, workingDirectory: String?) {
+    func configure(paneID: UUID, name: String, taskName: String?, isActive: Bool, workingDirectory: String?, sessionAgent: SessionAgent? = nil) {
         sidebarHoverExited()
         hovered = false
         alphaValue = 1
@@ -943,6 +969,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         terminalWorkingDirectory = workingDirectory
         status = nil
         nameLabel.stringValue = name
+        agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
+        agentIconWidth.constant = sessionAgent == nil ? 0 : 12
+        agentIconGap.constant = sessionAgent == nil ? 0 : 5
         applyDotColor()
         applyStatusLabel()
         applyMetadataLine()

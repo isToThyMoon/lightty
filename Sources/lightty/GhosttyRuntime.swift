@@ -626,6 +626,9 @@ final class GhosttyRuntime {
             return true
 
         case GHOSTTY_ACTION_COMMAND_FINISHED:
+            guard let view = targetView() else { return false }
+            let finishedAt = Date()
+            DispatchQueue.main.async { [weak view] in view?.commandFinished(at: finishedAt) }
             return true
 
         // MARK: - 进度
@@ -810,7 +813,7 @@ final class GhosttyRuntime {
             let trustedSchemes = ["http", "https", "mailto"]
             if !trustedSchemes.contains(url.scheme?.lowercased() ?? "") {
                 DispatchQueue.main.async {
-                    let alert = NSAlert()
+                    let alert = AppBranding.makeAlert()
                     alert.messageText = L("Open terminal link?")
                     alert.informativeText = value
                     alert.alertStyle = .warning
@@ -945,7 +948,7 @@ final class GhosttyRuntime {
         let contents = String(cString: string)
         DispatchQueue.main.async { [weak view] in
             guard let view, let surface = view.surface else { return }
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ
                 ? L("Allow terminal to read the clipboard?")
                 : L("Paste from clipboard?")
@@ -994,7 +997,7 @@ final class GhosttyRuntime {
                 apply()
                 return
             }
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = L("Allow terminal to write to the clipboard?")
             alert.informativeText = String(text.prefix(500))
             alert.alertStyle = .warning

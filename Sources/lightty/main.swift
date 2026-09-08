@@ -47,11 +47,12 @@ do {
     fputs("Data upgrade failed: \(error.localizedDescription)\n", stderr)
     if !migrationOnly {
         let app = NSApplication.shared
+        AppBranding.install(on: app)
         app.setActivationPolicy(.regular)
         app.activate(ignoringOtherApps: true)
         // Do not use L(): app language preferences must not be read before migration.
         let chinese = Locale.preferredLanguages.first?.hasPrefix("zh") == true
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.alertStyle = .critical
         alert.messageText = chinese ? "无法升级 lightty 数据" : "Could not upgrade lightty data"
         alert.informativeText = (chinese
@@ -86,6 +87,7 @@ if CommandLine.arguments.contains("--print-effective-terminal-config") {
 }
 
 let app = NSApplication.shared
+AppBranding.install(on: app)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)

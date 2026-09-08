@@ -362,7 +362,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
 
 /// 无系统强调色的应用 chrome 文字按钮。
 final class ShellTextButton: NSButton {
-    enum Emphasis { case quiet, primary }
+    enum Emphasis { case quiet, primary, destructive }
 
     private let emphasis: Emphasis
     /// 改文字必须走这里，**不要设 `title`**：上色是通过 `attributedTitle` 做的，
@@ -427,6 +427,9 @@ final class ShellTextButton: NSButton {
         if emphasis == .primary {
             fill = isHovered ? ShellStyle.actionHoverFill : ShellStyle.actionFill
             enabledText = ShellStyle.actionText
+        } else if emphasis == .destructive {
+            fill = NSColor.systemRed.withAlphaComponent(isHovered ? 0.18 : 0.10)
+            enabledText = .systemRed
         } else {
             fill = isHovered ? ShellStyle.hoverFill : .clear
             enabledText = ShellStyle.secondaryText

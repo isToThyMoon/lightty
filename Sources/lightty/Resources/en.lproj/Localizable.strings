@@ -20,10 +20,16 @@
 
 /* 菜单栏 */
 "About lightty" = "About lightty";
+"Open in lightty" = "Open in lightty";
+"Development build" = "Development build";
+"Thank you for finding lightty." = "Thank you for finding lightty.";
+"This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier.";
 "Quit lightty" = "Quit lightty";
 "Check for Updates…" = "Check for Updates…";
 "Tasks" = "Tasks";
 "New Task (New Window)" = "New Task (New Window)";
+"New Window" = "New Window";
+"New Tab" = "New Tab";
 "New Task (New Tab)" = "New Task (New Tab)";
 "Split Pane Right" = "Split Pane Right";
 "Split Pane Down" = "Split Pane Down";
@@ -293,3 +299,22 @@
 "Retry in a new terminal" = "Retry in a new terminal";
 "This session is already open in another terminal." = "This session is already open in another terminal.";
 "Continue in the original terminal, or exit the Agent there before resuming here. lightty will not stop it or remove its lock." = "Continue in the original terminal, or exit the Agent there before resuming here. lightty will not stop it or remove its lock.";
+"Delete session…" = "Delete session…";
+"Permanently delete this session?" = "Permanently delete this session?";
+"Codex will permanently delete this session and its spawned child sessions." = "Codex will permanently delete this session and its spawned child sessions.";
+"Claude will permanently delete this conversation and its subagent transcripts." = "Claude will permanently delete this conversation and its subagent transcripts.";
+"This cannot be undone or recovered from Trash. Handoff task files are not deleted. Do not start this Agent elsewhere during deletion." = "This cannot be undone or recovered from Trash. Handoff task files are not deleted. Do not start this Agent elsewhere during deletion.";
+"Permanently delete" = "Permanently delete";
+"Session deletion" = "Session deletion";
+"The Agent could not complete deletion. It may be in use, missing, or unsupported by this CLI version. The list will refresh; deletion may have partially completed." = "The Agent could not complete deletion. It may be in use, missing, or unsupported by this CLI version. The list will refresh; deletion may have partially completed.";
+"This session is still running or starting. Exit its Agent before deleting; the idle terminal can stay open." = "This session is still running or starting. Exit its Agent before deleting; the idle terminal can stay open.";
+"Could not confirm which session an external or unassociated Claude process is using. Deletion was not performed. Check that process before retrying." = "Could not confirm which session an external or unassociated Claude process is using. Deletion was not performed. Check that process before retrying.";
+"Delete despite unknown external usage?" = "Delete despite unknown external usage?";
+"Lightty cannot confirm whether an external Claude process is using this session. If you know it is not in use, you can delete it anyway. Deletion is permanent and includes subagent transcripts; deleting an active session may lose data. No external processes will be stopped." = "Lightty cannot confirm whether an external Claude process is using this session. If you know it is not in use, you can delete it anyway. Deletion is permanent and includes subagent transcripts; deleting an active session may lose data. No external processes will be stopped.";
+"Permanently delete anyway" = "Permanently delete anyway";
+"Includes child conversations. This cannot be undone." = "Includes child conversations. This cannot be undone.";
+"This session may be in use elsewhere. Delete only if it is idle. This cannot be undone." = "This session may be in use elsewhere. Delete only if it is idle. This cannot be undone.";
+"Close all tabs" = "Close all tabs";
+"Close all tabs in this window" = "Close all tabs in this window";
+"Close all tabs in this window?" = "Close all tabs in this window?";
+"Running terminals will close. Session history and task files will be kept." = "Running terminals will close. Session history and task files will be kept.";

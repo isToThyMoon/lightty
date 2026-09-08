@@ -32,7 +32,7 @@ final class ArchivedTasksView: NSStackView {
                 }
                 let delete = ArchiveActionButton(title: L("Delete permanently…")) { [weak self] in
                     guard let self else { return }
-                    let alert = NSAlert()
+                    let alert = AppBranding.makeAlert()
                     alert.messageText = L("Delete archived task permanently?")
                     alert.informativeText = L("This deletes the Handoff file and cannot be undone.")
                     alert.alertStyle = .warning

@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 应用内更新（Sparkle）。只在打包形态下启动：SUFeedURL 由打包脚本写进
     /// Info.plist，swift build 的裸可执行没有它，此时保持 nil、菜单项不出现。
     private var updaterController: SPUStandardUpdaterController?
+    private var aboutWindowController: AboutWindowController?
 
     private var shiftTapMonitor: Any?
     private var lastShiftTap: TimeInterval = 0
@@ -108,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func preferencesStorageFailed() {
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.messageText = L("Preferences could not be saved.")
         alert.informativeText = L("Check ~/.lightty/preferences.json and its permissions. An unreadable or newer file will not be overwritten.")
         alert.runModal()
@@ -131,6 +132,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 菜单
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(makeItem(L("New Window"), #selector(dockNewWindow)))
+        menu.addItem(makeItem(L("New Tab"), #selector(dockNewTab)))
+        for controller in AppState.shared?.windowControllers ?? [] {
+            guard controller.tabCount > 0 else { continue }
+            menu.addItem(.separator())
+            controller.appendDockTabItems(to: menu)
+        }
+        return menu
+    }
+
+    @objc private func dockNewWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        newTaskWindow()
+    }
+
+    @objc private func dockNewTab() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let controller = AppState.shared.keyWindowController {
+            controller.window?.deminiaturize(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            controller.hideSettings()
+            if controller.activePane == nil {
+                controller.addTab(initialPane: PaneView())
+                return
+            }
+        }
+        newTaskTab()
+    }
+
     private func buildMenu() {
         let mainMenu = NSMenu()
 
@@ -139,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.delegate = self
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: L("About lightty"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(makeItem(L("About lightty"), #selector(showAbout)))
         if let updaterController {
             let check = NSMenuItem(
                 title: L("Check for Updates…"),
@@ -204,6 +236,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - actions
+
+    @objc private func showAbout() {
+        if aboutWindowController == nil { aboutWindowController = AboutWindowController() }
+        aboutWindowController?.present()
+    }
 
     @objc private func newTaskWindow() {
         guard let terminal = AppState.shared.keyWindowController?.activePane?.terminal else {
@@ -291,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessory.addSubview(label)
         accessory.addSubview(progress)
 
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.messageText = preview
             ? L("Previewing Font Download")
             : L("Installing Maple Mono NF CN")
@@ -370,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentFontResult(title: String, detail: String, in window: NSWindow?) {
-        let alert = NSAlert()
+        let alert = AppBranding.makeAlert()
         alert.messageText = title
         alert.informativeText = detail
         alert.addButton(withTitle: L("OK"))

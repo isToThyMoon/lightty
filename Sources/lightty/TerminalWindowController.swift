@@ -42,6 +42,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabs.indices.contains(activeTabIndex) ? tabs[activeTabIndex] : nil
     }
     var tabCount: Int { tabs.count }
+
+    /// Built only when the Dock menu opens; no workspace serialization or observation.
+    func appendDockTabItems(to menu: NSMenu) {
+        for tab in tabs {
+            let item = NSMenuItem(title: tab.title, action: #selector(revealDockTab(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = tab.id
+            item.state = window?.isMainWindow == true && tab === activeTab ? .on : .off
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func revealDockTab(_ sender: NSMenuItem) {
+        // Resolve identity at click time: a tab may have moved or closed since menu creation.
+        guard let id = sender.representedObject as? UUID,
+              let index = tabs.firstIndex(where: { $0.id == id }),
+              let window else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        hideSettings()
+        selectTab(at: index)
+    }
     /// pinned 侧栏是 docked layout：主体区从侧栏右缘开始；preview 保持 overlay。
     private var rootLeadingConstraint: NSLayoutConstraint?
     private weak var sidebarButton: ShellIconButton?
@@ -356,10 +379,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 标签页默认名计数器（跨窗口全局，与「终端 N」的 pane 计数同策略）：
     /// 标签页是语义单元、窗口只是展示容器，默认名必须全局唯一才能在
     /// 侧栏跳转行里直接当身份用，窗口层不需要另起名字。
-    private static var tabCounter = 0
+    private var tabCounter = 0
+    private var terminalCounter = 0
 
     /// 同 PaneView.seedDefaultNameCounter：恢复后新标签页不与「标签页 2」重名。
-    private static func seedTabCounter(from titles: [String]) {
+    private func seedTabCounter(from titles: [String]) {
         let prefix = L("Tab %d").replacingOccurrences(of: "%d", with: "")
         let numbers = titles.compactMap { title -> Int? in
             guard title.hasPrefix(prefix) else { return nil }
@@ -379,8 +403,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func appendTab(root: NSView, select: Bool, title: String? = nil) -> TerminalTab {
         emptyStateView?.isHidden = true  // 有标签页了，收起空态占位
         let tab = TerminalTab()
-        Self.tabCounter += 1
-        tab.title = title ?? L("Tab %d", Self.tabCounter)
+        tabCounter += 1
+        tab.title = title ?? L("Tab %d", tabCounter)
         contentHost.addSubview(tab.container)
         NSLayoutConstraint.activate([
             tab.container.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -401,6 +425,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     func selectTab(at index: Int) {
         guard tabs.indices.contains(index) else { return }
+        defer { NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self) }
         activeTabIndex = index
         for (i, tab) in tabs.enumerated() {
             tab.container.isHidden = i != index
@@ -434,6 +459,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         selectTab(at: activeTabIndex)
         // tab 里可能有绑定任务的 pane，侧栏活跃态需要跟着退
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+    }
+
+    func requestClearTabs() {
+        guard !tabs.isEmpty, let window else { return }
+        let confirmation = SessionDeletionConfirmation()
+        confirmation.messageText = L("Close all tabs in this window?")
+        confirmation.informativeText = L("Running terminals will close. Session history and task files will be kept.")
+        confirmation.addButton(withTitle: L("Cancel"))
+        confirmation.addButton(withTitle: L("Close all tabs"))
+        confirmation.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertSecondButtonReturn else { return }
+            self?.clearTabs()
+        }
+    }
+
+    /// Explicitly confirmed window-local operation; the normal tab teardown owns processes.
+    func clearTabs() {
+        for index in tabs.indices.reversed() { closeTab(at: index) }
+        tabCounter = 0
+        terminalCounter = 0
+        WorkspaceStore.shared.scheduleSave()
     }
 
     /// 进入“无标签页”空态：终端区放引导占位，并把任务卡片带出来（task 为核心）。
@@ -545,6 +591,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         tabSidebar?.reload()
         WorkspaceStore.shared.scheduleSave()
+        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -601,6 +648,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func install(pane: PaneView) {
+        terminalCounter += 1
+        pane.assignWindowNumber(terminalCounter)
         pane.onClose = { [weak self] p in self?.close(pane: p) }
         pane.onMetadataChange = { [weak self] p in
             guard let self, self.activePane === p else { return }
@@ -620,6 +669,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             self.lastFocusedPane = pane
             self.updateWindowTitle(for: pane)
             self.tabSidebar?.applyActivePane(pane.dragIdentifier)
+            NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
             // 「已完成」是唯一粘滞的状态，它的语义是**未读**——用户看到了就该消。
             // 焦点落到这个 pane 上就是"看到了"最直接的证据（docs/specs/pane-status.md
             // §4.3）。不清的话，下次这个 pane 再跑完就不构成状态跳变，提醒会漏发。
@@ -668,7 +718,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             if let view = r as? NSView {
                 var v: NSView? = view
                 while let cur = v {
-                    if let pane = cur as? PaneView { return pane }
+                    if let pane = cur as? PaneView,
+                       activeTabPanes.contains(where: { $0 === pane }) { return pane }
                     v = cur.superview
                 }
                 break
@@ -1559,7 +1610,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             appendTab(root: root, select: false, title: tabSnapshot.title)
         }
         selectTab(at: min(snapshot.activeTabIndex, tabs.count - 1))
-        Self.seedTabCounter(from: snapshot.tabs.map(\.title))
+        seedTabCounter(from: snapshot.tabs.map(\.title))
+        let prefix = L("Terminal %d").replacingOccurrences(of: "%d", with: "")
+        for leaf in snapshot.tabs.flatMap({ $0.root.leaves }) where leaf.name.hasPrefix(prefix) {
+            if let number = Int(leaf.name.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)) {
+                terminalCounter = max(terminalCounter, number)
+            }
+        }
         PaneView.seedDefaultNameCounter(from: snapshot.tabs.flatMap { $0.root.leaves.map(\.name) })
         pendingRestore = snapshot  // frame / 比例在 init 的首帧异步块里、侧栏就位后落
     }

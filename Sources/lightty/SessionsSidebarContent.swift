@@ -1,6 +1,10 @@
 import AppKit
 import LighttyCore
 
+extension Notification.Name {
+    static let lighttyTerminalSelectionDidChange = Notification.Name("lighttyTerminalSelectionDidChange")
+}
+
 final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private enum Row: Equatable {
         case projectsHeading, project(SessionProject), heading, emptyProjects, session(AgentSession, UUID?)
@@ -41,6 +45,8 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private var renderedProjectNames: [UUID: String] = [:]
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private var sectionDisclosureRequested = false
+    private var openedSessionKeys: Set<AgentSessionKey> = []
+    private var synchronizingSelection = false
 
     init(library: SessionLibrary, searchMode: Bool = false) {
         self.library = library
@@ -147,10 +153,41 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         if !searchMode { searchRow.heightAnchor.constraint(equalToConstant: 0).isActive = true }
         moreHeight = more.heightAnchor.constraint(equalToConstant: 0)
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: .lighttySessionLibraryDidChange, object: library)
+        if !searchMode {
+            for name in [Notification.Name.lighttyTerminalSelectionDidChange, .lighttyTasksDidChange,
+                         .lighttyPaneStatusDidChange] {
+                NotificationCenter.default.addObserver(self, selector: #selector(syncTerminalSelection), name: name, object: nil)
+            }
+        }
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
     deinit { NotificationCenter.default.removeObserver(self) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        syncTerminalSelection()
+    }
+
+    @objc private func syncTerminalSelection() {
+        guard !searchMode, !synchronizingSelection else { return }
+        synchronizingSelection = true
+        defer { synchronizingSelection = false }
+        let controllers = AppState.shared?.windowControllers ?? []
+        let activeKey = controllers.first { $0.window === window }?.activePane?.displayedSessionKey
+        let opened = Set(controllers.flatMap { $0.panes().compactMap(\.displayedSessionKey) })
+        let index = activeKey.flatMap { key in rows.firstIndex { $0.id == .session(key) } }
+        if let index {
+            if table.selectedRow != index { table.selectRowIndexes([index], byExtendingSelection: false) }
+        } else if table.selectedRow != -1 { table.deselectAll(nil) }
+        guard opened != openedSessionKeys else { return }
+        openedSessionKeys = opened
+        // Update only materialized cells; no catalog query, reloadData, scrolling or layout rebuild.
+        table.enumerateAvailableRowViews { _, row in
+            guard self.rows.indices.contains(row),
+                  let cell = self.table.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionListCell else { return }
+            self.configure(cell, for: self.rows[row])
+        }
+    }
     /// Called on presentation, not on application focus or project/list interactions.
     /// Search reuses the sidebar's catalog; concurrent presentations share an in-flight read.
     func activate() {
@@ -203,7 +240,6 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     @objc private func reload() {
         let oldRows = rows
         let selectedID = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
-        let origin = scroll.contentView.bounds.origin
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let organization = library.organization
         let projectNames = Dictionary(uniqueKeysWithValues: organization.projects.map { ($0.id, $0.name) })
@@ -280,11 +316,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         let projectNamesChanged = projectNames != renderedProjectNames
         renderedProjectNames = projectNames
         updateRows(from: oldRows, projectNamesChanged: projectNamesChanged)
-        if let id = selectedID, let index = rows.firstIndex(where: { $0.id == id }) {
+        if searchMode, let id = selectedID, let index = rows.firstIndex(where: { $0.id == id }) {
             table.selectRowIndexes([index], byExtendingSelection: false)
         }
-        scroll.contentView.scroll(to: origin)
-        scroll.reflectScrolledClipView(scroll.contentView)
+        syncTerminalSelection()
     }
 
     /// Stable identities preserve cells, hover and tracking areas across local organization edits.
@@ -441,7 +476,13 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         return cell
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard searchMode else { return }
+        guard searchMode else {
+            // Non-session rows may be selected programmatically to dispatch their action.
+            if rows.indices.contains(table.selectedRow), case .session = rows[table.selectedRow] {
+                syncTerminalSelection()
+            }
+            return
+        }
         table.enumerateAvailableRowViews { rowView, row in
             (rowView.view(atColumn: 0) as? PaletteRowView)?.isSelected = row == self.table.selectedRow
         }
@@ -475,7 +516,9 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             let date = record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: Date()) } ?? ""
             let location = projectID.flatMap { renderedProjectNames[$0] }
                 ?? record.workingDirectory ?? ""
-            cell.detail.stringValue = [record.key.agent == .codex ? "Codex CLI" : "Claude Code", date].filter { !$0.isEmpty }.joined(separator: " · ")
+            cell.setAgent(record.key.agent)
+            cell.detail.stringValue = [date, openedSessionKeys.contains(record.key) ? L("Open in lightty") : ""]
+                .filter { !$0.isEmpty }.joined(separator: " · ")
             cell.location.stringValue = location.hasPrefix("/") ? URL(fileURLWithPath: location).lastPathComponent : location
             if projectID != nil && !searchMode {
                 cell.location.stringValue = ""
@@ -497,11 +540,11 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         case .projectsHeading, .heading, .emptyProjects: break
         }
     }
-    private func open(_ record: AgentSession, destination: TerminalLaunchDestination = .tab, preferExisting: Bool = true) {
+    private func open(_ record: AgentSession, destination: TerminalLaunchDestination = .tab) {
         guard let controller = window?.windowController as? TerminalWindowController,
               let source = library.source(for: record.key.agent) else { return }
         onRequestDismiss?()
-        SessionResumeFlow.open(record, source: source, in: controller, destination: destination, preferExisting: preferExisting)
+        SessionResumeFlow.open(record, source: source, in: controller, destination: destination)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -526,10 +569,13 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
 
     func sessionMenuItems(_ record: AgentSession) -> [ShellMenuPopover.Item] {
         var items: [ShellMenuPopover.Item] = [
-            .action(L("Continue in new tab")) { [weak self] in self?.open(record, preferExisting: false) },
-            .action(L("Split in current tab")) { [weak self] in self?.open(record, destination: .split, preferExisting: false) },
-            .action(L("New window")) { [weak self] in self?.open(record, destination: .window, preferExisting: false) }, .separator,
+            .action(L("Continue in new tab")) { [weak self] in self?.open(record) },
+            .action(L("Split in current tab")) { [weak self] in self?.open(record, destination: .split) },
+            .action(L("New window")) { [weak self] in self?.open(record, destination: .window) }, .separator,
         ]
+        if AppState.shared?.runningPanes().contains(where: { $0.pane.displayedSessionKey == record.key }) == true {
+            items = [.action(L("Show terminal")) { [weak self] in self?.open(record) }, .separator]
+        }
         if !library.saving && library.storageError == nil {
             let organization = library.organization
             let archived = organization.isArchived(record)
@@ -550,6 +596,13 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                     self?.library.updateOrganization { $0.move(record, to: nil) }
                 })
             }
+        }
+        if !library.saving && library.organizationReady && library.storageError == nil {
+            items.append(.separator)
+            items.append(.action(L("Delete session…"), destructive: true) { [weak self] in
+                guard let self, let window = self.window else { return }
+                SessionDeletion.confirm(record, library: self.library, window: window)
+            })
         }
         return items
     }
@@ -621,6 +674,14 @@ private final class SessionListCell: NSTableCellView {
     var indent: CGFloat = 10 { didSet { titleLeading.constant = indent } }
     let title = SessionTruncatingLabel(labelWithString: "")
     let detail = NSTextField(labelWithString: "")
+    let agentIcon = NSImageView()
+    private var detailLeading: NSLayoutConstraint!
+    func setAgent(_ agent: SessionAgent?) {
+        agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
+        agentIcon.isHidden = agent == nil
+        agentIcon.toolTip = agent.map { $0 == .claude ? "Claude Code" : "OpenAI Codex" }
+        detailLeading.constant = agent == nil ? 0 : 16
+    }
     let location = SessionTruncatingLabel(labelWithString: "")
     let menuButton = ShellIconButton(symbol: "ellipsis", accessibilityLabel: L("Session actions"), target: nil, action: nil)
     var onMenu: (() -> Void)?
@@ -631,6 +692,7 @@ private final class SessionListCell: NSTableCellView {
         title.font = .systemFont(ofSize: 12.5, weight: .medium)
         title.textColor = ShellStyle.primaryText
         detail.stringValue = ""
+        setAgent(nil)
         location.stringValue = ""
         location.fullText = nil
         projectIcon.isHidden = true
@@ -653,8 +715,11 @@ private final class SessionListCell: NSTableCellView {
         location.lineBreakMode = .byTruncatingMiddle
         menuButton.isBordered = false; menuButton.target = self; menuButton.action = #selector(openMenu)
         menuButton.setAccessibilityLabel(L("Session actions"))
-        for view in [title, detail, location, menuButton, projectIcon] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        agentIcon.isHidden = true
+        agentIcon.contentTintColor = ShellStyle.secondaryText
+        for view in [title, detail, location, menuButton, projectIcon, agentIcon] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
         titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        detailLeading = detail.leadingAnchor.constraint(equalTo: title.leadingAnchor)
         NSLayoutConstraint.activate([
             titleLeading,
             projectIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
@@ -663,7 +728,11 @@ private final class SessionListCell: NSTableCellView {
             projectIcon.heightAnchor.constraint(equalToConstant: 16),
             title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             title.trailingAnchor.constraint(equalTo: menuButton.leadingAnchor, constant: -4),
-            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detailLeading,
+            agentIcon.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            agentIcon.centerYAnchor.constraint(equalTo: detail.centerYAnchor),
+            agentIcon.widthAnchor.constraint(equalToConstant: 11),
+            agentIcon.heightAnchor.constraint(equalToConstant: 11),
             detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             location.leadingAnchor.constraint(equalTo: title.leadingAnchor),

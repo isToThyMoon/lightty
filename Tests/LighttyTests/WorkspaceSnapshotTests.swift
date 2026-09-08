@@ -15,19 +15,6 @@ final class WorkspaceSnapshotTests: XCTestCase {
         }
     }
 
-    func testResumeRequestIsNotConfirmation() {
-        let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: "abc-123")
-        func status(agent: String = "codex", id: String = "abc-123", event: String = "SessionStart") -> PaneStatus {
-            PaneStatus(ts: Date(), state: .idle, agent: agent, sessionID: id, event: event)
-        }
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: nil, processExited: false), .unconfirmed)
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(), processExited: false), .confirmed)
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(), processExited: true), .ended)
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(event: "SessionEnd"), processExited: false), .ended)
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(agent: "claude"), processExited: false), .ended)
-        XCTAssertEqual(SessionResumeFlow.activity(for: key, status: status(id: "other"), processExited: false), .ended)
-    }
-
     func testSnapshotCodableRoundTrip() throws {
         let pane = PaneSnapshot(
             name: "api", workingDirectory: "/tmp", taskFile: "/tmp/t.md",
@@ -72,21 +59,6 @@ final class WorkspaceSnapshotTests: XCTestCase {
         XCTAssertTrue(store.frozen)
     }
 
-    func testAgentResumeCommands() {
-        XCTAssertEqual(
-            AgentResume.command(agent: "claude", sessionID: "0f1e-2d3c", alive: true),
-            "claude --resume 0f1e-2d3c\n")
-        XCTAssertEqual(
-            AgentResume.command(agent: "codex", sessionID: "thread_1", alive: true),
-            "codex resume thread_1\n")
-        XCTAssertNil(AgentResume.command(agent: "claude", sessionID: "x", alive: false), "SessionEnd 后不恢复")
-        XCTAssertNil(AgentResume.command(agent: "gemini", sessionID: "x", alive: true), "不认识的 agent")
-        XCTAssertNil(AgentResume.command(agent: "claude", sessionID: nil, alive: true))
-        XCTAssertNil(
-            AgentResume.command(agent: "claude", sessionID: "x; rm -rf ~", alive: true),
-            "会话 id 进 shell 前必须白名单")
-    }
-
     /// 真窗口：建两个标签页、一处分屏、改名 → 快照 → 按快照重建 → 再快照，结构与命名一致。
     func testControllerSnapshotRestoreRoundTrip() throws {
         let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -101,10 +73,10 @@ final class WorkspaceSnapshotTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
         let first = try XCTUnwrap(controller.panes().first)
-        first.header.title = "编译"
+        first.rename(to: "编译")
         controller.split(first, direction: .right)
         let second = try XCTUnwrap(controller.panes().last)
-        second.header.title = "日志"
+        second.rename(to: "日志")
         controller.renameTab(at: 0, to: "后端")
         controller.addTab(initialPane: PaneView())
         controller.renameTab(at: 1, to: "前端")
@@ -159,27 +131,27 @@ final class WorkspaceSnapshotTests: XCTestCase {
 
         // 窗口 A：标签页 0 = [A1 | A2]，标签页 1 = [A3]（活跃）
         let a1 = try XCTUnwrap(a.panes().first)
-        a1.header.title = "A1"
+        a1.rename(to: "A1")
         a.split(a1, direction: .right)
-        try XCTUnwrap(a.panes().last).header.title = "A2"
+        try XCTUnwrap(a.panes().last).rename(to: "A2")
         a.renameTab(at: 0, to: "A-first")
         let a3 = PaneView()
-        a3.header.title = L("Terminal %d", 40)  // 默认名形态，用来验证计数器接续
+        a3.rename(to: L("Terminal %d", 40))  // 默认名形态，用来验证计数器接续
         a.addTab(initialPane: a3)
         a.renameTab(at: 1, to: "A-second")
 
         // 窗口 B：标签页 0 = [B1]（活跃），标签页 1 = [Q1 | (Q2 / Q3)] 收在后台
-        try XCTUnwrap(b.panes().first).header.title = "B1"
+        try XCTUnwrap(b.panes().first).rename(to: "B1")
         b.renameTab(at: 0, to: "B-first")
         let q1 = PaneView()
-        q1.header.title = "Q1"
+        q1.rename(to: "Q1")
         b.addTab(initialPane: q1)
         b.renameTab(at: 1, to: "B-nested")
         b.split(q1, direction: .right)
         let q2 = try XCTUnwrap(b.panes().last)
-        q2.header.title = "Q2"
+        q2.rename(to: "Q2")
         b.split(q2, direction: .down)
-        try XCTUnwrap(b.panes().last).header.title = "Q3"
+        try XCTUnwrap(b.panes().last).rename(to: "Q3")
         b.selectTab(at: 0)
         for c in [a, b] { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))

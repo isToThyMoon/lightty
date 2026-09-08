@@ -20,10 +20,16 @@
 
 /* 菜单栏 */
 "About lightty" = "关于 lightty";
+"Open in lightty" = "已打开";
+"Development build" = "开发版本";
+"Thank you for finding lightty." = "谢谢你，找到了 lightty。";
+"This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "这是我的第一个 Swift App。\n它将始终免费、开源。\n愿它能为你的日常使用，带来一点点帮助。";
 "Quit lightty" = "退出 lightty";
 "Check for Updates…" = "检查更新…";
 "Tasks" = "任务";
 "New Task (New Window)" = "新任务（新窗口）";
+"New Window" = "新建窗口";
+"New Tab" = "新建标签页";
 "New Task (New Tab)" = "新任务（新标签页）";
 "Split Pane Right" = "向右分 pane";
 "Split Pane Down" = "向下分 pane";
@@ -310,3 +316,22 @@
 "Retry in a new terminal" = "在新终端重试";
 "This session is already open in another terminal." = "该会话已在其他终端中打开。";
 "Continue in the original terminal, or exit the Agent there before resuming here. lightty will not stop it or remove its lock." = "请回到原终端继续，或在原终端退出 Agent 后再来恢复。lightty 不会停止该进程或移除它的锁。";
+"Delete session…" = "删除会话…";
+"Permanently delete this session?" = "永久删除此会话？";
+"Codex will permanently delete this session and its spawned child sessions." = "Codex 将永久删除此会话及其派生的子会话。";
+"Claude will permanently delete this conversation and its subagent transcripts." = "Claude 将永久删除此对话及其子 Agent 对话记录。";
+"This cannot be undone or recovered from Trash. Handoff task files are not deleted. Do not start this Agent elsewhere during deletion." = "此操作无法撤销，也无法从废纸篓恢复。不会删除 Handoff 任务文件。删除期间请勿在其他地方启动此 Agent。";
+"Permanently delete" = "永久删除";
+"Session deletion" = "删除会话";
+"The Agent could not complete deletion. It may be in use, missing, or unsupported by this CLI version. The list will refresh; deletion may have partially completed." = "Agent 未能完成删除：会话可能正在使用、已不存在，或当前 CLI 版本不支持删除。列表将刷新；删除可能已部分完成。";
+"This session is still running or starting. Exit its Agent before deleting; the idle terminal can stay open." = "此会话仍在运行或启动中。请先退出它的 Agent 再删除；空闲终端无需关闭。";
+"Could not confirm which session an external or unassociated Claude process is using. Deletion was not performed. Check that process before retrying." = "无法确认外部或尚未关联的 Claude 进程正在使用哪个会话。本次未执行删除，请检查该进程后重试。";
+"Delete despite unknown external usage?" = "无法确认外部占用，仍要删除？";
+"Lightty cannot confirm whether an external Claude process is using this session. If you know it is not in use, you can delete it anyway. Deletion is permanent and includes subagent transcripts; deleting an active session may lose data. No external processes will be stopped." = "Lightty 无法确认外部 Claude 进程是否正在使用此会话。如果你确认此会话未被使用，可以继续删除。删除是永久的，包含子 Agent 对话记录；删除正在使用的会话可能造成数据丢失。不会停止任何外部进程。";
+"Permanently delete anyway" = "仍然永久删除";
+"Includes child conversations. This cannot be undone." = "包含子会话，删除后无法恢复。";
+"This session may be in use elsewhere. Delete only if it is idle. This cannot be undone." = "此会话可能正在外部使用，请确认已退出。删除后无法恢复。";
+"Close all tabs" = "全部关闭";
+"Close all tabs in this window" = "关闭当前窗口所有标签页";
+"Close all tabs in this window?" = "关闭当前窗口所有标签页？";
+"Running terminals will close. Session history and task files will be kept." = "将关闭正在运行的终端，保留会话历史和任务文件。";

@@ -79,7 +79,7 @@ enum ShellMenuPopover {
     /// 开关这类小元素被糊成一片、再罩一层就什么都看不见；ChatGPT 客户端那种
     /// 「隐约看得出下面形状」的玻璃感是小半径模糊。自己截图自己糊，半径可控，
     /// 也不受系统「减少透明度」影响。（Metal 承载的终端画面截不到，落到卡片底色。）
-    private static func blurredBackdrop(of parent: NSWindow, under frame: NSRect) -> NSImage? {
+    static func blurredBackdrop(of parent: NSWindow, under frame: NSRect) -> NSImage? {
         guard let root = parent.contentView?.superview else { return nil }
         let rootRect = root.convert(parent.convertFromScreen(frame), from: nil)
         guard let rep = root.bitmapImageRepForCachingDisplay(in: rootRect) else { return nil }
@@ -107,11 +107,12 @@ enum ShellMenuPopover {
 /// 菜单卡片窗口：无边框、透明底。系统给无边框窗口的投影在边界上有一圈很实的暗边
 /// （1x 屏上像一道描边），所以关掉，改成卡片四周留透明边距、自绘宽而软的阴影。
 /// 成为 key window 以驱动行 hover；失去 key（点了别处）或 Esc 即关闭。
-private final class ShellMenuWindow: NSWindow {
+final class ShellMenuWindow: NSWindow {
     /// 阴影可见范围约为半径 ×2.5 再加下沉量，边距必须比它大，否则被窗口边界切平
     static let shadowMargin: CGFloat = 56
 
     var onDismiss: (() -> Void)?
+    var dismissesOnResignKey = true
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
     private let controller: NSViewController
     private let backdrop = NSImageView()
@@ -203,7 +204,7 @@ private final class ShellMenuWindow: NSWindow {
 
     override func resignKey() {
         super.resignKey()
-        onDismiss?()
+        if dismissesOnResignKey { onDismiss?() }
     }
 
     override func cancelOperation(_ sender: Any?) {

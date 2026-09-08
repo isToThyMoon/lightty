@@ -36,6 +36,10 @@ final class PaneStatusPresenter {
         NotificationCenter.default.addObserver(
             self, selector: #selector(statusDidChange(_:)),
             name: .lighttyPaneStatusDidChange, object: nil)
+        for name: Notification.Name in [.lighttySessionLibraryDidChange, .lighttyTerminalSelectionDidChange] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(statusDidChange(_:)), name: name, object: nil)
+        }
         needsFullPass = true
         flush()
     }
@@ -77,6 +81,7 @@ final class PaneStatusPresenter {
             // header 内部会把状态同步给展开中的灵动岛——面板挂在窗口 contentView 上，
             // 从这里够不到，而 header 有「胶囊隐身」这个现成标记能定位它
             pane.header.apply(store.status(for: pane.dragIdentifier))
+            pane.refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
         }
 
         // 侧栏与 header 同样定向：通知带着变化的 pane，只刷那几行。

@@ -71,8 +71,12 @@ final class HookAgentEndToEndTests: XCTestCase {
         store.attach(pane)  // store 只收登记过的 pane；attach 会建运行时目录，detach 负责清
         defer { store.detach(pane) }
         let received = expectation(description: "datagram for \(pane)")
+        var didReceive = false
         let observer = NotificationCenter.default.addObserver(forName: .lighttyPaneStatusDidChange, object: nil, queue: .main) { note in
-            if PaneStatusStore.paneID(from: note) == pane { received.fulfill() }
+            if PaneStatusStore.paneID(from: note) == pane, !didReceive {
+                didReceive = true
+                received.fulfill()
+            }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         let p = Process()
@@ -91,6 +95,13 @@ final class HookAgentEndToEndTests: XCTestCase {
         p.waitUntilExit()
         wait(for: [received], timeout: 5)
         XCTAssertEqual(p.terminationStatus, 0, "hook 应静默退出 0")
+        XCTAssertEqual(store.status(for: pane)?.agentProcess?.pid, p.processIdentifier,
+                       "The hook must identify its Agent parent, not the hook subprocess")
+        if let agentName = store.status(for: pane)?.agent, let agent = SessionAgent(rawValue: agentName) {
+            let expectedRoot = SessionConfigurationLocation.resolve(agent: agent, environment: env)
+                .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
+            XCTAssertEqual(store.status(for: pane)?.sourceRoot, expectedRoot)
+        }
         return store.status(for: pane)?.agent
     }
 

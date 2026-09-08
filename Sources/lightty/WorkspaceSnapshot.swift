@@ -96,8 +96,8 @@ struct PaneSnapshot: Codable, Equatable {
     var workingDirectory: String?
     /// 绑定任务的文件路径（恢复时文件还在才重新绑定）
     var taskFile: String?
-    /// agent 会话：来自 hook 最后一发状态。`agentAlive == false` 表示已收到
-    /// SessionEnd（用户主动退出了 agent），恢复时不再 `--resume`。
+    /// Published v1 wire fields, projected from PaneSessionAssociation.
+    /// agentAlive records resume intent, not a guarantee that a CLI is currently running.
     var agent: String?
     var sessionID: String?
     /// agent 自报的 cwd。`--resume` 必须在同一项目目录里执行（会话按目录归档），
@@ -106,27 +106,6 @@ struct PaneSnapshot: Codable, Equatable {
     var agentAlive: Bool
     var catalogSession: AgentSessionKey? = nil
     var catalogConfiguration: SessionConfigurationLocation? = nil
-}
-
-// MARK: - agent 会话恢复
-
-enum AgentResume {
-    /// 恢复命令（带换行，直接作为 shell 的首段输入）。认不出 agent、没有会话 id、
-    /// 会话已结束、或 id 含可疑字符（它来自 hook 载荷，进 shell 前必须白名单）→ nil。
-    static func command(agent: String?, sessionID: String?, alive: Bool) -> String? {
-        guard alive, let sessionID, isSafe(sessionID) else { return nil }
-        switch agent {
-        case "claude": return "claude --resume \(sessionID)\n"
-        case "codex": return "codex resume \(sessionID)\n"
-        default: return nil
-        }
-    }
-
-    private static func isSafe(_ id: String) -> Bool {
-        !id.isEmpty && id.count <= 128 && id.unicodeScalars.allSatisfy {
-            CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
-        }
-    }
 }
 
 // MARK: - 落盘
@@ -225,6 +204,7 @@ enum WorkspaceRestorer {
         for window in snapshot.windows where !window.tabs.isEmpty {
             let controller = TerminalWindowController(restoring: window)
             AppState.shared.windowControllers.append(controller)
+            NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: controller)
             controller.window?.makeKeyAndOrderFront(nil)
             controllers.append(controller)
         }

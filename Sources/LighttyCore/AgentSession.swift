@@ -153,6 +153,11 @@ public struct SessionOrganization: Codable, Equatable, Sendable {
         }
     }
 
+    public mutating func forgetSessions(_ keys: Set<AgentSessionKey>) {
+        assignments.removeAll { keys.contains($0.session) }
+        archivedSessions.subtract(keys)
+    }
+
 }
 
 /// Native resume only. It does not inject a prompt, bind a task, or override permissions.

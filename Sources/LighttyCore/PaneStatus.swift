@@ -46,6 +46,10 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     public let state: PaneActivity
     public let agent: String?
     public let sessionID: String?
+    /// Agent configuration root reported by the hook process, not its working directory.
+    public let sourceRoot: String?
+    public let sourceConfiguration: SessionConfigurationLocation?
+    public let agentProcess: AgentProcessIdentity?
     /// `state == .tool` 时的工具名
     public let tool: String?
     /// 单行摘要（如文件路径）。**读方必须截断**，长度不可信。
@@ -59,6 +63,9 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case v, ts, state, agent, tool, detail, cwd, event
         case sessionID = "session_id"
+        case sourceRoot = "source_root"
+        case sourceConfiguration = "source_configuration"
+        case agentProcess = "agent_process"
     }
 
     public init(
@@ -67,6 +74,9 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         state: PaneActivity,
         agent: String? = nil,
         sessionID: String? = nil,
+        sourceRoot: String? = nil,
+        sourceConfiguration: SessionConfigurationLocation? = nil,
+        agentProcess: AgentProcessIdentity? = nil,
         tool: String? = nil,
         detail: String? = nil,
         cwd: String? = nil,
@@ -77,6 +87,9 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         self.state = state
         self.agent = agent
         self.sessionID = sessionID
+        self.sourceRoot = sourceRoot
+        self.sourceConfiguration = sourceConfiguration
+        self.agentProcess = agentProcess
         self.tool = tool
         self.detail = detail
         self.cwd = cwd

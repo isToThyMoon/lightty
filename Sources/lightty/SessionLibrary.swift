@@ -27,6 +27,15 @@ final class SessionLibrary {
     private let diskQueue = DispatchQueue(label: "lightty.session-library.storage")
     private var generation = 0
     private var cancellation: CatalogCancellation?
+    private var deletionReconciliation = Set<AgentSessionKey>()
+    private var deletedKeys = Set<AgentSessionKey>()
+
+    func didDelete(_ key: AgentSessionKey) {
+        records.removeAll { $0.key == key }
+        deletedKeys.insert(key)
+        deletionReconciliation.insert(key)
+        refresh()
+    }
 
     init(fileURL: URL, providers: [SessionCatalogProvider]? = nil) {
         self.fileURL = fileURL
@@ -122,6 +131,7 @@ final class SessionLibrary {
                 defer {
                     self.activeRequests -= 1
                     self.loading = self.activeRequests > 0
+                    self.reconcileDeletedSessions()
                     self.publish()
                 }
                 switch result {
@@ -183,6 +193,7 @@ final class SessionLibrary {
                 DispatchQueue.main.async {
                     self?.organization = value
                     self?.saving = false
+                    self?.reconcileDeletedSessions()
                     self?.publish()
                 }
             } catch {
@@ -197,6 +208,29 @@ final class SessionLibrary {
 
     private func publish() {
         NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: self)
+    }
+    private func reconcileDeletedSessions() {
+        guard !loading, !saving, organizationReady, storageError == nil else { return }
+        // Deletion can remove descendants beyond the first catalog page.
+        // Only reconcile organization after a complete, successful provider read.
+        if cursors.keys.contains(where: { query in
+            errors[query.agent] == nil && deletionReconciliation.contains { $0.agent == query.agent }
+        }) {
+            loadMore()
+            return
+        }
+        let completed = deletionReconciliation.filter { key in
+            errors[key.agent] == nil && !cursors.keys.contains { $0.agent == key.agent }
+                && source(for: key.agent)?.root.standardizedFileURL.path == key.sourceRoot
+        }
+        deletionReconciliation.subtract(completed)
+        let present = Set(records.map(\.key))
+        let stale = Set(organization.assignments.map(\.session)).union(organization.archivedSessions)
+            .filter { candidate in completed.contains { $0.agent == candidate.agent && $0.sourceRoot == candidate.sourceRoot }
+                && !present.contains(candidate) }
+        let removed = stale.union(deletedKeys)
+        deletedKeys.removeAll()
+        if !removed.isEmpty { updateOrganization { $0.forgetSessions(removed) } }
     }
     deinit { cancellation?.cancel() }
 }

@@ -88,7 +88,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard turningOff else { return }
         // 关掉后菜单栏上什么都不剩，不说明一句用户会以为 app 坏了
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = AppBranding.makeAlert()
             alert.messageText = L("Menu bar status hidden")
             alert.informativeText = L("You can show it again from the lightty menu.")
             alert.addButton(withTitle: L("OK"))

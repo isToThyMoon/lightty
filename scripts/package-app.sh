@@ -50,7 +50,7 @@ cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
 # The SDK only lists local metadata. Do not bundle its optional Claude CLI binary.
 CLAUDE_HELPER="$APP/Contents/Resources/claude-session-helper"
 mkdir -p "$CLAUDE_HELPER"
-for item in list-sessions.mjs node_modules runtime-arm64 runtime-x64; do
+for item in list-sessions.mjs delete-session.mjs node_modules runtime-arm64 runtime-x64; do
     cp -R "$ROOT/.build/claude-session-helper/$item" "$CLAUDE_HELPER/"
 done
 # Sparkle 动态框架：开发态靠 @loader_path 同目录找到，bundle 里进 Frameworks/
@@ -66,8 +66,12 @@ cp -R "$(dirname "$BIN")/Sparkle.framework" "$APP/Contents/Frameworks/"
 cp -R "$GHOSTTY_SHARE" "$APP/Contents/Resources/ghostty"
 cp -R "$GHOSTTY_SHARE/../terminfo" "$APP/Contents/Resources/terminfo"
 [ -d "$GHOSTTY_SHARE/../locale" ] && cp -R "$GHOSTTY_SHARE/../locale" "$APP/Contents/Resources/locale"
-# 图标（有则带上；暂缺时用系统默认图标）
-[ -f "$ROOT/assets/lightty.icns" ] && cp "$ROOT/assets/lightty.icns" "$APP/Contents/Resources/lightty.icns"
+# 图标是必需资源：缺失或母图更新时重新生成，不能静默发布系统缺省图标。
+if [ ! -f "$ROOT/assets/lightty.icns" ] || \
+   [ "$ROOT/Sources/lightty/Resources/lightty-icon.svg" -nt "$ROOT/assets/lightty.icns" ]; then
+    bash "$ROOT/scripts/make-icon.sh"
+fi
+cp "$ROOT/assets/lightty.icns" "$APP/Contents/Resources/lightty.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

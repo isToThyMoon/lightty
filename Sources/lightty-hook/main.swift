@@ -192,11 +192,22 @@ guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let state = PaneActivity(hookEventName: event)
 else { exit(0) }
 
+let agentProcess = AgentProcessIdentity.agentAncestor(startingAt: getppid())
+let agentName = agentProcess?.agent ?? detectAgent(payload: payload)
+let sourceRoot = agentName.flatMap(SessionAgent.init(rawValue:)).map { agent in
+    SessionConfigurationLocation.resolve(agent: agent, environment: environment)
+        .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
+}
 let status = PaneStatus(
     ts: Date(),
     state: state,
-    agent: detectAgent(payload: payload),
+    agent: agentName,
     sessionID: string(payload["session_id"]),
+    sourceRoot: sourceRoot,
+    sourceConfiguration: agentName.flatMap(SessionAgent.init(rawValue:)).map {
+        SessionConfigurationLocation.resolve(agent: $0, environment: environment)
+    },
+    agentProcess: agentProcess?.agent == agentName ? agentProcess?.process : nil,
     tool: string(payload["tool_name"]),
     // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
     // PostToolUse 的同一份参数只是回声

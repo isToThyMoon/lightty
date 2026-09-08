@@ -54,6 +54,7 @@ final class PaneStatusStore {
     /// 挂着的 pane（值仅作存在性标记）。detach 之后在途的报文要能被认出来丢掉。
     private var attached: Set<UUID> = []
     private var statuses: [UUID: PaneStatus] = [:]
+    private var processWatches: [UUID: (identity: AgentProcessIdentity, source: DispatchSourceProcess)] = [:]
     /// 坏报文只记一次日志：畸形报文往往是成批的（版本不匹配的旧 hook），刷屏没有意义。
     private var loggedMalformed = false
 
@@ -105,6 +106,8 @@ final class PaneStatusStore {
     /// 停收并删掉自己的 socket 文件。
     func stop() {
         assertMain()
+        for watch in processWatches.values { watch.source.cancel() }
+        processWatches.removeAll()
         source?.cancel()  // cancelHandler 负责 close(fd)
         source = nil
         fd = -1
@@ -200,8 +203,68 @@ final class PaneStatusStore {
         assertMain()
         // detach 之后可能还有在途报文，别把已经清掉的状态复活
         guard attached.contains(datagram.pane) else { return }
+        if let previous = statuses[datagram.pane] {
+            guard datagram.status.ts >= previous.ts else { return }
+            if datagram.status.event == "SessionEnd",
+               (datagram.status.agent != previous.agent || datagram.status.sessionID != previous.sessionID) {
+                return // An old conversation can end after this process has switched conversations.
+            }
+            if let old = previous.agentProcess, let next = datagram.status.agentProcess,
+               next.startedBefore(old) { return }
+        }
         statuses[datagram.pane] = datagram.status
+        watchProcess(for: datagram.pane)
         postChange(datagram.pane)
+    }
+
+    private func watchProcess(for pane: UUID) {
+        guard let status = statuses[pane] else { return }
+        guard status.event != "SessionEnd", let process = status.agentProcess else {
+            processWatches.removeValue(forKey: pane)?.source.cancel()
+            return
+        }
+        if process.liveness == .exited { endProcess(process, pane: pane); return }
+        if processWatches[pane]?.identity == process { return }
+        processWatches.removeValue(forKey: pane)?.source.cancel()
+        guard process.isDescendant(of: getpid()) else { return }
+        let source = DispatchSource.makeProcessSource(identifier: process.pid, eventMask: .exit, queue: .main)
+        processWatches[pane] = (process, source)
+        source.setEventHandler { [weak self] in self?.endProcess(process, pane: pane) }
+        source.activate()
+        // Close the race between checking existence and registering the kernel notification.
+        reconcileProcess(for: pane)
+    }
+
+    /// Also called before snapshot/navigation, when a queued exit callback may not have run yet.
+    func reconcileProcess(for pane: UUID) {
+        guard let process = statuses[pane]?.agentProcess, process.liveness == .exited else { return }
+        endProcess(process, pane: pane)
+    }
+
+    /// Returns false if a known process is still alive/unknown, or a newer hook superseded this event.
+    func commandFinished(for pane: UUID, at date: Date) -> Bool {
+        guard let status = statuses[pane] else { return true }
+        guard status.ts <= date else { return false }
+        if let process = status.agentProcess {
+            guard process.liveness == .exited else { return false }
+            endProcess(process, pane: pane)
+        } else {
+            statuses[pane] = PaneStatus(ts: date, state: .idle, agent: status.agent,
+                sessionID: status.sessionID, sourceRoot: status.sourceRoot,
+                sourceConfiguration: status.sourceConfiguration, cwd: status.cwd, event: "SessionEnd")
+            postChange(pane)
+        }
+        return true
+    }
+
+    private func endProcess(_ process: AgentProcessIdentity, pane: UUID) {
+        guard let status = statuses[pane], status.agentProcess == process, status.event != "SessionEnd" else { return }
+        processWatches.removeValue(forKey: pane)?.source.cancel()
+        statuses[pane] = PaneStatus(ts: status.ts, state: .idle, agent: status.agent,
+            sessionID: status.sessionID, sourceRoot: status.sourceRoot, sourceConfiguration: status.sourceConfiguration,
+            agentProcess: process, cwd: status.cwd, event: "SessionEnd")
+        postChange(pane)
+        WorkspaceStore.shared.scheduleSave()
     }
 
     // MARK: - pane 生命周期
@@ -223,6 +286,7 @@ final class PaneStatusStore {
 
     /// 注销 pane：删目录 + 清状态。pane 关闭时调用。
     func detach(_ paneID: UUID) {
+        processWatches.removeValue(forKey: paneID)?.source.cancel()
         assertMain()
         attached.remove(paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
@@ -316,6 +380,9 @@ final class PaneStatusStore {
             state: .idle,
             agent: status.agent,
             sessionID: status.sessionID,
+            sourceRoot: status.sourceRoot,
+            sourceConfiguration: status.sourceConfiguration,
+            agentProcess: status.agentProcess,
             tool: status.tool,
             detail: status.detail,
             cwd: status.cwd,

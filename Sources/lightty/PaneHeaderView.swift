@@ -40,6 +40,17 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private let closeButton = NSButton()
     var onCloseRequested: (() -> Void)?
     private let nameLabel = NSTextField(labelWithString: "")
+    private let agentIcon = NSImageView()
+    private var agentIconWidth: NSLayoutConstraint!
+    private var agentIconGap: NSLayoutConstraint!
+    var sessionAgent: SessionAgent? {
+        didSet {
+            guard oldValue != sessionAgent else { return }
+            agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
+            agentIconWidth.constant = sessionAgent == nil ? 0 : 10
+            agentIconGap.constant = sessionAgent == nil ? 0 : 4
+        }
+    }
     private let taskHintLabel = NSTextField(labelWithString: "")
     private var capsuleTracking: NSTrackingArea?
     private var headerTracking: NSTrackingArea?
@@ -169,11 +180,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         applyTerminalColors()
 
         addSubview(capsule)
-        for v in [dotView, closeButton, nameLabel, taskHintLabel] {
+        for v in [dotView, closeButton, agentIcon, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             capsule.addSubview(v)
         }
         capsule.translatesAutoresizingMaskIntoConstraints = false
+        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
@@ -199,7 +212,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             closeButton.widthAnchor.constraint(equalToConstant: 16),
             closeButton.heightAnchor.constraint(equalToConstant: 16),
 
-            nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
+            agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
+            agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            agentIcon.heightAnchor.constraint(equalToConstant: 10),
+            agentIconWidth,
+            agentIconGap,
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
             taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
@@ -344,6 +361,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         layer?.backgroundColor = terminalBackground
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
+        agentIcon.contentTintColor = terminalForeground
         taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
         applyCloseButtonTint()
         applyCapsuleFill()

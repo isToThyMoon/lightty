@@ -115,13 +115,20 @@ final class TerminalSurfaceView: NSView {
     private(set) var cellSize: NSSize = .zero
 
     private var terminalCursor = NSCursor.arrow
-    private let launchConfiguration: TerminalSurfaceConfiguration
+    let launchConfiguration: TerminalSurfaceConfiguration
 
     override var acceptsFirstResponder: Bool { true }
 
     /// 待 shell 就绪后要发的 agent 启动/续接命令；发一次即清。
     private var pendingReadyInput: String?
     private var sentReadyInput = false
+    var onCommandFinished: ((Date) -> Void)?
+
+    /// Shell integration reports command completion, not arbitrary terminal text.
+    func commandFinished(at date: Date) {
+        guard launchConfiguration.initialInput == nil || sentReadyInput else { return }
+        onCommandFinished?(date)
+    }
 
     init(configuration: TerminalSurfaceConfiguration = .init()) {
         launchConfiguration = configuration
