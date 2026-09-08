@@ -206,20 +206,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
 
     /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
     func newTask(from anchor: NSView) {
-        NameEditorPopover.present(
-            from: anchor, title: L("New task"), confirmLabel: L("Create")
-        ) { name in
-            do {
-                _ = try AppState.shared.taskStore.create(
-                    name: name,
-                    workdir: FileManager.default.homeDirectoryForCurrentUser.path,
-                    tool: nil)
-                NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-            } catch {
-                NSSound.beep()
-                NSLog("task create failed: \(error)")
-            }
-        }
+        NewHandoffPopover.present(from: anchor)
     }
     func openSearchPalette() {
         (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()

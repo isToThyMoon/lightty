@@ -1,7 +1,7 @@
 /* Agent 启动 */
 "Start working" = "Start working";
 "Go ↗" = "Go ↗";
-"Open another terminal" = "Open another terminal";
+"Start a new terminal" = "Start a new terminal";
 "Go to %@" = "Go to %@";
 "%@ was not detected. Install it or set a launch command in Agent settings." = "%@ was not detected. Install it or set a launch command in Agent settings.";
 "Task context will be shared with the Agent automatically." = "Task context will be shared with the Agent automatically.";
@@ -318,3 +318,9 @@
 "Close all tabs in this window" = "Close all tabs in this window";
 "Close all tabs in this window?" = "Close all tabs in this window?";
 "Running terminals will close. Session history and task files will be kept." = "Running terminals will close. Session history and task files will be kept.";
+"Working directory" = "Working directory";
+"Choose folder…" = "Choose folder…";
+"Task name" = "Task name";
+"Enter a task name." = "Enter a task name.";
+"Choose an existing folder." = "Choose an existing folder.";
+"Set as default directory on launch" = "Set as default directory on launch";

@@ -1,7 +1,7 @@
 /* Agent 启动 */
 "Start working" = "开始处理";
 "Go ↗" = "前往 ↗";
-"Open another terminal" = "另开终端";
+"Start a new terminal" = "启动新终端";
 "Go to %@" = "前往 %@";
 "%@ was not detected. Install it or set a launch command in Agent settings." = "未检测到 %@。请先安装，或在 Agent 设置中修改启动命令。";
 "Task context will be shared with the Agent automatically." = "任务内容会自动传入 Agent。";
@@ -335,3 +335,9 @@
 "Close all tabs in this window" = "关闭当前窗口所有标签页";
 "Close all tabs in this window?" = "关闭当前窗口所有标签页？";
 "Running terminals will close. Session history and task files will be kept." = "将关闭正在运行的终端，保留会话历史和任务文件。";
+"Working directory" = "工作目录";
+"Choose folder…" = "选择文件夹…";
+"Task name" = "任务名称";
+"Enter a task name." = "请输入任务名称。";
+"Choose an existing folder." = "请选择有效的文件夹。";
+"Set as default directory on launch" = "启动后设为默认目录";

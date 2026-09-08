@@ -23,6 +23,9 @@ enum RestoreFlow {
         pop.contentViewController = content
         pop.behavior = .transient
         content.onDone = { [weak pop] in pop?.close() }
+        content.directory.onPickerVisibilityChange = { [weak pop] choosing in
+            pop?.behavior = choosing ? .applicationDefined : .transient
+        }
         popover = pop
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
     }
@@ -67,17 +70,24 @@ final class RestorePopoverController: NSViewController {
     private var jumpTargets: [(controller: TerminalWindowController, pane: PaneView)] = []
     private var selectedAgent = AgentLaunchPreference.selected()
     private let agentPicker = NSPopUpButton()
-    private let launchButton = RestoreLaunchButton()
+    private let launchButton = ShellAccentButton()
     private var destinationButtons: [NSButton] = []
     private var selectedDestination = 1
     private let contextHint = NSTextField(wrappingLabelWithString: "")
+    let directory: WorkingDirectoryEditor
+    private var defaultDirectory: String
+    let saveDirectory = RestoreSelectionButton(L("Set as default directory on launch"), checkbox: true, target: nil, action: nil)
+    private let directoryError = NSTextField(wrappingLabelWithString: "")
 
     init(fileURL: URL, task: TaskFile, controller: TerminalWindowController, embedded: Bool = false) {
         self.embedded = embedded
         self.fileURL = fileURL
         self.task = task
+        defaultDirectory = task.workdir
+        directory = WorkingDirectoryEditor(path: task.workdir)
         self.controller = controller
         super.init(nibName: nil, bundle: nil)
+        directory.onPathChange = { [weak self] in self?.updateDirectoryPresentation() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -112,7 +122,9 @@ final class RestorePopoverController: NSViewController {
             $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
         }
         if !bound.isEmpty {
-            let opened = Self.sectionLabel(L("Already open"))
+            let opened = NSTextField(labelWithString: L("Already open"))
+            opened.font = .systemFont(ofSize: 13, weight: .semibold)
+            opened.textColor = ShellStyle.primaryText
             rows.append(opened)
             sectionLabels.append(opened)
             for (index, entry) in bound.enumerated() {
@@ -129,7 +141,9 @@ final class RestorePopoverController: NSViewController {
             rows.append(divider)
             sectionDivider = divider
             sectionLabels.append(divider)
-            let newTerminal = Self.sectionLabel(L("Open another terminal"))
+            let newTerminal = NSTextField(labelWithString: L("Start a new terminal"))
+            newTerminal.font = .systemFont(ofSize: 13, weight: .semibold)
+            newTerminal.textColor = ShellStyle.primaryText
             rows.append(newTerminal)
             sectionLabels.append(newTerminal)
         }
@@ -146,14 +160,31 @@ final class RestorePopoverController: NSViewController {
         rows.append(agentRow)
         sectionLabels.append(agentRow)
 
+        saveDirectory.font = .systemFont(ofSize: 11)
+        saveDirectory.controlSize = .small
+        directoryError.font = .systemFont(ofSize: 10.5)
+        directoryError.textColor = .systemRed
+        let directoryGroup = NSStackView(views: [
+            Self.sectionLabel(L("Working directory")), directory, saveDirectory, directoryError,
+        ])
+        directoryGroup.orientation = .vertical
+        directoryGroup.alignment = .leading
+        directoryGroup.spacing = 6
+        rows.append(directoryGroup)
+
+        let destinations = NSStackView()
+        destinations.orientation = .vertical
+        destinations.alignment = .leading
+        destinations.spacing = 6
         for (index, label) in [L("Split in current tab"), L("New tab"), L("New window")].enumerated() {
-            let button = RestoreDestinationButton(label, target: self,
+            let button = RestoreSelectionButton(label, target: self,
                                                   action: #selector(destinationChanged(_:)))
             button.tag = index
             button.state = index == selectedDestination ? .on : .off
             destinationButtons.append(button)
-            rows.append(button)
+            destinations.addArrangedSubview(button)
         }
+        rows.append(destinations)
         contextHint.font = .systemFont(ofSize: 10.5)
         contextHint.textColor = ShellStyle.secondaryText
         rows.append(contextHint)
@@ -167,6 +198,10 @@ final class RestorePopoverController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
+        stack.setCustomSpacing(12, after: agentRow)
+        stack.setCustomSpacing(14, after: directoryGroup)
+        stack.setCustomSpacing(12, after: destinations)
+        stack.setCustomSpacing(8, after: contextHint)
         if !embedded {
             stack.setCustomSpacing(10, after: title)
             stack.setCustomSpacing(10, after: taskName)
@@ -178,6 +213,10 @@ final class RestorePopoverController: NSViewController {
         }
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
+        directory.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        directoryGroup.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        destinations.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        directoryError.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         var constraints = [
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
@@ -202,6 +241,24 @@ final class RestorePopoverController: NSViewController {
         }
         NSLayoutConstraint.activate(constraints)
         view = root
+        updateDirectoryPresentation()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        // A launch preview is not an edit form. Do not let AppKit select the
+        // first text field automatically; embedded previews keep search focus.
+        if !embedded { view.window?.makeFirstResponder(nil) }
+    }
+
+    private func updateDirectoryPresentation() {
+        let path = WorkingDirectory.validated(directory.path)
+        let changed = (path ?? directory.path) != (WorkingDirectory.validated(defaultDirectory) ?? defaultDirectory)
+        saveDirectory.isHidden = !changed
+        saveDirectory.isEnabled = path != nil
+        if !changed || path == nil { saveDirectory.state = .off }
+        directoryError.stringValue = ""
+        directoryError.isHidden = true
     }
 
     private static func sectionLabel(_ text: String) -> NSTextField {
@@ -219,9 +276,31 @@ final class RestorePopoverController: NSViewController {
         onDone?()
     }
 
-    private func makeBoundPane() -> PaneView {
-        PaneView.restoring(task: task, fileURL: fileURL,
-                           initialInput: AgentLaunchPreference.initialInput(for: selectedAgent))
+    func makeBoundPane() -> PaneView? {
+        guard let path = WorkingDirectory.validated(directory.path) else {
+            directoryError.stringValue = L("Choose an existing folder.")
+            directoryError.isHidden = false
+            return nil
+        }
+        do {
+            // Reload before editing so a fresh Agent handoff is not replaced by the preview snapshot.
+            var launchTask = try AppState.shared.taskStore.load(at: fileURL)
+            launchTask.workdir = path
+            if !saveDirectory.isHidden && saveDirectory.state == .on {
+                try AppState.shared.taskStore.update(at: fileURL, task: launchTask)
+                defaultDirectory = path
+                updateDirectoryPresentation()
+                NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+            }
+            directoryError.stringValue = ""
+            directoryError.isHidden = true
+            return PaneView.restoring(task: launchTask, fileURL: fileURL,
+                initialInput: AgentLaunchPreference.initialInput(for: selectedAgent))
+        } catch {
+            directoryError.stringValue = error.localizedDescription
+            directoryError.isHidden = false
+            return nil
+        }
     }
 
     @objc private func agentChanged() {
@@ -276,26 +355,31 @@ final class RestorePopoverController: NSViewController {
     }
 
     @objc private func restoreInPane() {
-        controller?.addPaneToActiveTab(makeBoundPane())
+        guard let controller, let pane = makeBoundPane() else { return }
+        controller.addPaneToActiveTab(pane)
         onDone?()
     }
 
     @objc private func restoreInTab() {
-        controller?.addTab(initialPane: makeBoundPane())
+        guard let controller, let pane = makeBoundPane() else { return }
+        controller.addTab(initialPane: pane)
         onDone?()
     }
 
     @objc private func restoreInWindow() {
-        AppState.shared.newWindow(initialPane: makeBoundPane())
+        guard let pane = makeBoundPane() else { return }
+        AppState.shared.newWindow(initialPane: pane)
         onDone?()
     }
 }
 
-/// 保留 NSButton 的单选与辅助功能语义，圆点配色跟随应用重点色。
-private final class RestoreDestinationButton: NSButton {
-    init(_ label: String, target: AnyObject?, action: Selector) {
+/// 原生选择行为与辅助功能语义，选中背景统一跟随应用重点色。
+final class RestoreSelectionButton: NSButton {
+    private let checkbox: Bool
+    init(_ label: String, checkbox: Bool = false, target: AnyObject?, action: Selector?) {
+        self.checkbox = checkbox
         super.init(frame: .zero)
-        setButtonType(.radio)
+        setButtonType(checkbox ? .switch : .radio)
         title = label
         font = .systemFont(ofSize: 12)
         self.target = target
@@ -328,10 +412,23 @@ private final class RestoreDestinationButton: NSButton {
         let circle = NSRect(x: 0, y: (bounds.height - 16) / 2, width: 16, height: 16)
         let fill = state == .on ? ShellStyle.accent : ShellStyle.pressedFill
         (NSColor(cgColor: fill.shellResolvedCGColor(for: effectiveAppearance)) ?? fill).setFill()
-        NSBezierPath(ovalIn: circle).fill()
+        (checkbox ? NSBezierPath(roundedRect: circle, xRadius: 4, yRadius: 4)
+                  : NSBezierPath(ovalIn: circle)).fill()
         if state == .on {
-            NSColor.white.setFill()
-            NSBezierPath(ovalIn: circle.insetBy(dx: 5, dy: 5)).fill()
+            if checkbox {
+                NSColor.white.setStroke()
+                let check = NSBezierPath()
+                check.move(to: NSPoint(x: 4, y: circle.midY))
+                check.line(to: NSPoint(x: 7, y: circle.midY + (isFlipped ? 4 : -4)))
+                check.line(to: NSPoint(x: 12, y: circle.midY + (isFlipped ? -4 : 4)))
+                check.lineWidth = 2
+                check.lineCapStyle = .round
+                check.lineJoinStyle = .round
+                check.stroke()
+            } else {
+                NSColor.white.setFill()
+                NSBezierPath(ovalIn: circle.insetBy(dx: 5, dy: 5)).fill()
+            }
         }
         let label = NSAttributedString(string: title, attributes: [
             .font: font ?? NSFont.systemFont(ofSize: 12),
@@ -342,7 +439,7 @@ private final class RestoreDestinationButton: NSButton {
 }
 
 /// 主操作使用全局重点色，白色文字保持独立于系统原生按钮配色。
-private final class RestoreLaunchButton: NSButton {
+final class ShellAccentButton: NSButton {
     init() {
         super.init(frame: .zero)
         isBordered = false
