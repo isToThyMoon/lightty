@@ -19,12 +19,26 @@ extension UserDefaults: PreferenceStorage {}
 /// Atomic writes merge with disk under an interprocess lock; only the current format is read.
 final class FilePreferences: PreferenceStorage {
     static let failureNotification = Notification.Name("lighttyPreferencesStorageFailed")
+    /// 设置文件所在目录。LIGHTTY_PREFERENCES_DIR 供调试与门禁脚本换一份假设置，
+    /// 不必碰用户真实的 ~/.lightty/preferences.json（与 LIGHTTY_TASK_DIR 同式）。
+    /// 只换这一个文件：pane 运行时目录等仍在 ~/.lightty，不足以让第二个实例安全共存。
+    static func rootDirectory(testing: Bool, environment: [String: String], home: URL) -> URL {
+        if testing {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("lightty-preferences-tests-\(getpid())")
+        }
+        if let override = environment["LIGHTTY_PREFERENCES_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return home.appendingPathComponent(".lightty")
+    }
+
     static let shared: FilePreferences = {
         let testing = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || NSClassFromString("XCTestCase") != nil
-        let root = testing
-            ? FileManager.default.temporaryDirectory.appendingPathComponent("lightty-preferences-tests-\(getpid())")
-            : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".lightty")
+        let root = rootDirectory(testing: testing,
+                                 environment: ProcessInfo.processInfo.environment,
+                                 home: FileManager.default.homeDirectoryForCurrentUser)
         return FilePreferences(fileURL: root.appendingPathComponent(PersistenceFormat.preferences.fileName))
     }()
 

@@ -56,4 +56,26 @@ final class FilePreferencesTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: file), bytes)
         }
     }
+
+    /// 设置文件的位置可以被环境变量换掉：门禁脚本和调试要摆一份假设置，不能碰
+    /// 用户真实的 ~/.lightty/preferences.json。测试进程始终走临时目录，覆盖不生效。
+    func testPreferencesDirectoryCanBeRedirectedWithoutTouchingTheRealOne() {
+        let home = URL(fileURLWithPath: "/fixture/home")
+        XCTAssertEqual(FilePreferences.rootDirectory(testing: false, environment: [:], home: home).path,
+                       "/fixture/home/.lightty")
+        XCTAssertEqual(FilePreferences.rootDirectory(testing: false,
+                                                     environment: ["LIGHTTY_PREFERENCES_DIR": "/scratch/prefs"],
+                                                     home: home).path,
+                       "/scratch/prefs")
+        // 空值不算覆盖，仍然回到真实目录。
+        XCTAssertEqual(FilePreferences.rootDirectory(testing: false,
+                                                     environment: ["LIGHTTY_PREFERENCES_DIR": ""],
+                                                     home: home).path,
+                       "/fixture/home/.lightty")
+        let testing = FilePreferences.rootDirectory(testing: true,
+                                                    environment: ["LIGHTTY_PREFERENCES_DIR": "/scratch/prefs"],
+                                                    home: home)
+        XCTAssertNotEqual(testing.path, "/scratch/prefs")
+        XCTAssertTrue(testing.lastPathComponent.hasPrefix("lightty-preferences-tests-"))
+    }
 }

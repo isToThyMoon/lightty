@@ -88,7 +88,10 @@ Lightty 只有产品壳和声明式随包配置，没有第二套 terminal parse
 | macos-titlebar-style | 保留 lightty 原生标题栏，不读取该项 | HiddenTitlebarTerminalWindow | **有意分叉**：标题栏只承载系统三键与侧栏开关，pane 操作位于侧栏标题行 |
 | 热重载 | core action、字体菜单与主题菜单均重新执行同一条 bundled defaults → default_files → recursive_files → optional font/theme → finalize 链，并用 `ghostty_app_update_config` / `ghostty_surface_update_config` 更新 | 官方监听 reload + 系统外观变化重载 | terminal core 已接；依赖启动快照的 pane chrome/window base 刷新待补 |
 
-配置分层回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。脚本用隔离的
+配置分层回归：先 `swift build`，再运行 `scripts/check-config-parity.sh`。设置存在
+lightty 自己的文件里、读时不看命令行参数，所以脚本用 `LIGHTTY_PREFERENCES_DIR` 指向
+临时造的设置文件来摆内置主题开关；用户真实的 `~/.lightty/preferences.json` 全程不读
+不写。脚本用隔离的
 XDG fixture 验证：空用户文件得到随包基线；勾选时只覆盖用户 `theme`；不勾选时恢复
 用户主题；与主题无关的用户标量值始终保留。`--print-effective-terminal-config` 只输出
 background/foreground/opacity/blur 和配置 diagnostics，供检查使用；脚本同时拒绝
