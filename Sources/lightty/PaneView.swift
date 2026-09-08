@@ -40,6 +40,13 @@ final class PaneView: NSView {
     /// Identity of a catalog launch; it is not a handoff task binding.
     var resumedSessionKey: AgentSessionKey?
     var resumedSessionConfiguration: SessionConfigurationLocation?
+    /// 恢复出来的 pane 续接的 agent 会话身份。hook 只在**交互时**发状态：resume 后
+    /// 用户若没继续聊，store 里就没有它的状态，`snapshot()` 会读到 nil、把它记成无
+    /// agent，下次重启就丢了（实测 2026-09-07）。这三个字段让快照在实时状态缺席、
+    /// 且 pane 进程仍活着时兜底续接身份；一旦 hook 发来实时状态，实时值优先。
+    private var resumedAgent: String?
+    private var resumedAgentSessionID: String?
+    private var resumedAgentCWD: String?
     enum Binding {
         case unnamed                 // 灰点「未命名」
         case bound(fileURL: URL)     // 绿点，任务文件已存在
@@ -243,6 +250,10 @@ final class PaneView: NSView {
     /// 本 pane 的快照：名字、shell cwd、任务绑定、agent 会话（来自 hook 最后一发状态）。
     func snapshot() -> PaneSnapshot {
         let status = PaneStatusStore.shared.status(for: dragIdentifier)
+        let identity = Self.resolveAgentIdentity(
+            status: status, processExited: terminal.processExited,
+            resumedAgent: resumedAgent, resumedSessionID: resumedAgentSessionID,
+            resumedAgentCWD: resumedAgentCWD)
         let confirmed = resumedSessionKey.map {
             SessionResumeFlow.activity(for: $0, status: status, processExited: terminal.processExited) == .confirmed
         } ?? false
@@ -250,14 +261,31 @@ final class PaneView: NSView {
             name: header.title,
             workingDirectory: terminal.currentWorkingDirectory,
             taskFile: taskFileURL?.path,
-            agent: status?.agent,
-            sessionID: status?.sessionID,
-            agentCWD: status?.cwd,
-            // 收到 SessionEnd = 用户退出了 agent；其余任何事件（含旧 hook 不带 event）
-            // 都视为会话还在
-            agentAlive: status.map { $0.event != "SessionEnd" } ?? false,
+            agent: identity.agent,
+            sessionID: identity.sessionID,
+            agentCWD: identity.agentCWD,
+            agentAlive: identity.alive,
             catalogSession: confirmed ? resumedSessionKey : nil,
             catalogConfiguration: confirmed ? resumedSessionConfiguration : nil)
+    }
+
+    /// 决定写进快照的 agent 会话身份。纯函数便于测试。
+    ///
+    /// - 实时状态在场 → 一律以实时为准（含 SessionEnd：`alive=false`，不再续接）。
+    /// - 实时状态缺席、进程仍活着、且有恢复时记下的续接身份 → 用它兜底
+    ///   （resume 后用户没继续聊、hook 从没发状态的情形）。
+    /// - 进程已退出且无实时状态 → 不带 agent，避免续接一个已结束的会话。
+    static func resolveAgentIdentity(
+        status: PaneStatus?, processExited: Bool,
+        resumedAgent: String?, resumedSessionID: String?, resumedAgentCWD: String?
+    ) -> (agent: String?, sessionID: String?, agentCWD: String?, alive: Bool) {
+        if let status {
+            // 收到 SessionEnd = 用户退出了 agent；其余任何事件（含旧 hook 不带 event）都视为会话还在。
+            return (status.agent, status.sessionID, status.cwd, status.event != "SessionEnd")
+        }
+        let useFallback = !processExited && resumedAgent != nil
+        guard useFallback else { return (nil, nil, nil, false) }
+        return (resumedAgent, resumedSessionID, resumedAgentCWD, true)
     }
 
     /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
@@ -290,6 +318,13 @@ final class PaneView: NSView {
         let pane = PaneView(surfaceConfiguration: configuration)
         pane.resumedSessionKey = restoredCatalogKey
         pane.resumedSessionConfiguration = restoredCatalogKey == nil ? nil : snapshot.catalogConfiguration
+        // 续接身份：resume 命令已生成 → 记住它续接的会话，供 snapshot() 在 hook 尚未
+        // 发来实时状态（用户没继续聊）时兜底，避免下次重启丢会话。
+        if resume != nil {
+            pane.resumedAgent = snapshot.agent
+            pane.resumedAgentSessionID = snapshot.sessionID
+            pane.resumedAgentCWD = snapshot.agentCWD ?? snapshot.workingDirectory
+        }
         pane.header.title = snapshot.name
         if let path = snapshot.taskFile {
             let url = URL(fileURLWithPath: path)

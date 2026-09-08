@@ -21,7 +21,10 @@ struct TerminalSurfaceConfiguration {
     /// 全局环境里塞东西。`inheriting` 初始化器不复制本字段——新 pane 必须拿到
     /// 属于自己的 id，继承反而是错的。
     var envVars: [String: String] = [:]
-    /// shell 起来后由 libghostty 写进 pty 的首段输入，用于任务启动命令与会话恢复。
+    /// agent 启动/会话续接命令（如 `codex resume <id>`）。**不再走 libghostty 的
+    /// `initial_input`**：那是在 shell 起来之前写进 pty 的预输入，会被 shell 初始化
+    /// （starship 等）在恢复多 pane 同时启动时冲掉（实测 2026-09-07）。改为等 shell
+    /// 就绪（首个 OSC 7 报 cwd）后用 `sendText` 发，可靠得多。
     /// `inheriting` 不复制，普通新建或分屏不应重复执行已有 pane 的启动命令。
     var initialInput: String?
 
@@ -63,7 +66,7 @@ struct TerminalSurfaceConfiguration {
         }
 
         if let workingDirectory { config.working_directory = borrow(workingDirectory) }
-        if let initialInput { config.initial_input = borrow(initialInput) }
+        // initialInput 不再作为 libghostty 预输入（见字段注释）；改在 shell 就绪后 sendText。
 
         var pairs = envVars.map {
             ghostty_env_var_s(key: borrow($0.key), value: borrow($0.value))
@@ -116,10 +119,15 @@ final class TerminalSurfaceView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// 待 shell 就绪后要发的 agent 启动/续接命令；发一次即清。
+    private var pendingReadyInput: String?
+    private var sentReadyInput = false
+
     init(configuration: TerminalSurfaceConfiguration = .init()) {
         launchConfiguration = configuration
         currentWorkingDirectory = Self.normalizedWorkingDirectory(
             configuration.workingDirectory)
+        pendingReadyInput = configuration.initialInput
         super.init(frame: .zero)
     }
 
@@ -953,10 +961,22 @@ final class TerminalSurfaceView: NSView {
     /// core 的 PWD action 来自 OSC 7 / OSC 9 / OSC 1337。OSC 7 在部分 shell
     /// 配置下仍可能是 file URL，壳层统一收敛成可展示的本地路径。
     func setWorkingDirectory(_ rawValue: String) {
+        // 首个 OSC 7 = shell 就绪（precmd 里发的，此刻已在提示符、可接受输入）。
+        // 就绪输入必须在 cwd 比较之前触发：恢复的 pane 首个 OSC 7 常等于初始 cwd，
+        // 会被下面的 guard 挡掉。
+        fireReadyInputIfNeeded()
         let directory = Self.normalizedWorkingDirectory(rawValue)
         guard directory != currentWorkingDirectory else { return }
         currentWorkingDirectory = directory
         onWorkingDirectoryChange?(directory)
+    }
+
+    /// shell 就绪后把 agent 启动/续接命令发进去，发一次即清。surface 未建（极少见）则留待下次。
+    private func fireReadyInputIfNeeded() {
+        guard !sentReadyInput, let command = pendingReadyInput, surface != nil else { return }
+        sentReadyInput = true
+        pendingReadyInput = nil
+        sendText(command)
     }
 
     private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {
