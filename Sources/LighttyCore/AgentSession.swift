@@ -160,19 +160,25 @@ public struct SessionOrganization: Codable, Equatable, Sendable {
 
 }
 
-/// Native resume only. It does not inject a prompt, bind a task, or override permissions.
+/// Native resume only. It does not inject a prompt or bind a task. The configured launch
+/// flags ride along so a resumed session runs under the mode the user set for a new one.
 public struct SessionResumePlan: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
     public let environment: [String: String]
     public let unsetEnvironment: [String]
     public let workingDirectory: String
+    private let agent: SessionAgent
+    private let launchArguments: [String]
 
     public enum InvalidPlan: Error { case invalidIdentifier, invalidValue, missingDirectory }
 
+    /// `launchArguments` 没有默认值：新的续接入口必须显式交代带哪些参数，
+    /// 漏掉是编译错误，而不是一条悄悄退回默认审批模式的命令。
     public init(session: AgentSession, executable: String,
                 configuration: SessionConfigurationLocation,
-                workingDirectory: String? = nil) throws {
+                workingDirectory: String? = nil,
+                launchArguments: [String]) throws {
         let id = session.key.nativeID
         guard !id.isEmpty, id.count <= 128, id.first != "-",
               id.unicodeScalars.allSatisfy({
@@ -188,9 +194,17 @@ public struct SessionResumePlan: Equatable, Sendable {
                 throw InvalidPlan.invalidValue
             }
         }
+        for argument in launchArguments {
+            guard !argument.isEmpty,
+                  !argument.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                throw InvalidPlan.invalidValue
+            }
+        }
         self.executable = executable
         self.workingDirectory = cwd
-        arguments = session.key.agent == .codex ? ["resume", id] : ["--resume", id]
+        agent = session.key.agent
+        self.launchArguments = launchArguments
+        arguments = Self.compose(agent: agent, launchArguments: launchArguments, tail: [id])
         let variable = session.key.agent.configurationVariable
         switch configuration {
         case .standard:
@@ -214,7 +228,16 @@ public struct SessionResumePlan: Equatable, Sendable {
     }
 
     public var nativePickerInput: String {
-        render(arguments.first == "resume" ? ["resume", "--all"] : ["--resume"])
+        render(Self.compose(agent: agent, launchArguments: launchArguments,
+                            tail: agent == .codex ? ["--all"] : []))
+    }
+
+    /// Each CLI keeps its own resume shape: codex takes a subcommand, claude a flag. The launch
+    /// flags go where that CLI accepts them, never in front of the subcommand.
+    private static func compose(agent: SessionAgent, launchArguments: [String], tail: [String]) -> [String] {
+        agent == .codex
+            ? ["resume"] + launchArguments + tail
+            : launchArguments + ["--resume"] + tail
     }
 
     private func render(_ arguments: [String]) -> String {

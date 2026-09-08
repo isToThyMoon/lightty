@@ -39,6 +39,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
     private var navRows: [Page: SettingsNavRow] = [:]
     private let emptyLabel = NSTextField(labelWithString: L("No matching settings"))
     private var agentCommandFields: [LaunchAgent: NSTextField] = [:]
+    private var agentCommandPreview: NSTextField?
 
     init(page: Page = .appearance) {
         currentPage = page
@@ -203,6 +204,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         for (p, row) in navRows { row.isSelected = p == page }
         pageHost.subviews.forEach { $0.removeFromSuperview() }
         agentCommandFields.removeAll()
+        agentCommandPreview = nil
 
         let column = NSStackView()
         column.orientation = .vertical
@@ -314,51 +316,81 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             if let agent = LaunchAgent(rawValue: id) { AgentLaunchPreference.select(agent) }
         }
         agents.addRow(title: L("Default Agent"), control: defaultAgent)
+        // 一个开关管所有 Agent：用户表达的是「跳过权限确认」这个意图，
+        // 翻译成 --permission-mode bypassPermissions / --yolo 是 lightty 的事。
+        let bypass = ShellToggle(isOn: AgentLaunchPreference.bypassEnabled())
+        bypass.onChange = { [weak self] enabled in
+            AgentLaunchPreference.setBypass(enabled)
+            self?.refreshAgentCommandPreview()
+        }
+        bypass.setAccessibilityLabel(L("Bypass mode (skip permission prompts)"))
+        agents.addRow(title: L("Bypass mode (skip permission prompts)"), control: bypass)
         for agent in [LaunchAgent.claudeCode, .codex] {
-            let field = NSTextField(string: AgentLaunchPreference.command(for: agent))
+            let field = NSTextField(string: AgentLaunchPreference.customArguments(for: agent))
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            field.placeholderString = agent.defaultCommand
+            field.placeholderString = L("None")
             field.cell?.isScrollable = true
             field.cell?.wraps = false
             field.delegate = self
-            field.widthAnchor.constraint(equalToConstant: 170).isActive = true
-            field.setAccessibilityLabel(L("%@ launch command", agent.title))
+            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            field.setAccessibilityLabel(L("%@ extra arguments", agent.title))
             agentCommandFields[agent] = field
-            agents.addRow(title: agent.title, control: field)
+            agents.addRow(title: L("%@ extra arguments", agent.title), control: field)
         }
         column.addArrangedSubview(agents)
         agents.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         column.setCustomSpacing(12, after: agents)
-        let reset = NSButton(title: L("Reset launch commands"), target: self,
+        let reset = NSButton(title: L("Reset Agent options"), target: self,
                              action: #selector(resetAgentCommands))
         reset.bezelStyle = .rounded
         column.addArrangedSubview(reset)
+        // 参数框只说「加什么」，拼出来的整行在这里给出——开关翻译成哪个参数一看就知道。
+        column.setCustomSpacing(18, after: reset)
+        column.addArrangedSubview(sectionLabel(L("Launch command")))
+        column.setCustomSpacing(8, after: column.arrangedSubviews.last!)
+        let preview = NSTextField(wrappingLabelWithString: "")
+        preview.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        preview.textColor = ShellStyle.secondaryText
+        agentCommandPreview = preview
+        refreshAgentCommandPreview()
+        column.addArrangedSubview(preview)
+        preview.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         let commandHint = NSTextField(wrappingLabelWithString:
-            L("Commands run in the new terminal’s shell. You can include your own arguments."))
+            L("This command runs in the new terminal’s shell; resuming a session reuses the same options."))
         commandHint.font = .systemFont(ofSize: 11.5)
         commandHint.textColor = ShellStyle.tertiaryText
-        column.setCustomSpacing(12, after: reset)
+        column.setCustomSpacing(8, after: preview)
         column.addArrangedSubview(commandHint)
         commandHint.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+    }
+
+    private func refreshAgentCommandPreview() {
+        // 等宽字体下按最长的标题补齐，两行命令左端对齐。
+        let width = [LaunchAgent.claudeCode, .codex].map(\.title.count).max() ?? 0
+        agentCommandPreview?.stringValue = [LaunchAgent.claudeCode, .codex]
+            .map { "\($0.title.padding(toLength: width, withPad: " ", startingAt: 0))   \(AgentLaunchPreference.command(for: $0))" }
+            .joined(separator: "\n")
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let field = notification.object as? NSTextField,
               let agent = agentCommandFields.first(where: { $0.value === field })?.key else { return }
-        if !AgentLaunchPreference.setCommand(field.stringValue, for: agent) { NSSound.beep() }
-        field.stringValue = AgentLaunchPreference.command(for: agent)
+        if !AgentLaunchPreference.setCustomArguments(field.stringValue, for: agent) { NSSound.beep() }
+        field.stringValue = AgentLaunchPreference.customArguments(for: agent)
+        refreshAgentCommandPreview()
     }
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField,
               let agent = agentCommandFields.first(where: { $0.value === field })?.key else { return }
-        AgentLaunchPreference.setCommand(field.stringValue, for: agent)
+        AgentLaunchPreference.setCustomArguments(field.stringValue, for: agent)
+        refreshAgentCommandPreview()
     }
 
     @objc private func resetAgentCommands() {
         window?.makeFirstResponder(self)
-        AgentLaunchPreference.resetCommands()
-        for (agent, field) in agentCommandFields { field.stringValue = agent.defaultCommand }
+        AgentLaunchPreference.reset()
+        showPage(currentPage)
     }
 
     @objc private func showHookSetup() { onShowHookSetup?() }

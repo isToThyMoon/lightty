@@ -26,7 +26,11 @@ struct TerminalSurfaceConfiguration {
     /// （starship 等）在恢复多 pane 同时启动时冲掉（实测 2026-09-07）。改为等 shell
     /// 就绪（首个 OSC 7 报 cwd）后用 `sendText` 发，可靠得多。
     /// `inheriting` 不复制，普通新建或分屏不应重复执行已有 pane 的启动命令。
-    var initialInput: String?
+    ///
+    /// 存的是「要执行什么」而不是一行现成文本：拼命令的规则集中在 AgentCommand，
+    /// 每个建 pane 的入口只需要说明自己属于哪一类。
+    var command: AgentCommand = .none
+    var initialInput: String? { command.shellInput }
 
     init() {}
 

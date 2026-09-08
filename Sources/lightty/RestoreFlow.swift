@@ -295,7 +295,7 @@ final class RestorePopoverController: NSViewController {
             directoryError.stringValue = ""
             directoryError.isHidden = true
             return PaneView.restoring(task: launchTask, fileURL: fileURL,
-                initialInput: AgentLaunchPreference.initialInput(for: selectedAgent))
+                                      command: .start(selectedAgent))
         } catch {
             directoryError.stringValue = error.localizedDescription
             directoryError.isHidden = false
@@ -323,9 +323,8 @@ final class RestorePopoverController: NSViewController {
             return
         }
         let report = HookInstaller.report(for: selectedAgent == .claudeCode ? .claudeCode : .codex)
-        if !report.isAgentPresent,
-           AgentLaunchPreference.command(for: selectedAgent) == selectedAgent.defaultCommand {
-            contextHint.stringValue = L("%@ was not detected. Install it or set a launch command in Agent settings.", selectedAgent.title)
+        if !report.isAgentPresent {
+            contextHint.stringValue = L("%@ was not detected. Install it, then check the launch options in Agent settings.", selectedAgent.title)
         } else if report.state != .installed {
             contextHint.stringValue = L("Agent hooks share task context automatically. Configure them in Settings > General.")
         } else {

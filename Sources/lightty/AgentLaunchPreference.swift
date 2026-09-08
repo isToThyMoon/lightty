@@ -1,4 +1,5 @@
 import Foundation
+import LighttyCore
 
 enum LaunchAgent: String, CaseIterable {
     case claudeCode, codex, terminal
@@ -11,11 +12,22 @@ enum LaunchAgent: String, CaseIterable {
         }
     }
 
-    var defaultCommand: String {
+    /// 程序名而非路径：命令敲进用户自己的 shell，由 PATH 解析。
+    var program: String {
         switch self {
-        case .claudeCode: return "claude --permission-mode bypassPermissions"
-        case .codex: return "codex --yolo"
+        case .claudeCode: return "claude"
+        case .codex: return "codex"
         case .terminal: return ""
+        }
+    }
+
+    /// 每家 CLI 表达「跳过权限确认」的原生写法。开关是一个而不是每家一个：
+    /// 用户表达的是意图，具体参数是 lightty 对内部 Agent 的翻译。
+    var bypassArguments: [String] {
+        switch self {
+        case .claudeCode: return ["--permission-mode", "bypassPermissions"]
+        case .codex: return ["--yolo"]
+        case .terminal: return []
         }
     }
 
@@ -26,7 +38,9 @@ enum LaunchAgent: String, CaseIterable {
 
 enum AgentLaunchPreference {
     private static let selectedKey = "lightty.agent.selected"
-    private static func commandKey(_ agent: LaunchAgent) -> String { "lightty.agent.command.\(agent.rawValue)" }
+    private static let bypassKey = "lightty.agent.bypassPermissions"
+    private static func argumentsKey(_ agent: LaunchAgent) -> String { "lightty.agent.arguments.\(agent.rawValue)" }
+    private static func legacyCommandKey(_ agent: LaunchAgent) -> String { "lightty.agent.command.\(agent.rawValue)" }
 
     static func selected(in defaults: PreferenceStorage = FilePreferences.shared) -> LaunchAgent {
         defaults.string(forKey: selectedKey).flatMap(LaunchAgent.init(rawValue:)) ?? .codex
@@ -36,27 +50,105 @@ enum AgentLaunchPreference {
         defaults.set(agent.rawValue, forKey: selectedKey)
     }
 
-    static func command(for agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) -> String {
-        guard agent != .terminal else { return "" }
-        return defaults.string(forKey: commandKey(agent)) ?? agent.defaultCommand
+    /// 默认开启：这是 lightty 上线以来的既有行为，关掉是用户的显式选择。
+    static func bypassEnabled(in defaults: PreferenceStorage = FilePreferences.shared) -> Bool {
+        defaults.object(forKey: bypassKey) as? Bool ?? true
+    }
+
+    static func setBypass(_ enabled: Bool, in defaults: PreferenceStorage = FilePreferences.shared) {
+        defaults.set(enabled, forKey: bypassKey)
+    }
+
+    /// 用户自己追加的参数，原样保存：这一行最终交给 shell，引号由用户掌握。
+    static func customArguments(for agent: LaunchAgent,
+                                in defaults: PreferenceStorage = FilePreferences.shared) -> String {
+        agent == .terminal ? "" : defaults.string(forKey: argumentsKey(agent)) ?? ""
     }
 
     @discardableResult
-    static func setCommand(_ command: String, for agent: LaunchAgent,
-                           in defaults: PreferenceStorage = FilePreferences.shared) -> Bool {
+    static func setCustomArguments(_ arguments: String, for agent: LaunchAgent,
+                                   in defaults: PreferenceStorage = FilePreferences.shared) -> Bool {
         guard agent != .terminal,
-              !command.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
-        let trimmed = command.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { defaults.removeObject(forKey: commandKey(agent)) }
-        else { defaults.set(trimmed, forKey: commandKey(agent)) }
+              !arguments.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
+        let trimmed = arguments.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { defaults.removeObject(forKey: argumentsKey(agent)) }
+        else { defaults.set(trimmed, forKey: argumentsKey(agent)) }
         return true
+    }
+
+    /// 新终端里敲的整行启动命令 = 程序 + 跳过权限参数 + 自定义参数。
+    static func command(for agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) -> String {
+        guard agent != .terminal else { return "" }
+        let parts = [agent.program]
+            + (bypassEnabled(in: defaults) ? agent.bypassArguments : [])
+            + [customArguments(for: agent, in: defaults)]
+        return parts.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     static func initialInput(for agent: LaunchAgent, in defaults: PreferenceStorage = FilePreferences.shared) -> String? {
         agent == .terminal ? nil : command(for: agent, in: defaults) + "\n"
     }
 
-    static func resetCommands(in defaults: PreferenceStorage = FilePreferences.shared) {
-        for agent in LaunchAgent.allCases { defaults.removeObject(forKey: commandKey(agent)) }
+    /// 恢复会话时随原生续接命令一起传的参数。可执行文件由会话自己的来源探测，
+    /// 所以程序名不参与——只有参数需要跟着当前设置走。
+    static func launchArguments(for agent: SessionAgent,
+                                in defaults: PreferenceStorage = FilePreferences.shared) -> [String] {
+        let launch: LaunchAgent = agent == .codex ? .codex : .claudeCode
+        return (bypassEnabled(in: defaults) ? launch.bypassArguments : [])
+            + tokenize(customArguments(for: launch, in: defaults))
+    }
+
+    static func reset(in defaults: PreferenceStorage = FilePreferences.shared) {
+        defaults.removeObject(forKey: bypassKey)
+        for agent in LaunchAgent.allCases { defaults.removeObject(forKey: argumentsKey(agent)) }
+    }
+
+    /// 0.1.x 存的是整条命令。拆回「跳过权限 + 自定义参数」：认得出的 bypass 写法
+    /// 归开关，程序名丢弃（现在不可改），剩下的原样留给自定义参数。
+    static func migrateLegacyCommands(in defaults: PreferenceStorage = FilePreferences.shared) {
+        let legacy = LaunchAgent.allCases.compactMap { agent -> (LaunchAgent, [String])? in
+            defaults.string(forKey: legacyCommandKey(agent)).map { (agent, tokenize($0)) }
+        }
+        guard !legacy.isEmpty else { return }
+        var bypass = false
+        for (agent, tokens) in legacy {
+            var rest = Array(tokens.dropFirst())
+            if let range = rest.firstRange(of: agent.bypassArguments) {
+                rest.removeSubrange(range)
+                bypass = true
+            }
+            if defaults.object(forKey: argumentsKey(agent)) == nil, !rest.isEmpty {
+                defaults.set(rest.joined(separator: " "), forKey: argumentsKey(agent))
+            }
+            defaults.removeObject(forKey: legacyCommandKey(agent))
+        }
+        // 只要有一家留着 bypass 写法就保持开启；两家都被改成非 bypass 才关掉。
+        if defaults.object(forKey: bypassKey) == nil { defaults.set(bypass, forKey: bypassKey) }
+    }
+
+    /// 按 shell 的引号规则切词。存下来的参数已经排除控制字符，切词只用于把
+    /// 每个参数单独引用后交给恢复命令，不会把整行丢回 shell 重新解释。
+    static func tokenize(_ command: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var started = false
+        var quote: Character?
+        for character in command {
+            if let open = quote {
+                if character == open { quote = nil } else { current.append(character) }
+            } else if character == "'" || character == "\"" {
+                quote = character
+                started = true
+            } else if character == " " || character == "\t" {
+                if started { tokens.append(current) }
+                current = ""
+                started = false
+            } else {
+                current.append(character)
+                started = true
+            }
+        }
+        if started { tokens.append(current) }
+        return tokens
     }
 }

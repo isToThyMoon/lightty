@@ -18,7 +18,7 @@ enum SessionResumeFlow {
     static func newSessionConfiguration(agent: LaunchAgent, workingDirectory: String?) -> TerminalSurfaceConfiguration {
         var configuration = TerminalSurfaceConfiguration()
         configuration.workingDirectory = workingDirectory ?? NSHomeDirectory()
-        configuration.initialInput = AgentLaunchPreference.initialInput(for: agent)
+        configuration.command = .start(agent)
         return configuration
     }
 
@@ -53,8 +53,8 @@ enum SessionResumeFlow {
                   source.root.standardizedFileURL.path == session.key.sourceRoot else {
                 throw SessionCatalogError.unavailable(L("This CLI session source is no longer available."))
             }
-            let plan = try SessionResumePlan(session: session, executable: source.executable,
-                                            configuration: source.configuration, workingDirectory: cwd)
+            let plan = try SessionResumePlan(resuming: session, executable: source.executable,
+                                             configuration: source.configuration, workingDirectory: cwd)
             guard checking.insert(session.key).inserted else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 let occupancy = SessionOccupancy.check(session.key)
@@ -71,7 +71,7 @@ enum SessionResumeFlow {
                     // Absence of evidence is not a lock guarantee. The native CLI remains authoritative.
                     var configuration = TerminalSurfaceConfiguration()
                     configuration.workingDirectory = plan.workingDirectory
-                    configuration.initialInput = plan.shellInput
+                    configuration.command = .resume(plan)
                     let pane = PaneView(surfaceConfiguration: configuration)
                     pane.associateSession(.init(key: session.key, configuration: source.configuration,
                                                 workingDirectory: plan.workingDirectory))
@@ -91,11 +91,11 @@ enum SessionResumeFlow {
         let placeholder = AgentSession(key: .init(agent: source.agent, sourceRoot: source.root.path, nativeID: "placeholder"),
                                        title: "", workingDirectory: NSHomeDirectory(), updatedAt: nil)
         do {
-            let plan = try SessionResumePlan(session: placeholder, executable: source.executable,
-                                            configuration: source.configuration)
+            let plan = try SessionResumePlan(resuming: placeholder, executable: source.executable,
+                                             configuration: source.configuration)
             var configuration = TerminalSurfaceConfiguration()
             configuration.workingDirectory = plan.workingDirectory
-            configuration.initialInput = plan.nativePickerInput
+            configuration.command = .sessionPicker(plan)
             controller.addTab(initialPane: PaneView(surfaceConfiguration: configuration))
         } catch { showError(error, in: controller.window) }
     }

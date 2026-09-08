@@ -300,9 +300,9 @@ final class PaneView: NSView {
     /// 恢复任务用的 pane 工厂：新 shell 直接生在任务的 `cwd`（创建现场），
     /// agent 起来就在项目里，退出 agent 后 shell 也还在。目录已不存在则不传，
     /// 回退内核默认目录——不能让 spawn 失败。气泡三目的地与 ⇧⇧ 搜索共用。
-    static func restoring(task: TaskFile, fileURL: URL, initialInput: String? = nil) -> PaneView {
+    static func restoring(task: TaskFile, fileURL: URL, command: AgentCommand = .none) -> PaneView {
         var configuration = TerminalSurfaceConfiguration()
-        configuration.initialInput = initialInput
+        configuration.command = command
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: task.workdir, isDirectory: &isDirectory),
             isDirectory.boolValue {
@@ -346,7 +346,7 @@ final class PaneView: NSView {
         if let association, Self.isDirectory(association.workingDirectory),
            let executable = locateExecutable(association.key.agent.rawValue),
            let plan = try? association.resumePlan(executable: executable) {
-            configuration.initialInput = plan.shellInput
+            configuration.command = .resume(plan)
             restoredAssociation = association
         }
         let pane = PaneView(surfaceConfiguration: configuration)

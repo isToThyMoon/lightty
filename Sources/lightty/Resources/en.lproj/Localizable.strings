@@ -3,7 +3,6 @@
 "Go ↗" = "Go ↗";
 "Start a new terminal" = "Start a new terminal";
 "Go to %@" = "Go to %@";
-"%@ was not detected. Install it or set a launch command in Agent settings." = "%@ was not detected. Install it or set a launch command in Agent settings.";
 "Task context will be shared with the Agent automatically." = "Task context will be shared with the Agent automatically.";
 "Start working on “%@”" = "Start working on “%@”";
 "Terminal only" = "Terminal only";
@@ -14,9 +13,13 @@
 "Open a terminal with this task, without starting an Agent." = "Open a terminal with this task, without starting an Agent.";
 "Agent hooks share task context automatically. Configure them in Settings > General." = "Agent hooks share task context automatically. Configure them in Settings > General.";
 "Default Agent" = "Default Agent";
-"%@ launch command" = "%@ launch command";
-"Reset launch commands" = "Reset launch commands";
-"Commands run in the new terminal’s shell. You can include your own arguments." = "Commands run in the new terminal’s shell. You can include your own arguments.";
+"%@ was not detected. Install it, then check the launch options in Agent settings." = "%@ was not detected. Install it, then check the launch options in Agent settings.";
+"Bypass mode (skip permission prompts)" = "Bypass mode (skip permission prompts)";
+"%@ extra arguments" = "%@ extra arguments";
+"None" = "None";
+"Reset Agent options" = "Reset Agent options";
+"Launch command" = "Launch command";
+"This command runs in the new terminal’s shell; resuming a session reuses the same options." = "This command runs in the new terminal’s shell; resuming a session reuses the same options.";
 
 /* 菜单栏 */
 "About lightty" = "About lightty";

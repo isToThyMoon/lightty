@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in self?.preferencesStorageFailed() }
         }
         AppearancePreference.apply()
+        AgentLaunchPreference.migrateLegacyCommands()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
         installShiftTapMonitor()

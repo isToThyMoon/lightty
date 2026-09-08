@@ -98,18 +98,41 @@ final class AgentSessionTests: XCTestCase {
 
     func testResumeUsesOriginalAgentAndQuotesPathsWithoutBypass() throws {
         let plan = try SessionResumePlan(session: session(), executable: "/test path/it's codex",
-                                        configuration: .custom("/config/codex"))
+                                        configuration: .custom("/config/codex"), launchArguments: [])
         XCTAssertEqual(plan.arguments, ["resume", "abc-123"])
         XCTAssertEqual(plan.environment, ["CODEX_HOME": "/config/codex"])
         XCTAssertEqual(plan.shellInput, "/usr/bin/env 'CODEX_HOME=/config/codex' '/test path/it'\\''s codex' 'resume' 'abc-123'\n")
         XCTAssertFalse(plan.shellInput.contains("--yolo"))
     }
 
+    /// Resuming must land in the same permission mode as starting fresh, and each CLI accepts the
+    /// flags in its own place: after codex's subcommand, before claude's `--resume`.
+    func testResumeCarriesConfiguredLaunchFlagsWhereEachCLIAcceptsThem() throws {
+        let codex = try SessionResumePlan(session: session(), executable: "/bin/codex",
+                                          configuration: .standard, launchArguments: ["--yolo"])
+        XCTAssertEqual(codex.arguments, ["resume", "--yolo", "abc-123"])
+        XCTAssertTrue(codex.nativePickerInput.hasSuffix("'resume' '--yolo' '--all'\n"))
+
+        let record = AgentSession(key: .init(agent: .claude, sourceRoot: "/config/claude", nativeID: "abc-123"),
+                                  title: "", workingDirectory: "/repo", updatedAt: nil)
+        let claude = try SessionResumePlan(session: record, executable: "/bin/claude",
+                                           configuration: .standard,
+                                           launchArguments: ["--permission-mode", "bypassPermissions"])
+        XCTAssertEqual(claude.arguments, ["--permission-mode", "bypassPermissions", "--resume", "abc-123"])
+        XCTAssertTrue(claude.nativePickerInput.hasSuffix("'--permission-mode' 'bypassPermissions' '--resume'\n"))
+
+        for bad in [[""], ["--yolo\n; rm -rf /"]] {
+            XCTAssertThrowsError(try SessionResumePlan(session: session(), executable: "/bin/codex",
+                                                       configuration: .standard, launchArguments: bad))
+        }
+    }
+
     func testResumeRejectsOptionsAndShellPayloads() {
         for id in ["--help", "$(touch x)", "a\nb", "", "id;bad"] {
             let record = AgentSession(key: .init(agent: .codex, sourceRoot: "/config", nativeID: id),
                                       title: "", workingDirectory: "/repo", updatedAt: nil)
-            XCTAssertThrowsError(try SessionResumePlan(session: record, executable: "/bin/codex", configuration: .standard))
+            XCTAssertThrowsError(try SessionResumePlan(session: record, executable: "/bin/codex",
+                                                       configuration: .standard, launchArguments: []))
         }
     }
 
@@ -124,15 +147,17 @@ final class AgentSessionTests: XCTestCase {
             XCTAssertEqual(explicit, .custom(root))
             let record = AgentSession(key: .init(agent: agent, sourceRoot: root, nativeID: "abc-123"),
                                       title: "", workingDirectory: "/tmp", updatedAt: nil)
-            let plan = try SessionResumePlan(session: record, executable: "/bin/echo", configuration: standard)
+            let plan = try SessionResumePlan(session: record, executable: "/bin/echo",
+                                             configuration: standard, launchArguments: [])
             XCTAssertEqual(plan.environment, [:])
             XCTAssertEqual(plan.unsetEnvironment, [agent.configurationVariable])
             XCTAssertTrue(plan.nativePickerInput.contains("-u '\(agent.configurationVariable)'"))
-            let custom = try SessionResumePlan(session: record, executable: "/bin/echo", configuration: explicit)
+            let custom = try SessionResumePlan(session: record, executable: "/bin/echo",
+                                               configuration: explicit, launchArguments: [])
             XCTAssertEqual(custom.environment, [agent.configurationVariable: root])
             XCTAssertEqual(custom.unsetEnvironment, [])
             XCTAssertThrowsError(try SessionResumePlan(session: record, executable: "/bin/echo",
-                                                       configuration: .custom("/different/source")))
+                                                       configuration: .custom("/different/source"), launchArguments: []))
         }
     }
 
@@ -150,7 +175,8 @@ final class AgentSessionTests: XCTestCase {
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: directory.path, nativeID: "abc-123"),
                                   title: "", workingDirectory: directory.path, updatedAt: nil)
         for location: SessionConfigurationLocation in [.standard, .custom(directory.path)] {
-            let plan = try SessionResumePlan(session: record, executable: executable.path, configuration: location)
+            let plan = try SessionResumePlan(session: record, executable: executable.path,
+                                             configuration: location, launchArguments: [])
             for picker in [false, true] {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/bin/sh")
