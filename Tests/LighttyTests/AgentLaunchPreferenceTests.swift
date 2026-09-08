@@ -146,28 +146,39 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex --yolo -c model=\"o3 mini\"")
     }
 
-    /// 0.1.x 的整条命令拆回开关 + 附加参数，认得出的 bypass 写法不丢。
-    func testLegacyCommandsMigrateIntoTheSwitchAndExtraArguments() throws {
-        let suite = "agent-migrate-\(UUID().uuidString)"
+    /// 0.1.x 的整条命令只拆出附加参数：程序名丢弃，bypass 写法删掉（已由开关表达），
+    /// 开关一律留在默认打开，不按旧命令反推。
+    func testLegacyCommandsMigrateIntoExtraArgumentsAndLeaveTheSwitchOn() throws {
+        for (legacy, expected) in [
+            (["lightty.agent.command.claudeCode": "claude --permission-mode bypassPermissions --model opus"],
+             ["claude --permission-mode bypassPermissions --model opus", "codex --yolo"]),
+            // 旧命令里没写 bypass 也一样：转换后所有人是同一个起点。
+            (["lightty.agent.command.codex": "codex --profile work"],
+             ["claude --permission-mode bypassPermissions", "codex --yolo --profile work"]),
+        ] {
+            let suite = "agent-migrate-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            for (key, value) in legacy { defaults.set(value, forKey: key) }
+            AgentLaunchPreference.migrateLegacyCommands(in: defaults)
+            XCTAssertTrue(AgentLaunchPreference.bypassEnabled(in: defaults))
+            XCTAssertEqual([LaunchAgent.claudeCode, .codex].map { AgentLaunchPreference.command(for: $0, in: defaults) },
+                           expected)
+            for key in legacy.keys { XCTAssertNil(defaults.string(forKey: key)) }
+        }
+    }
+
+    /// 迁移只跑一次的量：旧键清掉之后，再跑不能覆盖用户此后关掉开关的选择。
+    func testMigrationDoesNotOverrideALaterChoice() throws {
+        let suite = "agent-migrate-again-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("claude --permission-mode bypassPermissions", forKey: "lightty.agent.command.claudeCode")
-        defaults.set("codex --profile work", forKey: "lightty.agent.command.codex")
+        defaults.set("codex --yolo", forKey: "lightty.agent.command.codex")
         AgentLaunchPreference.migrateLegacyCommands(in: defaults)
-        XCTAssertTrue(AgentLaunchPreference.bypassEnabled(in: defaults))
-        XCTAssertEqual(AgentLaunchPreference.customArguments(for: .claudeCode, in: defaults), "")
-        XCTAssertEqual(AgentLaunchPreference.customArguments(for: .codex, in: defaults), "--profile work")
-        XCTAssertNil(defaults.string(forKey: "lightty.agent.command.claudeCode"))
-        // 再跑一次不能覆盖用户此后的选择。
         AgentLaunchPreference.setBypass(false, in: defaults)
         AgentLaunchPreference.migrateLegacyCommands(in: defaults)
         XCTAssertFalse(AgentLaunchPreference.bypassEnabled(in: defaults))
-
-        let fresh = try XCTUnwrap(UserDefaults(suiteName: "agent-migrate-off-\(UUID().uuidString)"))
-        defer { fresh.removePersistentDomain(forName: fresh.description) }
-        fresh.set("codex", forKey: "lightty.agent.command.codex")
-        AgentLaunchPreference.migrateLegacyCommands(in: fresh)
-        XCTAssertFalse(AgentLaunchPreference.bypassEnabled(in: fresh))
+        XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex")
     }
 
     func testPopoverSwitchingAgentKeepsDestinationAndDoesNotCreateTerminal() throws {

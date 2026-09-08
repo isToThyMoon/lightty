@@ -103,27 +103,19 @@ enum AgentLaunchPreference {
         for agent in LaunchAgent.allCases { defaults.removeObject(forKey: argumentsKey(agent)) }
     }
 
-    /// 0.1.x 存的是整条命令。拆回「跳过权限 + 自定义参数」：认得出的 bypass 写法
-    /// 归开关，程序名丢弃（现在不可改），剩下的原样留给自定义参数。
+    /// 0.1.x 存的是整条命令。拆回附加参数：程序名丢弃（现在不可改），认得出的 bypass
+    /// 写法删掉——它已经由开关表达，留着会重复。开关一律用默认值（打开），不按旧命令
+    /// 反推：一个开关表达不了「一家开一家关」，与其猜，不如给所有人同一个起点。
     static func migrateLegacyCommands(in defaults: PreferenceStorage = FilePreferences.shared) {
-        let legacy = LaunchAgent.allCases.compactMap { agent -> (LaunchAgent, [String])? in
-            defaults.string(forKey: legacyCommandKey(agent)).map { (agent, tokenize($0)) }
-        }
-        guard !legacy.isEmpty else { return }
-        var bypass = false
-        for (agent, tokens) in legacy {
-            var rest = Array(tokens.dropFirst())
-            if let range = rest.firstRange(of: agent.bypassArguments) {
-                rest.removeSubrange(range)
-                bypass = true
-            }
+        for agent in LaunchAgent.allCases {
+            guard let command = defaults.string(forKey: legacyCommandKey(agent)) else { continue }
+            var rest = Array(tokenize(command).dropFirst())
+            if let range = rest.firstRange(of: agent.bypassArguments) { rest.removeSubrange(range) }
             if defaults.object(forKey: argumentsKey(agent)) == nil, !rest.isEmpty {
                 defaults.set(rest.joined(separator: " "), forKey: argumentsKey(agent))
             }
             defaults.removeObject(forKey: legacyCommandKey(agent))
         }
-        // 只要有一家留着 bypass 写法就保持开启；两家都被改成非 bypass 才关掉。
-        if defaults.object(forKey: bypassKey) == nil { defaults.set(bypass, forKey: bypassKey) }
     }
 
     /// 按 shell 的引号规则切词。存下来的参数已经排除控制字符，切词只用于把
