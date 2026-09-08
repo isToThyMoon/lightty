@@ -72,14 +72,17 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         let task = TaskFile(name: "Launch test", status: "todo", workdir: directory.path,
                             created: Date(), updated: Date())
         let file = directory.appendingPathComponent("task.md")
+        let marker = directory.appendingPathComponent("launch-marker")
+        // 绝对路径落点：断言看的是 pwd 的**内容**，所以即使 pane 没拿到任务目录、
+        // 退回内核默认 cwd（跑测试时是仓库根），也只会写进临时目录而不是污染仓库。
         let pane = PaneView.restoring(task: task, fileURL: file,
-                                      command: .shell("pwd > launch-marker"))
+                                      command: .shell("pwd > '\(marker.path)'"))
         XCTAssertNil(pane.terminal.surface)
         XCTAssertEqual(pane.taskFileURL, file)
+        XCTAssertEqual(pane.terminal.launchConfiguration.workingDirectory, directory.path)
         let pointer = PaneRuntimeDirectory.taskPointerFile(for: pane.dragIdentifier.uuidString)
         XCTAssertEqual(try String(contentsOf: pointer).trimmingCharacters(in: .whitespacesAndNewlines), file.path)
         let controller = TerminalWindowController(initialPane: pane)
-        let marker = directory.appendingPathComponent("launch-marker")
         let deadline = Date(timeIntervalSinceNow: 5)
         while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))

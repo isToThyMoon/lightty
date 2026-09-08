@@ -112,6 +112,10 @@ final class ShellMenuWindow: NSWindow {
     static let shadowMargin: CGFloat = 56
 
     var onDismiss: (() -> Void)?
+    /// 回车的默认动作。与 cancelOperation 对称地走响应链，而不是给按钮挂
+    /// AppKit 的 keyEquivalent——那是窗口级快捷键，会在 surface 看到事件之前
+    /// 截走用户在 Ghostty keybind 表里配的绑定。
+    var onDefaultAction: (() -> Void)?
     var dismissesOnResignKey = true
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
     private let controller: NSViewController
@@ -209,6 +213,15 @@ final class ShellMenuWindow: NSWindow {
 
     override func cancelOperation(_ sender: Any?) {
         onDismiss?()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // 36 = Return，76 = 小键盘 Enter；与键盘布局无关。
+        guard event.keyCode == 36 || event.keyCode == 76, let action = onDefaultAction else {
+            super.keyDown(with: event)
+            return
+        }
+        action()
     }
 }
 

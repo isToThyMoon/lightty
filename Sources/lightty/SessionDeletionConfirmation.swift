@@ -77,7 +77,7 @@ final class SessionDeletionConfirmation: NSObject {
         let margin = ShellMenuWindow.shadowMargin
         panel.setContentSize(NSSize(width: panel.cardSize.width + margin * 2,
                                     height: panel.cardSize.height + margin * 2))
-        buttons.first?.keyEquivalent = "\r"
+        panel.onDefaultAction = { [weak self] in self?.cancel() }
         completion = completionHandler
         panel.setFrameOrigin(NSPoint(x: parent.frame.midX - panel.frame.width / 2,
                                      y: parent.frame.midY - panel.frame.height / 2))

@@ -14,6 +14,8 @@ final class WorkingDirectoryEditor: NSStackView, NSTextFieldDelegate {
     let field = NSTextField()
     var onPickerVisibilityChange: ((Bool) -> Void)?
     var onPathChange: (() -> Void)?
+    /// 在目录框里按回车的动作。由字段的 doCommandBy 分发，不挂窗口级 keyEquivalent。
+    var onCommit: (() -> Void)?
     var path: String {
         get { field.stringValue }
         set { field.stringValue = newValue; onPathChange?() }
@@ -44,6 +46,12 @@ final class WorkingDirectoryEditor: NSStackView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     func controlTextDidChange(_ notification: Notification) { onPathChange?() }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.insertNewline(_:)), let onCommit else { return false }
+        onCommit()
+        return true
+    }
 
     @objc private func chooseFolder() {
         let panel = NSOpenPanel()
@@ -76,7 +84,7 @@ enum NewHandoffPopover {
     }
 }
 
-final class NewHandoffController: NSViewController {
+final class NewHandoffController: NSViewController, NSTextFieldDelegate {
     let nameField = NSTextField()
     let directory = WorkingDirectoryEditor(path: FileManager.default.homeDirectoryForCurrentUser.path)
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
@@ -88,6 +96,8 @@ final class NewHandoffController: NSViewController {
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         nameField.placeholderString = L("Task name")
         nameField.setAccessibilityLabel(L("Task name"))
+        nameField.delegate = self
+        directory.onCommit = { [weak self] in self?.commit() }
         nameField.focusRingType = .none
         if let cell = nameField.cell as? NSTextFieldCell {
             cell.usesSingleLineMode = true
@@ -100,7 +110,6 @@ final class NewHandoffController: NSViewController {
         create.title = L("Create")
         create.target = self
         create.action = #selector(commit)
-        create.keyEquivalent = "\r"
         let actions = NSView()
         create.translatesAutoresizingMaskIntoConstraints = false
         actions.addSubview(create)
@@ -127,6 +136,14 @@ final class NewHandoffController: NSViewController {
             create.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
         ])
         view = root
+    }
+
+    /// 回车提交只在编辑文本时生效，走字段的 doCommandBy；不给按钮挂 keyEquivalent，
+    /// 那是窗口级快捷键，会抢在 surface 之前吃掉用户配的 Ghostty 绑定。
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        commit()
+        return true
     }
 
     @objc func commit() {

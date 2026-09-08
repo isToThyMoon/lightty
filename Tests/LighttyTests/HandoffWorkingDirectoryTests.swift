@@ -24,6 +24,34 @@ extension SessionAssociationTests {
         #expect(lines == 1)
     }
 
+    /// 新建任务里回车提交只在编辑文本时生效，由字段的 doCommandBy 分发；
+    /// 按钮不再持有 AppKit keyEquivalent。
+    @MainActor @Test func returnInEitherFieldCreatesTheTaskWithoutAKeyEquivalent() throws {
+        _ = NSApplication.shared
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("handoff-return-\(UUID().uuidString)")
+        let workdir = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+        let previous = AppState.shared
+        AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
+        defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
+
+        let controller = NewHandoffController()
+        let stack = try #require(controller.view.subviews.first as? NSStackView)
+        let actions = try #require(stack.arrangedSubviews.last)
+        let button = try #require(actions.subviews.first as? ShellAccentButton)
+        #expect(button.keyEquivalent.isEmpty)
+        controller.nameField.stringValue = "Return fixture"
+        controller.directory.path = workdir.path
+        let editor = NSTextView()
+        // 名称框回车 → 提交；同一支路也接了目录框的 onCommit。
+        #expect(controller.control(controller.nameField, textView: editor,
+                                   doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        #expect(AppState.shared.taskStore.list().tasks.first?.task.workdir == workdir.path)
+        #expect(!controller.control(controller.nameField, textView: editor,
+                                    doCommandBy: #selector(NSResponder.insertTab(_:))))
+    }
+
     @Test func longHandoffFieldsStaySingleLine() throws {
         let controller = NewHandoffController()
         _ = controller.view

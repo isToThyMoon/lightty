@@ -27,6 +27,30 @@ struct SessionDeletionTests {
         #expect(parent.childWindows?.isEmpty != false)
         parent.orderOut(nil)
     }
+    /// 回车走窗口的响应链（与 Escape 对称），不靠按钮的 AppKit keyEquivalent——
+    /// 那是窗口级快捷键，会抢在 surface 之前吃掉用户配的 Ghostty 绑定。
+    @MainActor @Test func returnTakesTheSafeActionWithoutAKeyEquivalent() throws {
+        let parent = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 600, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let confirmation = SessionDeletionConfirmation()
+        confirmation.messageText = "Delete?"
+        confirmation.informativeText = "Fixture\n\nCannot be undone."
+        confirmation.addButton(withTitle: "Cancel")
+        confirmation.addButton(withTitle: "Delete")
+        var cancelled = false
+        confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
+        for button in confirmation.buttons { #expect(button.keyEquivalent.isEmpty) }
+        let panel = try #require(parent.childWindows?.compactMap { $0 as? ShellMenuWindow }.first)
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        panel.keyDown(with: event)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(cancelled)
+        #expect(parent.childWindows?.isEmpty != false)
+        parent.orderOut(nil)
+    }
+
     @MainActor @Test func unknownUsageOffersCancelBeforePermanentOverride() {
         let session = AgentSession(key: .init(agent: .claude, sourceRoot: "/fixture", nativeID: UUID().uuidString),
                                    title: "Fixture", workingDirectory: nil, updatedAt: nil)
