@@ -229,6 +229,12 @@ final class TerminalSurfaceView: NSView {
 
     /// 壳层明确请求向 PTY 注入文本的边界（「收工」/「注入」）。
     /// 这不参与键盘事件或快捷键配置。
+    ///
+    /// **这一支是「粘贴」，不是「打字」**——core 里 `ghostty_surface_text` 直接走
+    /// `completeClipboardPaste`（见 `vendor/ghostty/src/apprt/embedded.zig` 的注释
+    /// 与 `Surface.zig` 的 `textCallback`）。于是文本里的回车对开着括号粘贴模式的
+    /// 程序（agent 的 TUI 就是）只是「插入一个换行」，不是「提交」。
+    /// 要提交必须另外按一次回车键：`sendReturn()`。
     func sendText(_ text: String) {
         guard let surface else { return }
         let bytes = Array(text.utf8)
@@ -238,6 +244,29 @@ final class TerminalSurfaceView: NSView {
                 ghostty_surface_text(surface, $0, UInt(buffer.count))
             }
         }
+    }
+
+    /// 按一次回车键——和用户真的按下去走同一条路（`ghostty_surface_key`），
+    /// 所以用户自己配在回车上的绑定照样生效，编码也仍然由 core 决定。
+    ///
+    /// 为什么不能把回车拼进 `sendText`：那一支是粘贴，粘进去的回车不提交（见上）。
+    /// 文本不带 `text`：回车是 C0 控制字符，交给 core 按键码编码，
+    /// Kitty 键盘协议才看得到物理键——与 `keyAction` 同一条规则。
+    @discardableResult
+    func sendReturn() -> Bool {
+        guard let surface else { return false }
+        var event = ghostty_input_key_s()
+        event.action = GHOSTTY_ACTION_PRESS
+        event.keycode = 0x24 // kVK_Return，与 vendor 的键码表一致
+        event.text = nil
+        event.composing = false
+        event.mods = GHOSTTY_MODS_NONE
+        event.consumed_mods = GHOSTTY_MODS_NONE
+        event.unshifted_codepoint = 0x0D
+        let handled = ghostty_surface_key(surface, event)
+        event.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, event)
+        return handled
     }
 
     /// 宿主 UI 把用户操作表达为 Ghostty action 的唯一入口。

@@ -2,6 +2,21 @@ import AppKit
 import GhosttyKit
 import LighttyCore
 
+/// 身份胶囊与灵动岛第一行共用的排布。
+///
+/// 两处必须逐像素同构：展开时胶囊瞬间隐身、面板第一行顶上，收起时反过来。差一个
+/// 像素，交接那一帧就能看见文字跳。数只留这一份——之前胶囊加了 agent 图标而岛体
+/// 没跟上，文字就往回缩了 14pt。
+enum PaneIdentityMetrics {
+    static let dotLeading: CGFloat = 6
+    static let dotSize: CGFloat = 7
+    /// 状态点尾 → 图标
+    static let iconLeading: CGFloat = 6
+    static let iconSize: CGFloat = 10
+    /// 图标尾 → 名字
+    static let iconGap: CGFloat = 4
+}
+
 /// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
 /// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
 /// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
@@ -47,8 +62,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         didSet {
             guard oldValue != sessionAgent else { return }
             agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
-            agentIconWidth.constant = sessionAgent == nil ? 0 : 10
-            agentIconGap.constant = sessionAgent == nil ? 0 : 4
+            agentIconWidth.constant = sessionAgent == nil ? 0 : PaneIdentityMetrics.iconSize
+            agentIconGap.constant = sessionAgent == nil ? 0 : PaneIdentityMetrics.iconGap
         }
     }
     private let taskHintLabel = NSTextField(labelWithString: "")
@@ -77,6 +92,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     /// 胶囊在 header 坐标系中的 frame（面板形变动画的起点/终点）。
     var capsuleFrame: NSRect { capsule.frame }
+    /// 名字相对状态点的横向偏移。灵动岛第一行必须给出同一个数，否则交接会跳。
+    var titleOffsetFromDot: CGFloat { nameLabel.frame.minX - dotView.frame.maxX }
 
     /// 面板展开期间胶囊隐身。瞬时切换、不淡出：面板第一行与胶囊逐像素同构，
     /// 交接瞬间标题原地不动（灵动岛的"岛体扩展、内容不动"）。
@@ -201,10 +218,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             capsule.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -4),
 
-            dotView.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 6),
+            dotView.leadingAnchor.constraint(
+                equalTo: capsule.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
             dotView.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
-            dotView.widthAnchor.constraint(equalToConstant: 7),
-            dotView.heightAnchor.constraint(equalToConstant: 7),
+            dotView.widthAnchor.constraint(equalToConstant: PaneIdentityMetrics.dotSize),
+            dotView.heightAnchor.constraint(equalToConstant: PaneIdentityMetrics.dotSize),
 
             // 与圆点同心、命中区放大到 16pt；不参与水平链，布局零位移
             closeButton.centerXAnchor.constraint(equalTo: dotView.centerXAnchor),
@@ -212,9 +230,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             closeButton.widthAnchor.constraint(equalToConstant: 16),
             closeButton.heightAnchor.constraint(equalToConstant: 16),
 
-            agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 6),
+            agentIcon.leadingAnchor.constraint(
+                equalTo: dotView.trailingAnchor, constant: PaneIdentityMetrics.iconLeading),
             agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            agentIcon.heightAnchor.constraint(equalToConstant: 10),
+            agentIcon.heightAnchor.constraint(equalToConstant: PaneIdentityMetrics.iconSize),
             agentIconWidth,
             agentIconGap,
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),

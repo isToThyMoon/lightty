@@ -16,7 +16,7 @@ extension NSView {
 }
 
 /// Both sidebars share a separate trailing rail: overlay scrollers never cover rows.
-final class SidebarListScrollView: NSScrollView {
+class SidebarListScrollView: NSScrollView {
     static let leadingMargin: CGFloat = 12
     static let trailingMargin: CGFloat = 2
     static let railWidth: CGFloat = 16

@@ -123,7 +123,14 @@
 /* 灵动岛 */
 "Name this terminal" = "命名这个终端";
 "Search, or type a new task name and press Return" = "搜索或新建任务";
-"Bind task" = "绑定任务";
+"Task" = "任务";
+"Not set" = "未选择";
+"Choose task" = "选择任务";
+"Rename this task…" = "重命名这个任务…";
+"Rename session…" = "重命名会话…";
+"Rename session" = "重命名会话";
+"Enter a session name." = "请输入会话名。";
+"The CLI could not rename this session. It may be in use, missing, or unsupported by this CLI version." = "命令行程序没能改掉这段会话的名字。它可能正被占用、已不存在，或者这个版本不支持。";
 "New task “%@”" = "新建任务「%@」";
 "Return" = "回车";
 "Unbind" = "解除绑定";

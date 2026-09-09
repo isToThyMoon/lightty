@@ -16,6 +16,7 @@ run('npm', ['ci', '--prefix', source, '--ignore-scripts', '--omit=optional', '--
 await cp(join(source, 'node_modules'), join(output, 'node_modules'), { recursive: true });
 await cp(join(source, 'list-sessions.mjs'), join(output, 'list-sessions.mjs'));
 await cp(join(source, 'delete-session.mjs'), join(output, 'delete-session.mjs'));
+await cp(join(source, 'rename-session.mjs'), join(output, 'rename-session.mjs'));
 const version = '22.23.2';
 const hashes = {
   arm64: '61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6',

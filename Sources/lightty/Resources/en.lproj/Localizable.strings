@@ -123,7 +123,14 @@
 /* 灵动岛 */
 "Name this terminal" = "Name this terminal";
 "Search, or type a new task name and press Return" = "Search or create a task";
-"Bind task" = "Bind task";
+"Task" = "Task";
+"Not set" = "Not set";
+"Choose task" = "Choose task";
+"Rename this task…" = "Rename this task…";
+"Rename session…" = "Rename session…";
+"Rename session" = "Rename session";
+"Enter a session name." = "Enter a session name.";
+"The CLI could not rename this session. It may be in use, missing, or unsupported by this CLI version." = "The CLI could not rename this session. It may be in use, missing, or unsupported by this CLI version.";
 "New task “%@”" = "New task “%@”";
 "Return" = "Return";
 "Unbind" = "Unbind";

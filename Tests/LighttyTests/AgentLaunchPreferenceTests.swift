@@ -289,6 +289,26 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         XCTAssertNil(AgentCommand.start(.terminal).shellInput)
     }
 
+    /// 改会话名是把 `/rename <名字>` 送进 agent 自己的终端——标题归 agent 所有，
+    /// lightty 不另存一份。命令必须**恰好一行**：名字里混进换行，后半截就会变成
+    /// 一句发给模型的话，白烧一轮。
+    ///
+    /// 而且这一行**不带任何行尾**：注入文本在 core 里按粘贴处理，粘进去的回车对
+    /// agent 的 TUI 只是插入一个换行，命令会原样停在输入框里。提交是另外按一次
+    /// 回车键（`TerminalSurfaceView.sendReturn()`），不是文本的一部分。
+    func testRenameCommandIsASingleLineWithNoLineEnding() {
+        XCTAssertEqual(AgentCommand.rename("pv search 的 sql 优化").shellInput,
+                       "/rename pv search 的 sql 优化")
+        XCTAssertEqual(AgentCommand.rename("第一行\n第二行").shellInput,
+                       "/rename 第一行 第二行")
+        XCTAssertEqual(AgentCommand.rename("  两头有空格  ").shellInput,
+                       "/rename 两头有空格")
+        XCTAssertNil(AgentCommand.rename("   ").shellInput)
+        XCTAssertNil(AgentCommand.rename("").shellInput)
+        // 其他几支是敲给 shell 的第一行命令，它们仍然自带换行。
+        XCTAssertEqual(AgentCommand.shell("ls").shellInput, "ls\n")
+    }
+
     private func descendants(_ view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { descendants($0) }
     }

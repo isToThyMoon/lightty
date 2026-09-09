@@ -1,9 +1,71 @@
 import AppKit
+import LighttyCore
 import XCTest
 @testable import lightty
 
 @MainActor
 final class PaneIdentityPanelTests: XCTestCase {
+    func testExpandedIslandContainsLongBoundCapsule() {
+        let capsule = NSRect(x: 100, y: 600, width: 480, height: 20)
+        let panel = PaneIdentityMorphGeometry.panelFrame(around: capsule)
+        XCTAssertGreaterThanOrEqual(panel.width, capsule.width)
+        XCTAssertLessThanOrEqual(panel.minX, capsule.minX)
+        XCTAssertGreaterThanOrEqual(panel.maxX, capsule.maxX)
+    }
+
+    func testAnimationStartsAtDisplayedFrameWithoutMovingContent() {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: 272, height: PaneIdentityPanel.maxHeight)
+        let start = NSRect(x: 80, y: panel.bounds.height - 20, width: 112, height: 20)
+        panel.applyIslandFrame(start, duration: 0)
+        panel.layoutSubtreeIfNeeded()
+        let origin = panel.identityRowOriginInPanel
+        panel.applyIslandFrame(
+            PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: 250),
+            duration: 0.24)
+        XCTAssertEqual(panel.islandFrame, start)
+        XCTAssertEqual(panel.identityRowOriginInPanel, origin)
+        panel.applyIslandFrame(start, duration: 0)
+    }
+
+    func testVisibleAnimationKeepsTitleAndTopEdgeFixedAndCanReverse() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: 496, height: PaneIdentityPanel.maxHeight)
+        panel.update(paneName: "Long session title", taskName: "Bound task", dot: .systemGray, agent: .claude)
+        let window = PaneIdentityWindow(content: panel)
+        defer { window.orderOut(nil) }
+        let start = NSRect(x: 8, y: panel.bounds.height - 20, width: 480, height: 20)
+        let end = PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: 280)
+        panel.setIdentityAnchorOffset(start.minX)
+        panel.applyIslandFrame(start, duration: 0)
+        window.orderFront(nil)
+        panel.layoutSubtreeIfNeeded()
+        let title = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSTextField }.first {
+            $0.stringValue == "Long session title"
+        })
+        let titleFrame = panel.convert(title.bounds, from: title)
+        var cancelledCompletionRan = false
+        panel.applyIslandFrame(end, duration: 0.3) { cancelledCompletionRan = true }
+        let sampled = expectation(description: "Sample visible morph")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            XCTAssertEqual(panel.islandFrame.maxY, start.maxY, accuracy: 0.001)
+            XCTAssertEqual(panel.islandFrame.midX, start.midX, accuracy: 0.001)
+            XCTAssertEqual(panel.convert(title.bounds, from: title), titleFrame)
+            XCTAssertGreaterThan(panel.islandFrame.height, start.height)
+            let current = panel.islandFrame
+            panel.applyIslandFrame(start, duration: 0.08) {
+                XCTAssertEqual(panel.islandFrame, start)
+                XCTAssertEqual(panel.convert(title.bounds, from: title), titleFrame)
+                XCTAssertFalse(cancelledCompletionRan)
+                sampled.fulfill()
+            }
+            XCTAssertEqual(panel.islandFrame, current, "Reversal starts at the displayed frame")
+        }
+        wait(for: [sampled], timeout: 2)
+    }
+
     func testFilteringScrolledListKeepsReturnTargetVisible() throws {
         let (panel, search, scroll) = try makeTaskList()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
@@ -54,21 +116,178 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertEqual(picked?.lastPathComponent, expectedTask)
     }
 
-    func testConsecutiveFiltersDoNotRevealBeyondInterruptedMask() throws {
-        let (panel, search, _) = try makeTaskList()
-        let container = try XCTUnwrap(search.superview)
-        // 同一帧内反向筛选：首段动画尚未呈现，不应跳到上一次目标高度。
-        filter("Task 20", panel: panel, search: search)
-        let shortHeight = container.bounds.height
-        let shortMask = try XCTUnwrap(container.layer?.mask)
-        XCTAssertEqual(shortMask.position.y, shortHeight,
-                       "A shrinking container must not retain the previous mask's top edge")
-        filter("Task", panel: panel, search: search)
-        let mask = try XCTUnwrap(container.layer?.mask)
-        let animation = try XCTUnwrap(mask.animation(forKey: "reveal") as? CABasicAnimation)
-        let start = try XCTUnwrap(animation.fromValue as? CGFloat)
-        XCTAssertLessThan(start, shortHeight)
-        XCTAssertEqual(mask.position.y, container.bounds.height)
+    /// 形变的核心不变式：岛体在长，内容在面板坐标系里必须纹丝不动。
+    ///
+    /// 内容住在岛体的裁剪层里，frame 原点取岛体原点的相反数——所以岛体长开只是
+    /// 「露出更多」，内容一个像素都不许挪。第一行还要和 header 上的胶囊逐像素交接，
+    /// 挪了就穿帮。
+    func testContentStaysPutWhileTheIslandGrows() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: nil)
+
+        let collapsed = NSRect(x: 29, y: PaneIdentityPanel.maxHeight - 20, width: 214, height: 20)
+        panel.applyIslandFrame(collapsed, duration: 0)
+        panel.layoutSubtreeIfNeeded()
+        let before = panel.identityRowOriginInPanel
+
+        let expanded = NSRect(x: 0, y: PaneIdentityPanel.maxHeight - 62,
+                              width: PaneIdentityPanel.panelWidth, height: 62)
+        panel.applyIslandFrame(expanded, duration: 0)
+        panel.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(panel.identityRowOriginInPanel.x, before.x, accuracy: 0.001)
+        XCTAssertEqual(panel.identityRowOriginInPanel.y, before.y, accuracy: 0.001)
+    }
+
+    /// 内容必须住在岛体里。放在岛体外面就不受裁剪，岛体还只有胶囊大小时，
+    /// 底下已经躺着一整屏列表——那就是"整块区域从上往下砸下来"的由来。
+    func testEveryPieceOfContentIsClippedByTheIsland() throws {
+        let (panel, search, scroll) = try makeTaskList()
+        for view in [search, scroll] {
+            var ancestor = view.superview
+            var insideIsland = false
+            while let current = ancestor {
+                if current === panel.island { insideIsland = true; break }
+                ancestor = current.superview
+            }
+            XCTAssertTrue(insideIsland, "\(type(of: view)) 必须在岛体的裁剪层里")
+        }
+    }
+
+    /// 阴影单独一层并挖空内部：岛体是半透明的，阴影画在它自己的图层上会透上来
+    /// 把文字压暗。
+    func testIslandShadowIsCutOutSoItCannotDarkenContent() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.applyIslandFrame(NSRect(x: 0, y: 0, width: 272, height: 62),
+                               duration: 0)
+
+        XCTAssertNil(panel.island.layer?.shadowPath, "岛体自己不许画阴影")
+        let cutout = try XCTUnwrap(panel.islandShadow.layer?.mask as? CAShapeLayer)
+        XCTAssertEqual(cutout.fillRule, .evenOdd, "挖空靠 even-odd，不是靠盖一层")
+        XCTAssertNotNil(cutout.path)
+        XCTAssertNotNil(panel.islandShadow.layer?.shadowPath)
+    }
+
+    /// 任务行必须一眼看得出能点：常驻底色 + 右端箭头 + 左侧「任务」标签。
+    /// 它原来和上一行（点了直接打字改 pane 名）一样是透明底的一行字，
+    /// 两种行为同一张脸，用户只能靠试。
+    func testTaskRowLooksLikeAPickerInsteadOfPlainText() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
+        panel.layoutSubtreeIfNeeded()
+
+        let row = try XCTUnwrap(panel.descendants.first {
+            $0.identifier == PaneIdentityPanel.taskFieldIdentifier
+        })
+        let fill = try XCTUnwrap(row.layer?.backgroundColor)
+        XCTAssertGreaterThan(fill.alpha, 0, "静息态就该有底色，不能等 hover 才出现")
+
+        let labels = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(labels.contains(L("Task")), "左侧要有说明这一行是什么的标签")
+        XCTAssertTrue(labels.contains(L("Not set")), "未选择时要说“未选择”，不是“绑定任务”")
+
+        let chevrons = row.descendants.compactMap { ($0 as? NSImageView)?.image }
+        XCTAssertFalse(chevrons.isEmpty, "右端要有下拉箭头")
+
+        let pencils = panel.descendants.compactMap { ($0 as? NSButton)?.image?
+            .accessibilityDescription }
+        XCTAssertFalse(pencils.contains(L("Rename task")),
+                       "改名不再挂在任务行右边那支铅笔上")
+    }
+
+    /// 还没绑任务时，面板一打开就把列表摊开；已经绑了就保持两行。
+    func testTaskListOpensOnItsOwnOnlyWhenNoTaskIsBound() {
+        _ = NSApplication.shared
+        for (taskName, expectsOpen) in [(String?.none, true), (.some("Some task"), false)] {
+            let panel = PaneIdentityPanel()
+            panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                                 height: PaneIdentityPanel.maxHeight)
+            panel.taskProvider = {
+                [.init(name: "Some task", fileURL: URL(fileURLWithPath: "/tmp/t.md"),
+                       running: false, current: taskName != nil)]
+            }
+            panel.update(paneName: "Terminal", taskName: taskName, dot: .systemGray, agent: nil)
+            panel.expandTaskListForFirstUse()
+            XCTAssertEqual(panel.currentIslandHeight > PaneIdentityPanel.baseHeight,
+                           expectsOpen, "taskName = \(String(describing: taskName))")
+        }
+    }
+
+    /// 改名的入口在列表底部，和解除绑定并排——不是任务行右边那支 20×20 的铅笔。
+    func testRenameLivesInTheListNextToUnbind() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.taskProvider = {
+            [.init(name: "Some task", fileURL: URL(fileURLWithPath: "/tmp/t.md"),
+                   running: false, current: true)]
+        }
+        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: nil)
+        panel.toggleTaskList()
+        panel.layoutSubtreeIfNeeded()
+
+        let labels = panel.descendants.compactMap { $0 as? NSTextField }
+        let titles = labels.map(\.stringValue)
+        XCTAssertTrue(titles.contains(L("Rename this task…")))
+        XCTAssertTrue(titles.contains(L("Unbind")))
+
+        // 三行三个颜色：候选是普通文字色，改名走强调色，解绑走红色。同色的话
+        // 底下这两行看着就是"又两个任务"。
+        let choice = try XCTUnwrap(labels.first { $0.stringValue == "Some task" })
+        let rename = try XCTUnwrap(labels.first { $0.stringValue == L("Rename this task…") })
+        let unbind = try XCTUnwrap(labels.first { $0.stringValue == L("Unbind") })
+        // 动态色每次取都是新实例，比的是解析出来的值。
+        let appearance = panel.effectiveAppearance
+        func resolved(_ field: NSTextField) -> CGColor? {
+            field.textColor?.shellResolvedCGColor(for: appearance)
+        }
+        XCTAssertEqual(resolved(rename),
+                       ShellStyle.navigationAccent.shellResolvedCGColor(for: appearance))
+        XCTAssertNotEqual(resolved(rename), resolved(choice))
+        XCTAssertNotEqual(resolved(unbind), resolved(choice))
+        XCTAssertNotEqual(resolved(unbind), resolved(rename))
+
+        // 而且必须钉在滚动区外面：任务一多，跟着候选一起滚就又被挤到看不见了。
+        let scroll = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSScrollView }.first)
+        let scrolled = Set((scroll.documentView?.descendants ?? []).compactMap {
+            ($0 as? NSTextField)?.stringValue
+        })
+        XCTAssertFalse(scrolled.contains(L("Rename this task…")))
+        XCTAssertFalse(scrolled.contains(L("Unbind")))
+    }
+
+    /// 胶囊与灵动岛第一行必须逐像素同构：展开时胶囊瞬间隐身、第一行顶上，收起反过来。
+    /// 差一个像素，交接那一帧就能看见文字跳——胶囊加了 agent 图标而岛体没跟上时，
+    /// 文字整整往回缩了 14pt。
+    func testIslandFirstRowKeepsTheCapsuleTitleOffset() {
+        _ = NSApplication.shared
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        for agent in [SessionAgent?.none, .some(.claude), .some(.codex)] {
+            let header = PaneHeaderView()
+            header.frame = NSRect(x: 0, y: 0, width: 400, height: PaneHeaderView.height)
+            header.sessionAgent = agent
+            header.title = "Terminal"
+            header.layoutSubtreeIfNeeded()
+
+            let panel = PaneIdentityPanel()
+            panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                                 height: PaneIdentityPanel.maxHeight)
+            panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: agent)
+            panel.layoutSubtreeIfNeeded()
+
+            XCTAssertEqual(panel.titleOffsetFromDot, header.titleOffsetFromDot, accuracy: 0.001,
+                           "agent = \(String(describing: agent))")
+        }
     }
 
     private func makeTaskList() throws -> (PaneIdentityPanel, NSTextField, NSScrollView) {
@@ -82,9 +301,7 @@ final class PaneIdentityPanelTests: XCTestCase {
                                 running: false, current: false) }
         }
         panel.layoutSubtreeIfNeeded()
-        let button = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSButton }
-            .first { $0.action == NSSelectorFromString("taskTapped") })
-        button.performClick(nil)
+        panel.toggleTaskList()
         panel.layoutSubtreeIfNeeded()
         let search = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSTextField }
             .first { $0.placeholderAttributedString?.string == L("Search, or type a new task name and press Return") })
@@ -101,8 +318,10 @@ final class PaneIdentityPanelTests: XCTestCase {
     func testMorphExpandsEquallyLeftAndRightAndOnlyDownward() {
         let capsule = NSRect(x: 410, y: 612, width: 96, height: 20)
         let panel = PaneIdentityMorphGeometry.panelFrame(around: capsule)
-        let collapsed = PaneIdentityMorphGeometry.collapsedIslandFrame(
-            capsule: capsule, panelFrame: panel)
+        // 胶囊在面板坐标系里的位置。生产路径靠坐标转换拿到同一个结果——面板在
+        // 子窗口里是内缩的，那边不能拿 frame 相减。
+        let collapsed = NSRect(x: capsule.minX - panel.minX, y: capsule.minY - panel.minY,
+                               width: capsule.width, height: capsule.height)
         let expanded = PaneIdentityMorphGeometry.expandedIslandFrame(
             in: NSRect(origin: .zero, size: panel.size),
             height: PaneIdentityPanel.baseHeight)
@@ -124,7 +343,7 @@ final class PaneIdentityPanelTests: XCTestCase {
             x: 0, y: 0,
             width: PaneIdentityPanel.panelWidth,
             height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
         panel.setIdentityAnchorOffset(74)
         panel.layoutSubtreeIfNeeded()
 
@@ -134,54 +353,17 @@ final class PaneIdentityPanelTests: XCTestCase {
             })
         let before = panel.convert(title.bounds, from: title)
 
-        panel.island.frame = PaneIdentityMorphGeometry.expandedIslandFrame(
-            in: panel.bounds, height: PaneIdentityPanel.baseHeight)
+        // 必须走形变入口：直接给 island.frame 赋值会把内容一起带偏，这也正是
+        // `applyIslandFrame` 存在的理由。
+        panel.applyIslandFrame(
+            PaneIdentityMorphGeometry.expandedIslandFrame(
+                in: panel.bounds, height: PaneIdentityPanel.baseHeight),
+            duration: 0)
         panel.layoutSubtreeIfNeeded()
         let after = panel.convert(title.bounds, from: title)
 
         XCTAssertEqual(after.minX, before.minX, accuracy: 0.001)
         XCTAssertEqual(after.midY, before.midY, accuracy: 0.001)
-    }
-
-    func testCollapseFadeIncludesOpenTaskList() throws {
-        _ = NSApplication.shared
-
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: PaneIdentityPanel.panelWidth,
-            height: PaneIdentityPanel.maxHeight)
-        panel.taskProvider = {
-            [PaneIdentityPanel.TaskChoice(
-                name: "Task",
-                fileURL: URL(fileURLWithPath: "/tmp/task.md"),
-                running: false,
-                current: false)]
-        }
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
-        panel.layoutSubtreeIfNeeded()
-
-        let taskButton = try XCTUnwrap(
-            panel.descendants.compactMap { $0 as? NSButton }.first {
-                $0.action == NSSelectorFromString("taskTapped")
-            })
-        taskButton.performClick(nil)
-        panel.layoutSubtreeIfNeeded()
-
-        let searchField = try XCTUnwrap(
-            panel.descendants.compactMap { $0 as? NSTextField }.first {
-                $0.placeholderAttributedString?.string
-                    == L("Search, or type a new task name and press Return")
-            })
-        let taskListContainer = try XCTUnwrap(searchField.superview)
-
-        panel.setExpandedContentAlpha(0, animated: false)
-
-        XCTAssertEqual(
-            taskListContainer.alphaValue,
-            0,
-            "The open task list must fade with the island's other expanded content")
     }
 
     func testSearchPlaceholderFitsWithinIsland() throws {
@@ -193,7 +375,7 @@ final class PaneIdentityPanelTests: XCTestCase {
             y: 0,
             width: PaneIdentityPanel.panelWidth,
             height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray)
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
         panel.layoutSubtreeIfNeeded()
 
         let searchField = try XCTUnwrap(
@@ -237,11 +419,7 @@ final class PaneIdentityPanelTests: XCTestCase {
         }
 
         panel.layoutSubtreeIfNeeded()
-        let taskButton = try XCTUnwrap(
-            panel.descendants.compactMap { $0 as? NSButton }.first {
-                $0.action == NSSelectorFromString("taskTapped")
-            })
-        taskButton.performClick(nil)
+        panel.toggleTaskList()
         panel.layoutSubtreeIfNeeded()
 
         let lastTaskLabel = try XCTUnwrap(

@@ -50,7 +50,7 @@ cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
 # The SDK only lists local metadata. Do not bundle its optional Claude CLI binary.
 CLAUDE_HELPER="$APP/Contents/Resources/claude-session-helper"
 mkdir -p "$CLAUDE_HELPER"
-for item in list-sessions.mjs delete-session.mjs node_modules runtime-arm64 runtime-x64; do
+for item in list-sessions.mjs delete-session.mjs rename-session.mjs node_modules runtime-arm64 runtime-x64; do
     cp -R "$ROOT/.build/claude-session-helper/$item" "$CLAUDE_HELPER/"
 done
 # Sparkle 动态框架：开发态靠 @loader_path 同目录找到，bundle 里进 Frameworks/

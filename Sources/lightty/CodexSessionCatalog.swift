@@ -8,13 +8,8 @@ struct CodexSessionCatalog: SessionCatalogProvider {
 
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if cancelled() { throw CancellationError() }
-        let rpc = try CatalogJSONRPC(executable: source.executable, root: source.root)
+        let rpc = try CatalogJSONRPC.connected(to: source, cancelled: cancelled)
         defer { rpc.close() }
-        _ = try rpc.request("initialize", params: [
-            "clientInfo": ["name": "lightty_session_catalog", "version": "0.1.0"],
-            "capabilities": ["experimentalApi": false],
-        ], cancelled: cancelled)
-        try rpc.notify("initialized")
         var params: [String: Any] = ["limit": 100, "sourceKinds": ["cli"],
             "modelProviders": [], "archived": archived, "sortKey": "updated_at"]
         if let cursor { params["cursor"] = cursor }
@@ -42,9 +37,11 @@ struct CodexSessionCatalog: SessionCatalogProvider {
     }
 }
 
-/// Private, bounded stdio client; not an app-wide RPC framework.
+/// Bounded stdio client for one `codex app-server` conversation; not an app-wide RPC
+/// framework. Only the catalog and `SessionRename` use it, and both open a child, ask
+/// one question, and close it.
 /// Reads are nonblocking so cancellation/deadlines also work when a CLI stops responding.
-private final class CatalogJSONRPC {
+final class CatalogJSONRPC {
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -69,6 +66,23 @@ private final class CatalogJSONRPC {
         try process.run()
         let fd = output.fileHandleForReading.fileDescriptor
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    }
+
+    /// 握手：app-server 在 `initialize` 有回应、`initialized` 发出去之前不接别的方法。
+    /// 两个调用方（列表、改名）都要走这一步，所以放在这里而不是各写一遍。
+    static func connected(to source: SessionCatalogSource, cancelled: () -> Bool) throws -> CatalogJSONRPC {
+        let rpc = try CatalogJSONRPC(executable: source.executable, root: source.root)
+        do {
+            _ = try rpc.request("initialize", params: [
+                "clientInfo": ["name": "lightty_session_catalog", "version": "0.1.0"],
+                "capabilities": ["experimentalApi": false],
+            ], cancelled: cancelled)
+            try rpc.notify("initialized")
+        } catch {
+            rpc.close()
+            throw error
+        }
+        return rpc
     }
 
     func notify(_ method: String) throws { try send(["method": method]) }
