@@ -33,7 +33,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let makeView: (NSView?) -> NSView
     }
     private var rowItems: [RowItem] = []
-    private var reloadScheduled = false
     /// pane 行按 pane id 索引，供状态原地更新用。
     /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
     /// （一次工具调用就有 PreToolUse + PostToolUse 两发），拆建必闪。
@@ -195,14 +194,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         paneRows.object(forKey: paneID as NSUUID)?.applyWorkingDirectory(directory)
     }
 
-    @objc private func scheduleReload() {
-        guard !reloadScheduled else { return }
-        reloadScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.reloadScheduled = false
-            self?.reload()
-        }
-    }
+    private lazy var reloads = Coalescer(.nextTick) { [weak self] in self?.reload() }
+    @objc private func scheduleReload() { reloads.schedule() }
 
     @objc private func newTab() {
         // 有活跃 pane 时走 Ghostty action 通路：新标签页继承当前 pane 的
@@ -980,29 +973,44 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
+    /// 这一行**真正显示出来**的三样东西。
+    ///
+    /// 比较它，而不是比较原始状态里的字段：以后往这一行加显示项，就必须加进这个值，
+    /// 守卫自动跟着走；否则会出现「加了新字段但守卫没加，界面悄悄不刷新」。
+    ///
+    /// 也别照抄终端头那边的字段表——那边显示 `detail`（进 tooltip），这一行不显示；
+    /// 这一行显示 `cwd`（无 OSC PWD 时第二行的兜底），那边不显示。
+    /// **各自比自己显示的东西**，取并集只会让两边都多刷。
+    ///
+    /// `tool` 不在里面：这个视图从头到尾没用过它（用它的 `detailLine(for:)` 是终端头
+    /// 和菜单栏在调）。而 `PreToolUse`/`PostToolUse` 每次工具调用都会送一发状态过来，
+    /// 把它放进守卫等于每次都白穿过一遍。
+    private struct Rendered: Equatable {
+        var activity: PaneActivity?
+        var text: String?
+        var cwd: String?
+        /// 纯函数，**不另存一份缓存**：缓存要在视图复用时记得清掉，那是一个新的失败
+        /// 模式；前后各算一次就没有可失效的东西。
+        init(of status: PaneStatus?) {
+            activity = status?.state
+            text = TabPaneStatusPresentation.text(for: status)
+            cwd = status?.cwd
+        }
+    }
+
     func applyStatus(_ status: PaneStatus?) {
-        // cwd 是第二行在无 OSC PWD 时的兜底；tool 名不进侧栏，避免高频跳字。
-        guard self.status?.state != status?.state
-                || self.status?.tool != status?.tool
-                || self.status?.cwd != status?.cwd
-        else { return }
-
-        let previousActivity = activity
-        let previousText = TabPaneStatusPresentation.text(for: self.status)
-        let previousCWD = self.status?.cwd
+        let previous = Rendered(of: self.status)
+        let next = Rendered(of: status)
+        // 原始状态照存：下面几个 apply 都从 `self.status` 读。
         self.status = status
-
-        // 圆点跟真实 activity 走；文字单独比较展示值，thinking ↔ tool 不重复写 label。
-        if previousActivity != activity {
+        guard previous != next else { return }
+        // 圆点跟真实 activity 走；文字比的是展示值，thinking ↔ tool 不重复写 label。
+        if previous.activity != next.activity {
             applyDotColor()
             applyFill()
         }
-        if previousText != TabPaneStatusPresentation.text(for: status) {
-            applyStatusLabel()
-        }
-        if previousCWD != status?.cwd {
-            applyMetadataLine()
-        }
+        if previous.text != next.text { applyStatusLabel() }
+        if previous.cwd != next.cwd { applyMetadataLine() }
     }
 
     /// 活动状态与 pane 名同在第一行；空闲时隐藏，不用任务名补位。

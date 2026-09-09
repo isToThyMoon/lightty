@@ -427,12 +427,27 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     ///
     /// pane 自己不订阅通知：状态源是全局的一发广播，每个 pane 挂一个观察者
     /// 只是把同一次广播摊成 N 次派发，还得在 PaneView 里加订阅代码。
+    /// 终端头**真正显示出来**的三样东西：圆点跟状态走，tooltip 用 tool 与 detail。
+    ///
+    /// 比较它，而不是比较原始状态里的字段：以后往这里加显示项，就必须加进这个值，
+    /// 守卫自动跟着走。别照抄侧栏行那边的字段表——那边显示 `cwd`，这里不显示；
+    /// 这里显示 `detail`，那边不显示。**各自比自己显示的东西**（见
+    /// `TabColumnView` 里 `PaneRowView.Rendered`）。
+    private struct Rendered: Equatable {
+        var state: PaneActivity?
+        var tool: String?
+        var detail: String?
+        /// 纯函数，不另存缓存——理由同 `PaneRowView.Rendered`。
+        init(of status: PaneStatus?) {
+            state = status?.state
+            tool = status?.tool
+            detail = status?.detail
+        }
+    }
+
     func apply(_ status: PaneStatus?) {
-        // 高频入口（PreToolUse/PostToolUse 一次工具调用就来两发），先挡住无变化的
-        let changed = status?.state != self.status?.state
-            || status?.tool != self.status?.tool
-            || status?.detail != self.status?.detail
-        guard changed else { return }
+        // 高频入口：PreToolUse/PostToolUse 一次工具调用就来两发，先挡住无变化的。
+        guard Rendered(of: self.status) != Rendered(of: status) else { return }
         let enteredDone = status?.state == .done && self.status?.state != .done
         self.status = status
 

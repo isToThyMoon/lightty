@@ -6,7 +6,9 @@ extension Notification.Name {
 }
 
 final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
-    private enum Row: Equatable {
+    /// internal 而非 private：`SidebarState` 带着它，而渲染状态是这个模块对测试的
+    /// 断言面——测试断言值，不必遍历视图树反推显示了什么。
+    enum Row: Equatable {
         case projectsHeading, project(SessionProject), heading, emptyProjects, session(AgentSession, UUID?)
         enum ID: Hashable { case projects, project(UUID), recent, empty, session(AgentSessionKey) }
         var id: ID {
@@ -33,6 +35,8 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private let newProject = NSButton(title: L("New project…"), target: nil, action: nil)
     private let more = NSButton(title: L("Load more sessions"), target: nil, action: nil)
     private let management = NSButton()
+    /// 刷新/取消同一个按钮：它们是同一件事的两个状态，摆两个按钮会有一个永远是灰的。
+    private let refresh = NSButton()
     private let projectMore = NSButton()
     private let projectHeading = SidebarDisclosureButton(title: L("Projects"))
     private let refreshProgress = NSProgressIndicator()
@@ -78,10 +82,16 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         management.toolTip = L("Filter sessions")
         management.setAccessibilityLabel(L("Filter sessions"))
         management.target = self; management.action = #selector(showManagement)
+        refresh.target = self; refresh.action = #selector(refreshOrCancel)
+        // 图标定一次就不再换。读取时它自己转起来，身份不变——按钮不该在光标底下变身。
+        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("Refresh"))
+        refresh.toolTip = L("Refresh")
+        refresh.setAccessibilityLabel(L("Refresh"))
+        refresh.wantsLayer = true
         projectMore.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: L("Project actions"))
         projectMore.setAccessibilityLabel(L("Project actions"))
         projectMore.isEnabled = false
-        for button in [management, newProject, projectMore] {
+        for button in [management, newProject, projectMore, refresh] {
             button.isBordered = false
             button.contentTintColor = ShellStyle.secondaryText
             button.widthAnchor.constraint(equalToConstant: 24).isActive = true
@@ -102,8 +112,14 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         refreshProgress.setAccessibilityLabel(L("Loading local sessions…"))
         refreshProgress.widthAnchor.constraint(equalToConstant: 14).isActive = true
         refreshProgress.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        // 标题行不放转圈：刷新按钮自己就表达了「在读」（变成取消），两个一起是重复的。
+        // 转圈只留给搜索面板——那边没有刷新按钮，需要另一个东西说明在读。
+        //
+        // 搜索面板里这一行其实根本不显示：那边 `rows` 只有会话，没有标题行，
+        // `recentHeader` 永远不会被表格取走（见 `makeState()` 里 `searchMode` 那一支）。
+        // 这个分支是既有代码留下的，不在这次的范围里，但别再往它里面加东西。
         let recentActions = NSStackView(views: searchMode ? [recentHeading, NSView(), management]
-                                                       : [recentHeading, refreshProgress, NSView(), management])
+                                                       : [recentHeading, NSView(), refresh, management])
         recentActions.spacing = 6
         recentActions.alignment = .centerY
         recentActions.detachesHiddenViews = false
@@ -152,7 +168,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         ])
         if !searchMode { searchRow.heightAnchor.constraint(equalToConstant: 0).isActive = true }
         moreHeight = more.heightAnchor.constraint(equalToConstant: 0)
-        NotificationCenter.default.addObserver(self, selector: #selector(reload), name: .lighttySessionLibraryDidChange, object: library)
+        NotificationCenter.default.addObserver(self, selector: #selector(libraryDidChange), name: .lighttySessionLibraryDidChange, object: library)
         if !searchMode {
             for name in [Notification.Name.lighttyTerminalSelectionDidChange, .lighttyTasksDidChange,
                          .lighttyPaneStatusDidChange] {
@@ -203,28 +219,180 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     }
     @objc private func refreshCatalog() { library.refresh() }
     @objc private func refreshOrCancel() {
+        // 不在这里改按钮：读取状态的每一次变化都会广播一条会话库通知，`reload()` 接得住。
         if library.loading { library.cancelLoading() } else { refreshCatalog() }
     }
+
+    /// 第一侧栏在表格之外呈现的**全部**东西，算成一个可比较的值。
+    ///
+    /// **为什么必须先算成值再比较。** 会话库的通知是零载荷的（`SessionLibrary.swift:209`），
+    /// 八个状态字段塌成同一个信号；而且这个视图**没有合流**——`#selector(reload)` 直接
+    /// 接在通知上。一次 `library.refresh()` 至少发五条（`SessionLibrary.swift:96` 一条，
+    /// 加每个 provider 每页完成时 `:135` 的 defer），于是启动首次布局期间 `reload()`
+    /// 要整跑五遍以上。
+    ///
+    /// 在那五遍里反复写视图有过一次实测到的代价：往表格活着的单元格里每次赋一个
+    /// **新造的** `NSImage`，启动 20 秒内必崩（抛「Display Window passes 比窗口里的
+    /// 视图还多」）；赋同一个缓存对象、或只改文字，都不崩。
+    ///
+    /// 别的写入是不是也有同样的代价，**没有验证过**——实测把同一个值重设进
+    /// `NSLayoutConstraint.isActive` 并不会弄脏布局。所以这里的守卫是「别做无谓的活」，
+    /// 不是「已知会崩」。
+    ///
+    /// 所以规矩是：`makeState()` 只算不写，`render(_:)` 是**唯一**写视图的地方，
+    /// 整体相等就一个字节都不写。往侧栏加新的显示项时，加进这个结构，
+    /// 不要在别处直接写视图。
+    struct SidebarState: Equatable {
+        var rows: [Row]
+        /// 会话行显示的位置串要用项目名，而 `Row.session` 只带项目的 UUID。
+        /// 放进状态里，改名就能被整体比较发现，不必再留一个额外的旗标。
+        var projectNames: [UUID: String]
+        /// 相对时间的语种。变了同样要让所有单元格重排一次。
+        var language: String
+        var messages: [String]
+        var showMore: Bool
+        var canLoadMore: Bool
+        var projectTitle: String
+        var recentTitle: String
+        var filterActive: Bool
+        var loading: Bool
+        var canCreateProject: Bool
+    }
+    private var renderedState: SidebarState?
+
+    /// 转一圈的时长。收尾要对齐到它的整数倍，图标才不会停在半路。
+    private static let spinTurn: CFTimeInterval = 0.9
+    /// 收尾。`debounce`：读取反复起停时，只有最后一次的收尾算数。
+    private lazy var spinStops = Coalescer(.debounce(Self.spinTurn)) { [weak self] in
+        guard let self, !self.library.loading else { return }
+        self.refresh.layer?.removeAnimation(forKey: "refresh.spin")
+    }
+
+    /// 读取时让刷新图标自己转，替代原来那个独立的转圈。
+    /// 尊重「减弱动态效果」：那种情况下不转，改成压暗——动效不能是唯一的信号。
+    private func setRefreshSpinning(_ spinning: Bool) {
+        let key = "refresh.spin"
+        guard let layer = refresh.layer else { return }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            layer.removeAnimation(forKey: key)
+            refresh.alphaValue = spinning ? 0.45 : 1
+            return
+        }
+        refresh.alphaValue = 1
+        guard spinning else {
+            // 不立刻摘：摘掉的瞬间图层回到 0 度，看起来就是「转一半没了」。
+            // 等当前这一圈走完再停，所以最少也会转满一圈。
+            guard let animation = layer.animation(forKey: key) else { return }
+            let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+            let elapsed = max(0, now - animation.beginTime)
+            let remaining = Self.spinTurn - elapsed.truncatingRemainder(dividingBy: Self.spinTurn)
+            spinStops.schedule(delay: remaining)
+            return
+        }
+        spinStops.cancel()  // 又开始读了，别让上一轮的收尾把它停掉
+        guard layer.animation(forKey: key) == nil else { return }
+        // 图层绕**锚点**转，而 AppKit 给 layer-backed 视图的锚点不在中心。
+        // 标准写法：改完锚点把 frame 原样设回去，position 会按新锚点重算，视图不跳。
+        // 之后 AppKit 每次布局设的也是 frame，锚点在中心就一直算得对。
+        if layer.anchorPoint != CGPoint(x: 0.5, y: 0.5) {
+            let frame = layer.frame
+            layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            layer.frame = frame
+        }
+        // 用 `transform.rotation.z` 而不是关键帧矩阵：矩阵是线性插值的，两帧之间走弦
+        // 不走弧，转起来不圆，末尾也对不准正位，摘动画就跳。角度插值没有这个问题。
+        let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+        rotation.fromValue = 0
+        rotation.toValue = -2 * Double.pi  // macOS 的 y 轴朝上，负角才是顺时针
+        rotation.duration = Self.spinTurn
+        rotation.repeatCount = .infinity
+        rotation.timingFunction = CAMediaTimingFunction(name: .linear)  // 匀速，接得上圈
+        layer.add(rotation, forKey: key)
+    }
+
+    /// 唯一写视图的地方。每一处写入都先比较，因为调用它的频率不由这里决定。
+    private func render(_ state: SidebarState) {
+        let previous = renderedState
+        guard previous != state else { return }
+        renderedState = state
+
+        if previous?.language != state.language {
+            let language = LanguagePreference.current()
+            relativeDateFormatter.locale = language == .system ? .current : Locale(identifier: language.rawValue)
+            relativeDateFormatter.unitsStyle = .short
+        }
+        // 表格：行的增删由稳定标识差异驱动；项目名或语种变了要让已建单元格重排一遍，
+        // 因为这两样都参与单元格内容却不在 `Row` 里。
+        if previous?.rows != state.rows || previous?.projectNames != state.projectNames
+            || previous?.language != state.language {
+            let selectedID = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+            let oldRows = rows
+            rows = state.rows
+            renderedProjectNames = state.projectNames
+            updateRows(from: oldRows,
+                       contentInvalidated: previous?.projectNames != state.projectNames
+                           || previous?.language != state.language)
+            if searchMode, let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
+                table.selectRowIndexes([index], byExtendingSelection: false)
+            }
+        }
+        if previous?.messages != state.messages {
+            status.stringValue = state.messages.joined(separator: " · ")
+            status.toolTip = state.messages.isEmpty ? nil : state.messages.joined(separator: "\n")
+            status.setAccessibilityValue(state.messages.joined(separator: "\n"))
+            status.isHidden = state.messages.isEmpty
+        }
+        if previous?.showMore != state.showMore {
+            moreHeight.isActive = !state.showMore
+            more.isHidden = !state.showMore
+        }
+        if previous?.canLoadMore != state.canLoadMore { more.isEnabled = state.canLoadMore }
+        if previous?.projectTitle != state.projectTitle { projectHeading.title = state.projectTitle }
+        if previous?.recentTitle != state.recentTitle { recentHeading.stringValue = state.recentTitle }
+        if previous?.filterActive != state.filterActive {
+            management.contentTintColor = state.filterActive ? ShellStyle.accent : ShellStyle.secondaryText
+        }
+        if previous?.canCreateProject != state.canCreateProject { newProject.isEnabled = state.canCreateProject }
+        if previous?.loading != state.loading {
+            // 转圈只在搜索面板里有父视图；侧栏那边它不参与布局，这两行是空转。
+            refreshProgress.isHidden = !state.loading
+            if state.loading { refreshProgress.startAnimation(nil) } else { refreshProgress.stopAnimation(nil) }
+            // 只改提示语，不换图标：刷新与取消是同一个按钮的两个状态，
+            // 但换成 ✕ 会让它在光标底下变身——读取往往只有几百毫秒，闪一下更难受。
+            let title = state.loading ? L("Cancel") : L("Refresh")
+            refresh.toolTip = title
+            refresh.setAccessibilityLabel(title)
+            setRefreshSpinning(state.loading)
+        }
+        syncTerminalSelection()
+    }
+
     @objc private func loadMore() { library.loadMore() }
     func setArchiveFilter(_ enabled: Bool) {
         showingArchived = enabled
         reload()
     }
     @objc private func showManagement() {
+        ShellMenuPopover.present(from: management, items: managementItems())
+    }
+
+    /// 筛选浮层的内容。这个浮层里每一条都是「筛选 / 排序 / 打开哪个选择器」——
+    /// 同一件事的几种选择，所以只用分组标题分段，不画线；也不放当场执行的动作
+    /// （刷新在标题行上的按钮里）。
+    func managementItems() -> [ShellMenuPopover.Item] {
         var items: [ShellMenuPopover.Item] = [.header(L("Filter sessions"))]
         for (index, title) in [L("All agents"), "Codex CLI", "Claude Code"].enumerated() {
             items.append(.action(title, checked: agentFilter == index) { [weak self] in
                 self?.agentFilter = index; self?.reload()
             })
         }
-        items += [.separator,
+        items += [
             .action(L("Archived"), checked: showingArchived) { [weak self] in
                 guard let self else { return }; self.setArchiveFilter(!self.showingArchived)
-            }, .separator, .header(L("Sort sessions")),
+            },
+            .header(L("Sort sessions")),
             .action(L("Recently updated"), checked: !sortByTitle) { [weak self] in self?.sortByTitle = false; self?.reload() },
             .action(L("Name"), checked: sortByTitle) { [weak self] in self?.sortByTitle = true; self?.reload() },
-            .separator,
-            .action(library.loading ? L("Cancel") : L("Refresh")) { [weak self] in self?.refreshOrCancel() },
             .header(L("Native resume picker…"))]
         for agent in SessionAgent.allCases {
             guard let source = library.source(for: agent) else { continue }
@@ -233,13 +401,22 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 SessionResumeFlow.nativePicker(source: source, in: controller)
             })
         }
-        ShellMenuPopover.present(from: management, items: items)
+        return items
     }
     func controlTextDidChange(_ obj: Notification) { reload() }
 
-    @objc private func reload() {
-        let oldRows = rows
-        let selectedID = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+    /// 会话库的通知合流到下一拍再重算。**只有通知这条路合流**——用户点一下筛选、
+    /// 敲一下搜索框，那几条仍然同步跑，点了要立刻有反应。
+    ///
+    /// 一次 `library.refresh()` 至少发五条通知（`SessionLibrary.publish()` 开始一条，
+    /// 之后每个 provider 每页完成再一条）。合流之后这一串只重算一次。
+    private lazy var libraryChanges = Coalescer(.nextTick) { [weak self] in self?.reload() }
+    @objc private func libraryDidChange() { libraryChanges.schedule() }
+
+    @objc private func reload() { render(makeState()) }
+
+    /// 只算不写。这里出现任何一次视图写入，`render` 的整体早退就白做了。
+    func makeState() -> SidebarState {
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let organization = library.organization
         let projectNames = Dictionary(uniqueKeysWithValues: organization.projects.map { ($0.id, $0.name) })
@@ -266,7 +443,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         }
         let grouped = filtered.map { ($0, assignedProjects[$0.key]) }
         let membersByProject = Dictionary(grouping: grouped, by: { $0.1 })
-        rows = [.projectsHeading]
+        var rows: [Row] = [.projectsHeading]
         if !searchMode {
             let visibleProjects = organization.projects.filter { showingArchived ? organization.archivedProjects.contains($0.id) : !organization.archivedProjects.contains($0.id) }
             if !projectsCollapsed && visibleProjects.isEmpty && grouped.allSatisfy({ $0.1 == nil }) { rows.append(.emptyProjects) }
@@ -284,9 +461,6 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             rows += (membersByProject[nil] ?? []).map { .session($0.0, nil) }
         } else { rows = grouped.map { .session($0.0, $0.1) } }
         var messages: [String] = []
-        refreshProgress.isHidden = !library.loading
-        if library.loading { refreshProgress.startAnimation(nil) }
-        else { refreshProgress.stopAnimation(nil) }
         if !library.loading && filtered.isEmpty { messages.append(L("No matching sessions.")) }
         if library.hasMore() {
             messages.append(L("More sessions are available. Search covers loaded sessions."))
@@ -298,32 +472,22 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             if let error = library.errors[agent] { messages.append("\(agent == .codex ? "Codex CLI" : "Claude Code"): \(error)") }
         }
         if let error = library.storageError { messages.append(error) }
-        status.stringValue = messages.joined(separator: " · ")
-        status.toolTip = messages.isEmpty ? nil : messages.joined(separator: "\n")
-        status.setAccessibilityValue(messages.joined(separator: "\n"))
-        status.isHidden = messages.isEmpty
-        let showMore = library.hasMore()
-        moreHeight.isActive = !showMore
-        more.isHidden = !showMore
-        projectHeading.title = showingArchived ? L("Archived") : L("Projects")
-        recentHeading.stringValue = showingArchived ? L("Other archived sessions") : L("Recent sessions")
-        management.contentTintColor = agentFilter != 0 || showingArchived ? ShellStyle.accent : ShellStyle.secondaryText
-        more.isEnabled = !library.loading && library.hasMore()
-        newProject.isEnabled = library.organizationReady && !library.saving && library.storageError == nil
-        let language = LanguagePreference.current()
-        relativeDateFormatter.locale = language == .system ? .current : Locale(identifier: language.rawValue)
-        relativeDateFormatter.unitsStyle = .short
-        let projectNamesChanged = projectNames != renderedProjectNames
-        renderedProjectNames = projectNames
-        updateRows(from: oldRows, projectNamesChanged: projectNamesChanged)
-        if searchMode, let id = selectedID, let index = rows.firstIndex(where: { $0.id == id }) {
-            table.selectRowIndexes([index], byExtendingSelection: false)
-        }
-        syncTerminalSelection()
+        return SidebarState(
+            rows: rows,
+            projectNames: projectNames,
+            language: LanguagePreference.current().rawValue,
+            messages: messages,
+            showMore: library.hasMore(),
+            canLoadMore: !library.loading && library.hasMore(),
+            projectTitle: showingArchived ? L("Archived") : L("Projects"),
+            recentTitle: showingArchived ? L("Other archived sessions") : L("Recent sessions"),
+            filterActive: agentFilter != 0 || showingArchived,
+            loading: library.loading,
+            canCreateProject: library.organizationReady && !library.saving && library.storageError == nil)
     }
 
     /// Stable identities preserve cells, hover and tracking areas across local organization edits.
-    private func updateRows(from previous: [Row], projectNamesChanged: Bool) {
+    private func updateRows(from previous: [Row], contentInvalidated: Bool) {
         let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         let projectDisclosure = rows.contains { row in
             guard case .project(let project) = row,
@@ -351,7 +515,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 table.endUpdates()
             }
         }
-        for (index, row) in rows.enumerated() where !inserted.contains(index) && (oldByID[row.id] != row || projectNamesChanged) {
+        for (index, row) in rows.enumerated() where !inserted.contains(index) && (oldByID[row.id] != row || contentInvalidated) {
             if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? SessionListCell {
                 configure(cell, for: row)
             }
@@ -475,11 +639,22 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         configure(cell, for: rows[row])
         return cell
     }
+    /// 选中改回「当前聚焦终端那一行」这件事，**必须挪到下一拍**。
+    ///
+    /// 用户点一行时，AppKit 在 `NSTableView.mouseDown:` 里先选中被点的行，
+    /// 发出这条通知，**然后才**调 `scrollRowToVisible:`——用的是那一刻的选中行。
+    /// 如果我们在通知里同步把选中改成上面某一行，AppKit 接着就会把列表滚上去：
+    /// 点底部一条会话开终端，列表整个弹回顶部（实测调用栈确认过）。
+    ///
+    /// 挪到下一拍之后，`mouseDown` 结束时选中的还是被点那一行（本来就可见，不滚动），
+    /// 同步紧接着发生——而单纯的 `selectRowIndexes` 自己是不滚动的。
+    private lazy var selectionSyncs = Coalescer(.nextTick) { [weak self] in self?.syncTerminalSelection() }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard searchMode else {
             // Non-session rows may be selected programmatically to dispatch their action.
             if rows.indices.contains(table.selectedRow), case .session = rows[table.selectedRow] {
-                syncTerminalSelection()
+                selectionSyncs.schedule()
             }
             return
         }
@@ -487,6 +662,14 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             (rowView.view(atColumn: 0) as? PaletteRowView)?.isSelected = row == self.table.selectedRow
         }
     }
+    /// 测试接缝：一行的显示内容纯粹由那条会话算出来。返回第二行的文字，
+    /// 不必先把整个表格和窗口搭起来。单元格类型是文件私有的，所以不出现在签名里。
+    func detailTextForTesting(_ session: AgentSession) -> String {
+        let cell = SessionListCell()
+        configure(cell, for: .session(session, nil))
+        return cell.detail.stringValue
+    }
+
     private func configure(_ cell: SessionListCell, for row: Row) {
         cell.resetContent()
         switch row {
@@ -517,7 +700,11 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             let location = projectID.flatMap { renderedProjectNames[$0] }
                 ?? record.workingDirectory ?? ""
             cell.setAgent(record.key.agent)
-            cell.detail.stringValue = [date, openedSessionKeys.contains(record.key) ? L("Open in lightty") : ""]
+            // 「在别处开着」要在点下去之前就说清楚，否则用户点了才撞上那个提示框。
+            // lightty 自己开着优先——那时它在不在别处跑已经不重要了。
+            let openness = openedSessionKeys.contains(record.key) ? L("Open in lightty")
+                : record.sourceRunning ? L("Open in another terminal") : ""
+            cell.detail.stringValue = [date, openness]
                 .filter { !$0.isEmpty }.joined(separator: " · ")
             cell.location.stringValue = location.hasPrefix("/") ? URL(fileURLWithPath: location).lastPathComponent : location
             if projectID != nil && !searchMode {
@@ -564,18 +751,36 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         }
     }
     private func sessionMenu(_ record: AgentSession, from anchor: NSView) {
-        ShellMenuPopover.present(from: anchor, items: sessionMenuItems(record))
+        ShellMenuPopover.present(from: anchor, items: sessionMenuItems(record, anchor: anchor))
     }
 
-    func sessionMenuItems(_ record: AgentSession) -> [ShellMenuPopover.Item] {
-        var items: [ShellMenuPopover.Item] = [
+    func sessionMenuItems(_ record: AgentSession, anchor: NSView) -> [ShellMenuPopover.Item] {
+        // 改名有两条路（见 `SessionRename`）：会话开着就敲 `/rename` 让 agent 自己改，
+        // 那样它终端里显示的标题也跟着变；会话没开就走官方接口。唯一给不了的情况是
+        // 「开着但 agent 正在跑」——这时 PTY 前台是它的输出流，塞不进命令，而从外面
+        // 改又会和它自己屏幕上显示的标题不一致。
+        let openPane = AppState.shared?.runningPanes()
+            .first { $0.pane.displayedSessionKey == record.key }?.pane
+        var items: [ShellMenuPopover.Item] = openPane == nil ? [
             .action(L("Continue in new tab")) { [weak self] in self?.open(record) },
             .action(L("Split in current tab")) { [weak self] in self?.open(record, destination: .split) },
-            .action(L("New window")) { [weak self] in self?.open(record, destination: .window) }, .separator,
+            .action(L("New window")) { [weak self] in self?.open(record, destination: .window) },
+        ] : [
+            .action(L("Show terminal")) { [weak self] in self?.open(record) },
         ]
-        if AppState.shared?.runningPanes().contains(where: { $0.pane.displayedSessionKey == record.key }) == true {
-            items = [.action(L("Show terminal")) { [weak self] in self?.open(record) }, .separator]
+        if openPane == nil || openPane?.acceptsInjectedCommand == true {
+            items.append(.action(L("Rename session…")) { [weak self, weak openPane, weak anchor] in
+                guard let self, let anchor else { return }
+                NameEditorPopover.present(
+                    from: anchor, title: L("Rename session"),
+                    initial: record.title, confirmLabel: L("Rename")
+                ) { name in
+                    if let openPane { openPane.renameSession(to: name) }
+                    else { SessionRename.perform(record, to: name, library: self.library) }
+                }
+            })
         }
+        items.append(.separator)
         if !library.saving && library.storageError == nil {
             let organization = library.organization
             let archived = organization.isArchived(record)

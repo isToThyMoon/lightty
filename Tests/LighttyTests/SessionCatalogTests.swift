@@ -64,19 +64,57 @@ final class PrimarySidebarTests: XCTestCase {
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let title = L("Move to recent sessions")
-        XCTAssertFalse(content.sessionMenuItems(record).contains { $0.title == title })
+        XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
         let project = SessionProject(name: "Project")
         library.updateOrganization {
             $0.projects = [project]
             $0.move(record, to: project.id)
         }
         spin { !library.saving }
-        let item = try XCTUnwrap(content.sessionMenuItems(record).first { $0.title == title })
+        let item = try XCTUnwrap(content.sessionMenuItems(record, anchor: NSView()).first { $0.title == title })
         guard case .action(let action) = item.kind else { return XCTFail("Expected move action") }
         action()
         spin { !library.saving }
         XCTAssertNil(library.organization.projectID(for: record))
-        XCTAssertFalse(content.sessionMenuItems(record).contains { $0.title == title })
+        XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
+    }
+
+    /// 筛选浮层是「同一件事的几种选择」：只用分组标题分段，不画线；
+    /// 刷新是当场执行的动作，在标题行的按钮上，不在这里。
+    func testFilterPopoverHasNoDividersAndNoRefreshAction() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let content = SessionsSidebarContent(library: library)
+        spin { library.organizationReady }
+        let items = content.managementItems()
+        XCTAssertFalse(items.contains { if case .separator = $0.kind { return true } else { return false } })
+        for title in [L("Refresh"), L("Cancel")] {
+            XCTAssertFalse(items.contains { $0.title == title })
+        }
+        // 分段仍然靠标题说清楚，别把线连着标题一起删掉了。
+        for title in [L("Filter sessions"), L("Sort sessions"), L("Native resume picker…")] {
+            XCTAssertTrue(items.contains { $0.title == title && {
+                if case .header = $0.kind { return true } else { return false } }($0) }, title)
+        }
+    }
+
+    /// 关着的会话也能改名——走官方接口，不需要先把会话开起来（见 `SessionRename`）。
+    func testRenameIsOfferedForSessionsThatAreNotOpen() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let content = SessionsSidebarContent(library: library)
+        spin { library.organizationReady }
+        let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
+                                  title: "Fixture", workingDirectory: root.path, updatedAt: nil)
+        let items = content.sessionMenuItems(record, anchor: NSView())
+        XCTAssertTrue(items.contains { $0.title == L("Rename session…") })
+        // 没打开的会话给的是三个打开方式，不是「显示终端」。
+        XCTAssertTrue(items.contains { $0.title == L("Continue in new tab") })
+        XCTAssertFalse(items.contains { $0.title == L("Show terminal") })
     }
 
     func testRecentDropFeedbackUsesAppAccentInsteadOfNativeBlue() throws {
@@ -297,12 +335,15 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertTrue(button.expanded)
     }
 
-    func testLoadingOnlyUsesInlineSpinnerWithoutLoadingTextOrLayoutShift() throws {
+    /// 「在读」由刷新按钮自己表达——它变成取消。标题行不再放转圈，两个一起是重复的。
+    /// 仍然盯住原来那两条：不出现「正在载入」这类文字，列表不因此位移。
+    func testLoadingIsShownByTheRefreshButtonWithoutLoadingTextOrLayoutShift() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-spinner-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
-            providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
+            providers: [FixtureCatalog(root: root, delay: 0.2),
+                        FixtureCatalog(root: root, agent: .claude, delay: 0.2)])
         let content = SessionsSidebarContent(library: library)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -310,21 +351,213 @@ final class PrimarySidebarTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
         let before = list.frame
+        let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == L("Recent sessions") })
+        let header = try XCTUnwrap(heading.superview?.superview)
+        let refresh = try XCTUnwrap(descendants(header).compactMap { $0 as? NSButton }
+            .first { [L("Refresh"), L("Cancel")].contains($0.toolTip ?? "") })
+        XCTAssertEqual(refresh.toolTip, L("Refresh"))
+        let iconAtRest = refresh.image
+        XCTAssertTrue(descendants(header).compactMap { $0 as? NSProgressIndicator }.isEmpty,
+                      "标题行不再放转圈：刷新按钮已经表达了在读")
+
         content.activate()
+        // 会话库通知合流到下一拍再重算（见 `Coalescer`），所以按钮晚一拍翻。
+        // 顺序是确定的：`refresh()` 先把重算排进主队列，provider 的完成回调排在它后面。
+        // 真实 app 里主 runloop 一直在转，这一拍是几微秒，看不出来。
+        spin { refresh.toolTip == L("Cancel") }
         content.layoutSubtreeIfNeeded()
-        let spinner = try XCTUnwrap(descendants(content).compactMap { $0 as? NSProgressIndicator }.first)
-        let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }.first { $0.stringValue == L("Recent sessions") })
-        XCTAssertTrue(spinner.superview === heading.superview)
-        XCTAssertFalse(spinner.isHidden)
-        XCTAssertEqual(spinner.style, .spinning)
-        XCTAssertEqual(list.frame, before)
+        XCTAssertEqual(refresh.toolTip, L("Cancel"), "在读时这个按钮就是取消")
+        // 图标不许换：换成 ✕ 会让按钮在光标底下变身。读取时靠它自己旋转来表达。
+        XCTAssertTrue(refresh.image === iconAtRest, "读取时不该换图标")
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            XCTAssertNotNil(refresh.layer?.animation(forKey: "refresh.spin"), "读取时图标要转起来")
+        }
+        XCTAssertEqual(list.frame, before, "读取不该让列表位移")
         XCTAssertFalse(descendants(content).compactMap { $0 as? NSTextField }
             .contains { !$0.isHidden && $0.stringValue.contains(L("Loading local sessions…")) })
+
         spin { !library.loading }
-        XCTAssertTrue(spinner.isHidden)
+        spin { refresh.toolTip == L("Refresh") }
+        XCTAssertEqual(refresh.toolTip, L("Refresh"))
+        XCTAssertTrue(refresh.image === iconAtRest)
+        // 收尾会等当前这一圈走完再摘，所以最少转满一圈；这里等它自己停。
+        spin { refresh.layer?.animation(forKey: "refresh.spin") == nil }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, before)
     }
+    /// 会话已经在别的终端里开着时，列表要在**点下去之前**就说清楚——
+    /// 否则用户点了才撞上「该会话已在其他终端中打开」那个提示框。
+    /// lightty 自己开着优先：那时它在不在别处跑已经不重要了。
+    func testASessionRunningElsewhereIsLabelledBeforeYouClickIt() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-elsewhere-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let content = SessionsSidebarContent(library: library)
+        spin { library.organizationReady }
+        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+
+        let elsewhere = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "a"),
+                                     title: "在别处跑着", workingDirectory: root.path,
+                                     updatedAt: Date(), sourceRunning: true)
+        let idle = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "b"),
+                                title: "没在跑", workingDirectory: root.path, updatedAt: Date())
+        XCTAssertTrue(content.detailTextForTesting(elsewhere).contains(L("Open in another terminal")))
+        XCTAssertFalse(content.detailTextForTesting(idle).contains(L("Open in another terminal")))
+        XCTAssertFalse(content.detailTextForTesting(idle).contains(L("Open in lightty")))
+        _ = table
+    }
+
+    /// 用户滚到列表下方，点一条会话开终端——列表不该弹回顶部。
+    /// 先证明是不是刷新这条路把滚动位置冲掉的。
+    func testRefreshDoesNotScrollTheListBackToTheTop() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-scroll-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
+                                     providers: [FixtureCatalog(root: root, count: 60)])
+        let content = SessionsSidebarContent(library: library)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 400),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = content
+        content.activate()
+        spin { library.loaded && !library.loading }
+        spin { content.makeState().rows.count > 10 }
+        content.layoutSubtreeIfNeeded()
+
+        let scroll = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
+        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+        // 表格必须真的排好版，否则高度是 0，「滚动位置保持不变」会变成一句空话——
+        // 这个前置条件之前漏了，单独跑时测试是空跑的。
+        window.layoutIfNeeded()
+        content.layoutSubtreeIfNeeded()
+        table.tile()
+        table.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(table.numberOfRows, 20, "前置条件：要有足够多的行")
+        let bottom = max(0, table.frame.height - scroll.contentView.bounds.height)
+        XCTAssertGreaterThan(bottom, 0, "前置条件：列表要长到能滚动")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let scrolled = scroll.contentView.bounds.origin.y
+        XCTAssertGreaterThan(scrolled, 0)
+
+        library.refresh()
+        spin { !library.loading }
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
+                       "刷新不该把列表弹回顶部")
+
+        // 开一个终端会广播这几条：它们会把已建单元格整批重配一遍。
+        for name: Notification.Name in [.lighttyTerminalSelectionDidChange,
+                                        .lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+            NotificationCenter.default.post(name: name, object: nil)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
+                       "开终端后的这几条通知也不该把列表弹回顶部")
+
+        // 选中列表最后一行（点击会话就是这个效果），同样不该滚动。
+        table.selectRowIndexes([table.numberOfRows - 1], byExtendingSelection: false)
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
+                       "选中末行不该改变滚动位置")
+    }
+
+    /// `reload()` 拆成「只算」和「只写」两半之后，同一个状态重复送进来必须一个字节都不写。
+    ///
+    /// 会话库的通知零载荷、而且这个视图没有合流，一次 `library.refresh()` 至少发五条。
+    /// 在那五遍里反复写视图会把 AppKit 的显示遍历顶成死循环。最危险的两处是
+    /// **切换布局约束的激活状态**和**往表格活着的单元格里写**，都在下面盯着。
+    func testRepeatedNotificationsRewriteNothingWhenTheStateIsUnchanged() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-render-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let content = SessionsSidebarContent(library: library)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = content
+        spin { library.organizationReady }
+        content.layoutSubtreeIfNeeded()
+
+        let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == L("Recent sessions") })
+        let header = try XCTUnwrap(heading.superview?.superview)
+        let buttons = descendants(header).compactMap { $0 as? NSButton }
+        let refresh = try XCTUnwrap(buttons.first { [L("Refresh"), L("Cancel")].contains($0.toolTip ?? "") })
+        let filter = try XCTUnwrap(buttons.first { $0.toolTip == L("Filter sessions") })
+        let more = try XCTUnwrap(descendants(content).compactMap { $0 as? NSButton }
+            .first { $0.title == L("Load more sessions") })
+        let moreHeight = try XCTUnwrap(more.constraints.first { $0.firstAttribute == .height })
+        let status = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
+            .first { $0 !== heading && $0.font?.pointSize == 10.5 })
+
+        let before = (image: refresh.image, tint: filter.contentTintColor, title: heading.stringValue,
+                      moreHidden: more.isHidden, constraint: moreHeight.isActive,
+                      status: status.stringValue)
+        for _ in 0..<5 {
+            NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: library)
+            content.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(refresh.image === before.image, "状态没变就不该重设图标")
+        XCTAssertTrue(filter.contentTintColor === before.tint)
+        XCTAssertEqual(heading.stringValue, before.title)
+        XCTAssertEqual(more.isHidden, before.moreHidden)
+        XCTAssertEqual(status.stringValue, before.status)
+        // 注意：`moreHeight.isActive` 没有断言。重设成同一个值在 AppKit 里不可观测
+        // （实测：不弄脏布局），断言它只会给人虚假信心。守卫仍然留着——那是「别做无谓
+        // 的活」，不是已知会崩。
+        _ = moreHeight
+
+        // 状态真的变了还是要生效，别把守卫写成「永远不更新」。
+        content.setArchiveFilter(true)
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(heading.stringValue, L("Other archived sessions"))
+        XCTAssertTrue(filter.contentTintColor !== before.tint, "筛选生效时图标要用重点色")
+    }
+
+    /// 渲染状态是这个模块对测试的断言面：断言值，不必遍历视图树反推显示了什么。
+    /// 而且 `makeState()` 只算不写——连调十次也不能碰视图。
+    func testRenderStateIsAssertableWithoutWalkingTheViewTree() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-state-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let content = SessionsSidebarContent(library: library)
+        spin { library.organizationReady }
+
+        let state = content.makeState()
+        XCTAssertEqual(state.recentTitle, L("Recent sessions"))
+        XCTAssertEqual(state.projectTitle, L("Projects"))
+        XCTAssertFalse(state.filterActive)
+        XCTAssertFalse(state.showMore)
+        // 只算不写：反复调用必须完全等值，且不产生任何副作用。
+        for _ in 0..<10 { XCTAssertEqual(content.makeState(), state) }
+
+        content.setArchiveFilter(true)
+        let archived = content.makeState()
+        XCTAssertEqual(archived.recentTitle, L("Other archived sessions"))
+        XCTAssertEqual(archived.projectTitle, L("Archived"))
+        XCTAssertTrue(archived.filterActive)
+    }
+
+    /// 搜索面板里根本不显示标题行——那边的行只有会话。
+    func testSearchPaletteNeverVendsTheHeaderRows() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-header-search-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
+                                     providers: [FixtureCatalog(root: root)])
+        let content = SessionsSidebarContent(library: library, searchMode: true)
+        content.activate()
+        spin { library.organizationReady && !library.loading }
+        content.layoutSubtreeIfNeeded()
+        XCTAssertFalse(descendants(content).contains { $0 is NSButton
+            && ($0 as? NSButton)?.toolTip == L("Filter sessions") })
+    }
+
     func testReturningToAppDoesNotRefreshVisibleSessionSidebar() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-refresh-\(UUID())")
@@ -753,10 +986,19 @@ final class PrimarySidebarTests: XCTestCase {
 private struct FixtureCatalog: SessionCatalogProvider {
     let root: URL
     var agent: SessionAgent = .codex
+    /// 让读取真的占住一点时间。真实 provider 要起一个子进程（几百毫秒），
+    /// 而瞬时返回的 fixture 会让「开始读」和「读完」落进同一拍——那样转圈根本不出现，
+    /// 测不出「读的时候要有转圈」。只在需要这条覆盖的用例里传。
+    var delay: TimeInterval = 0
+    /// 需要一条长到能滚动的列表时传。默认两条，保持既有用例不变。
+    var count: Int = 2
     var source: SessionCatalogSource { .init(agent: agent, root: root, executable: "/bin/false") }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }  // 后台队列上，不挡主线程
         guard !archived else { return SessionCatalogPage(sessions: [], nextCursor: nil) }
-        let rows = ["修复全屏侧栏裁切", "整理 Handoff 任务与会话"].enumerated().map { index, title in
+        let titles = count == 2 ? ["修复全屏侧栏裁切", "整理 Handoff 任务与会话"]
+            : (0..<count).map { "会话 \($0)" }
+        let rows = titles.enumerated().map { index, title in
             AgentSession(key: .init(agent: agent, sourceRoot: root.path, nativeID: "fixture-\(index)"),
                          title: title, workingDirectory: root.path, updatedAt: Date())
         }

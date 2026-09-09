@@ -62,6 +62,10 @@ extension SessionAssociationTests {
     while (!library.loaded || library.loading) && Date() < deadline {
         try await Task.sleep(for: .milliseconds(10))
     }
+    // 循环在 `loading` 转 false 的那一刻就退出，而那之后才广播通知；会话库的通知
+    // 合流到下一拍再重算（见 `Coalescer`），所以这里必须再让出一拍，否则读到的
+    // 还是上一轮的行。真实 app 里主 runloop 一直在转，这一拍是几微秒。
+    try await Task.sleep(for: .milliseconds(50))
     func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
     let table = try #require(descendants(content).compactMap { $0 as? NSTableView }.first)
     let record = try #require(library.records.first)

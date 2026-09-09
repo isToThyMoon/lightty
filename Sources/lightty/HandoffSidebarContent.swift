@@ -25,6 +25,23 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         let running: (controller: TerminalWindowController, pane: PaneView)?
     }
 
+    private struct HandoffState: Equatable {
+        var rows: [HandoffRowSnapshot]
+        var showsEmpty: Bool
+    }
+    private var renderedRows: [HandoffRowSnapshot] = []
+    private var renderedShowsEmpty: Bool?
+
+    /// 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
+    /// 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
+    private func snapshot(of entry: Entry) -> HandoffRowSnapshot {
+        HandoffRowSnapshot(
+            id: entry.fileURL.lastPathComponent,
+            name: entry.task.name,
+            subtitle: "\(entry.running != nil ? L("Active") : L("Dormant"))  ·  \(relativeTime(entry.task.updated))",
+            running: entry.running != nil)
+    }
+
     // MARK: - 列表页
 
     private let listPage = NSView()
@@ -66,18 +83,10 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         NotificationCenter.default.removeObserver(self)
     }
 
-    private var reloadScheduled = false
-
-    @objc private func tasksDidChange() {
-        // 合并到下一个 runloop tick：bind() 在 pane 挂进视图树之前发通知，
-        // 同步 reload 会读到「已绑定但还不在树上」的中间态，误判为休眠。
-        guard !reloadScheduled else { return }
-        reloadScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.reloadScheduled = false
-            self?.reload()
-        }
-    }
+    /// 合并到下一个 runloop tick：bind() 在 pane 挂进视图树之前发通知，
+    /// 同步 reload 会读到「已绑定但还不在树上」的中间态，误判为休眠。
+    private lazy var reloads = Coalescer(.nextTick) { [weak self] in self?.reload() }
+    @objc private func tasksDidChange() { reloads.schedule() }
 
     // MARK: - 数据
 
@@ -130,9 +139,50 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
                 .map { $0.0 }
         }
 
-        emptyLabel.isHidden = !filtered.isEmpty
-        tableView.reloadData()
-        if !filtered.isEmpty {
+        render(HandoffState(rows: filtered.map(snapshot(of:)), showsEmpty: filtered.isEmpty))
+    }
+
+    /// 唯一写表格的地方。**不重置选中**——原来每次任务变更都把选中打回第 0 行，
+    /// 用户正看着的那一条会被抢走。
+    private func render(_ state: HandoffState) {
+        if renderedShowsEmpty != state.showsEmpty {
+            renderedShowsEmpty = state.showsEmpty
+            emptyLabel.isHidden = !state.showsEmpty
+        }
+        let previous = renderedRows
+        guard previous != state.rows else { return }
+        let selectedID = previous.indices.contains(tableView.selectedRow)
+            ? previous[tableView.selectedRow].id : nil
+        renderedRows = state.rows
+
+        // 稳定标识决定增删；内容变了的行单独重配，没变的行连同悬停与 tracking 一起留着。
+        let difference = state.rows.map(\.id).difference(from: previous.map(\.id))
+        var removed = IndexSet(), inserted = IndexSet()
+        for change in difference {
+            switch change {
+            case .remove(let index, _, _): removed.insert(index)
+            case .insert(let index, _, _): inserted.insert(index)
+            }
+        }
+        if !difference.isEmpty {
+            tableView.beginUpdates()
+            tableView.removeRows(at: removed, withAnimation: [])
+            tableView.insertRows(at: inserted, withAnimation: [])
+            tableView.endUpdates()
+        }
+        let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+        for (index, row) in state.rows.enumerated()
+        where !inserted.contains(index) && oldByID[row.id] != row {
+            (tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? HandoffListCell)?
+                .configure(row)
+        }
+        // 选中跟着那一行走。它整行没了就不干预——表格自己会落到相邻行，
+        // 那比清空、更比「一律打回第一行」（原来的做法）合理。
+        if let selectedID, let index = state.rows.firstIndex(where: { $0.id == selectedID }),
+           tableView.selectedRow != index {
+            tableView.selectRowIndexes([index], byExtendingSelection: false)
+        } else if previous.isEmpty, tableView.selectedRow == -1, !state.rows.isEmpty {
+            // 只有第一次填充才主动落在第一行。
             tableView.selectRowIndexes([0], byExtendingSelection: false)
         }
     }
@@ -228,6 +278,9 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     private func commitReorder() {
         // 一次拖动即把当前整列固化为手动序（此后派生重排全部退位）
         TaskManualOrder.save(filtered.map { $0.fileURL.lastPathComponent })
+        // 拖动直接改了 `filtered`，没走 `render`；重载之后必须把差异基线对齐，
+        // 否则下一次 `render` 会拿旧顺序去算增删。
+        renderedRows = filtered.map(snapshot(of:))
         tableView.reloadData()
     }
 
@@ -236,66 +289,12 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let entry = filtered[row]
-
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3
-        dot.layer?.backgroundColor = dotColor(for: entry).cgColor
-
-        let title = NSTextField(labelWithString: entry.task.name)
-        title.font = .systemFont(ofSize: 12.5, weight: .medium)
-        title.textColor = ShellStyle.primaryText
-        title.lineBreakMode = .byTruncatingTail
-
-        // 活跃/休眠是 UI 派生态（有无 pane 绑定）。文件里的 status 不展示：
-        // 分诊细节走单击气泡的 handoff 摘要，列表只保留存在性 + 时间。
-        let activity = entry.running != nil ? L("Active") : L("Dormant")
-        let subtitle = NSTextField(
-            labelWithString: "\(activity)  ·  \(relativeTime(entry.task.updated))")
-        subtitle.font = .systemFont(ofSize: 10.5)
-        subtitle.textColor = ShellStyle.secondaryText
-        subtitle.lineBreakMode = .byTruncatingTail
-
-        // 更多操作（⋯）：与行本体的"跳转/打开"语义分开——管理动作都在这个菜单里。
-        let detailButton = ShellIconButton(
-            symbol: "ellipsis", accessibilityLabel: L("More actions"), target: self,
-            action: #selector(showRowMenu(_:)))
-        detailButton.tag = row
-
-        let cell = NSView()
-        for v in [dot, title, subtitle, detailButton] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(v)
-        }
-        NSLayoutConstraint.activate([
-            // Align the leading status marker with the other primary-sidebar rows.
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
-            dot.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-
-            title.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 9),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
-            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 6),
-
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
-
-            detailButton.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
-            detailButton.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            detailButton.widthAnchor.constraint(equalToConstant: 26),
-            detailButton.heightAnchor.constraint(equalToConstant: 26),
-        ])
+        let identifier = NSUserInterfaceItemIdentifier("handoff-list-cell")
+        let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? HandoffListCell
+            ?? HandoffListCell(target: self, action: #selector(showRowMenu(_:)))
+        cell.identifier = identifier
+        cell.configure(snapshot(of: filtered[row]))
         return cell
-    }
-
-    /// 任务行的圆点只表达「有没有 pane 绑着它」，不掺 agent 活动状态：
-    /// 这张表是全量 reload 重建的（`lighttyTasksDidChange`），跟不上状态的频率，
-    /// 显示一个可能已经过期的状态比不显示更糟。实时状态在 pane 头和标签页侧栏。
-    private func dotColor(for entry: Entry) -> NSColor {
-        ShellStyle.dotColor(bound: entry.running != nil, activity: nil)
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -314,8 +313,10 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     // MARK: - 行「⋯」菜单（自绘气泡；纯管理动作，跳转走单击气泡/双击）
 
     @objc private func showRowMenu(_ sender: NSButton) {
-        guard sender.tag >= 0, sender.tag < filtered.count else { return }
-        let entry = filtered[sender.tag]
+        // 按行标识找，不按索引：单元格会被复用，索引会过期。
+        guard let cell = sender.superview as? HandoffListCell, let id = cell.rowID,
+              let entry = filtered.first(where: { $0.fileURL.lastPathComponent == id })
+        else { return }
 
         var items: [ShellMenuPopover.Item] = [
             .action(L("Rename task…")) { [weak self, weak sender] in
@@ -438,5 +439,84 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         RestoreFlow.begin(
             fileURL: entry.fileURL, task: entry.task,
             from: anchor, in: controller)
+    }
+}
+
+/// 一行**真正显示出来**的东西，可比较。
+///
+/// 这个列表原来每次任务变更都 `reloadData()` 全量重建，还顺手把选中重置到第 0 行；
+/// 单元格也是每行每次新建一整棵视图树加十三条约束。现在跟会话侧栏同一个形状：
+/// 稳定标识决定增删，行值决定要不要重配，选中不动。
+///
+/// `id` 用文件名而不是完整路径：改名走的是移动语义，路径会变，而它仍是同一行。
+/// 副标题存的是**渲染好的字符串**而不是原始时间——比较的就是显示出来的东西。
+private struct HandoffRowSnapshot: Equatable {
+    let id: String
+    let name: String
+    let subtitle: String
+    let running: Bool
+}
+
+/// Handoff 列表的单元格。**建一次、复用、只改变了的字段**——原来是每行每次新建
+/// 一整棵视图树加十三条约束，任务一变就全表重来。
+private final class HandoffListCell: NSView {
+    private let dot = NSView()
+    private let title = NSTextField(labelWithString: "")
+    private let subtitle = NSTextField(labelWithString: "")
+    private let detailButton: ShellIconButton
+    /// 行标识：单元格会被复用，菜单不能按索引找行。
+    private(set) var rowID: String?
+    private var rendered: HandoffRowSnapshot?
+
+    init(target: AnyObject, action: Selector) {
+        detailButton = ShellIconButton(symbol: "ellipsis", accessibilityLabel: L("More actions"),
+                                       target: target, action: action)
+        super.init(frame: .zero)
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3
+        title.font = .systemFont(ofSize: 12.5, weight: .medium)
+        title.textColor = ShellStyle.primaryText
+        title.lineBreakMode = .byTruncatingTail
+        subtitle.font = .systemFont(ofSize: 10.5)
+        subtitle.textColor = ShellStyle.secondaryText
+        subtitle.lineBreakMode = .byTruncatingTail
+        for view in [dot, title, subtitle, detailButton] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            // Align the leading status marker with the other primary-sidebar rows.
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            dot.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
+
+            title.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 9),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+
+            detailButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            detailButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            detailButton.widthAnchor.constraint(equalToConstant: 26),
+            detailButton.heightAnchor.constraint(equalToConstant: 26),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ snapshot: HandoffRowSnapshot) {
+        rowID = snapshot.id
+        guard rendered != snapshot else { return }
+        let previous = rendered
+        rendered = snapshot
+        if previous?.name != snapshot.name { title.stringValue = snapshot.name }
+        if previous?.subtitle != snapshot.subtitle { subtitle.stringValue = snapshot.subtitle }
+        if previous?.running != snapshot.running {
+            dot.layer?.backgroundColor = ShellStyle.dotColor(bound: snapshot.running, activity: nil).cgColor
+        }
     }
 }

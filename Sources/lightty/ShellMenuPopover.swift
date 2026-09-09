@@ -265,9 +265,11 @@ private final class MenuController: NSViewController {
                 line.heightAnchor.constraint(equalToConstant: 1).isActive = true
                 rows.append(line)
             case .header:
+                // 分组标题压在半透明卡片上，10pt + 三级灰几乎看不见。
+                // 它是这一组的名字，读不出来就等于没有——用二级灰，字号与字重都提一档。
                 let label = NSTextField(labelWithString: item.title)
-                label.font = .systemFont(ofSize: 10, weight: .medium)
-                label.textColor = ShellStyle.tertiaryText
+                label.font = .systemFont(ofSize: 11, weight: .semibold)
+                label.textColor = ShellStyle.secondaryText
                 rows.append(label)
             case .action(let handler):
                 let row = MenuRowButton(item: item)
