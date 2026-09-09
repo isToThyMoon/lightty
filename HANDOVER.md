@@ -11,6 +11,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - 待实现功能：[Handoff / Sessions 模式](docs/specs/primary-sidebar-modes.md)，[CLI 会话调研](docs/specs/session-provider-research.md)。设计文档不代表功能已实现。
 - Handoff 持久化：[任务格式](docs/task-format.md)。任务正文为接手 Agent 写，引用已有文档与提交，不重复复制，不记录密钥。
 - Agent 状态与上下文：[状态契约](docs/specs/pane-status.md)，[hooks 安装与排查](docs/hooks.md)。
+- 对会话做任何操作（列表、改名、删除、判断占用）之前，先看 [Agent 会话操作的官方接口清单](docs/specs/agent-session-apis.md)：哪些有官方接口、lightty 用了哪些、剩下的为什么没用。不要先自己解析目录或往终端里敲命令。
 - 终端嵌入：[libghostty 契约](docs/libghostty-embedding.md)，[适配核查清单](docs/parity-plan.md)。
 
 ## 当前实现入口
