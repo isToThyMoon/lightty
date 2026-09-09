@@ -44,7 +44,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
 
     /// 见 `scheduleRefresh()`：合并同一 runloop tick 内的多次状态变更
-    private var refreshScheduled = false
     /// 菜单打开期间才需要即时重建；关着的时候交给 `menuNeedsUpdate`
     private var menuIsOpen = false
     private var installed = false
@@ -118,14 +117,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// 一串连续事件只重建一次。
     ///
     /// 标志位没加锁：契约规定 `lighttyPaneStatusDidChange` 由 store 在主线程 post。
-    @objc private func scheduleRefresh() {
-        guard !refreshScheduled else { return }
-        refreshScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshScheduled = false
-            self?.refresh()
-        }
-    }
+    private lazy var refreshes = Coalescer(.nextTick) { [weak self] in self?.refresh() }
+    @objc private func scheduleRefresh() { refreshes.schedule() }
 
     private func refresh() {
         updateIcon()

@@ -89,6 +89,10 @@ final class FilePreferences: PreferenceStorage {
         mutex.lock(); defer { mutex.unlock() }
         values[key] = value
         pending[key] = value.map(Edit.set) ?? .remove
+        // 这里**不用** `Coalescer`。别的地方那个闩只管「什么时候干」，可以抽走；
+        // 这里的 `writeScheduled` 是 `mutex` 保护下的共享状态，`persistPending` 要连同
+        // `writeGeneration` 一起读它来丢弃过期批次。把它抽进 `Coalescer` 要么拆散这份
+        // 原子性，要么逼 `Coalescer` 去认识这把锁——两条都会让它变差。
         guard !writeScheduled else { return }
         writeScheduled = true
         writeGeneration += 1

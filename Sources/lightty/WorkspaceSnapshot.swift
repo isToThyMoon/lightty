@@ -127,7 +127,9 @@ final class WorkspaceStore {
     let fileURL: URL
     private(set) var frozen = false
     private(set) var storageReadOnly = false
-    private var pending: DispatchWorkItem?
+    /// 每来一次就把上一次取消重排——「安静下来才存」。延迟每次可变，所以
+    /// `schedule(delay:)` 传具体值。
+    private lazy var saves = Coalescer(.debounce(0.8)) { [weak self] in self?.saveNow() }
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? FileManager.default.homeDirectoryForCurrentUser
@@ -154,23 +156,18 @@ final class WorkspaceStore {
 
     func scheduleSave(delay: TimeInterval = 0.8) {
         guard !frozen else { return }
-        pending?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.saveNow() }
-        pending = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        saves.schedule(delay: delay)
     }
 
     func saveNow() {
         guard !frozen else { return }
-        pending?.cancel()
-        pending = nil
+        saves.cancel()
         write(Self.capture())
     }
 
     /// 最后一个窗口关闭：写下含它的快照并定格
     func freeze(with snapshot: WorkspaceSnapshot) {
-        pending?.cancel()
-        pending = nil
+        saves.cancel()
         write(snapshot)
         frozen = true
     }

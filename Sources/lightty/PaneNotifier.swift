@@ -33,7 +33,6 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// 停在 done 上的后续事件不该反复响。
     private var lastStates: [UUID: PaneActivity] = [:]
     private var pending: [UUID] = []
-    private var flushScheduled = false
     private var installed = false
 
     private override init() { super.init() }
@@ -128,14 +127,12 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - 合并与投递
 
+    private lazy var flushes = Coalescer(.after(Self.coalesceWindow)) { [weak self] in self?.flush() }
+
     private func enqueue(_ paneID: UUID) {
+        // 攒的是「哪几个 pane」，合流只管「什么时候投递」——两件事分开。
         if !pending.contains(paneID) { pending.append(paneID) }
-        guard !flushScheduled else { return }
-        flushScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.coalesceWindow) { [weak self] in
-            self?.flushScheduled = false
-            self?.flush()
-        }
+        flushes.schedule()
     }
 
     private func flush() {
