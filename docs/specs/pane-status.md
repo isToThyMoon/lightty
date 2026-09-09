@@ -71,4 +71,4 @@ helper 在 SessionStart 读取已绑定任务，通过 hookSpecificOutput.additi
 UserPromptSubmit 补处理晚绑定与改名；handoff.injected 按 session ID + 路径去重，同一组合不重复注入，解绑清除标记。
 
 上下文注入不等于自动生成或写回总结。用户向 Agent 提出“总结当前 handoff task”等请求后，由 Agent 按任务协议写回；必须验证配置与任务绑定有效。
-任务启动弹窗由 RestoreFlow 提供，选择 Agent 与分屏 / 新标签页 / 新窗口；已打开位置可直接前往。Sessions 模式的原生恢复不自动绑定任务或额外注入 Handoff。
+启动浮层由 LaunchComposer 提供，选择 Agent、工作目录与分屏 / 新标签页 / 新窗口；已打开位置可直接前往。Sessions 模式的原生恢复不自动绑定任务或额外注入 Handoff。

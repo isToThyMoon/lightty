@@ -351,6 +351,13 @@
 "Working directory" = "工作目录";
 "Choose folder…" = "选择文件夹…";
 "Task name" = "任务名称";
+"Create and launch %@" = "创建并启动 %@";
+"Create and open terminal" = "创建并打开终端";
+"Create only" = "只创建";
+"Initial handoff notes" = "初始交接内容";
+"Goal, background, next steps. The Agent reads this on launch." = "目标、背景、下一步。启动时 Agent 会读到这段。";
+"Open a terminal without starting an Agent." = "只打开终端，不启动 Agent。";
+"A session is being deleted. Try again in a moment." = "正在删除会话，请稍后再试。";
 "Enter a task name." = "请输入任务名称。";
 "Choose an existing folder." = "请选择有效的文件夹。";
 "Set as default directory on launch" = "启动后设为默认目录";

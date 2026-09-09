@@ -254,10 +254,6 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         ])
     }
 
-    /// 新建 handoff 任务文档（只建档，不开终端；开终端由任务气泡的目的地承担）。
-    func newTask(from anchor: NSView) {
-        NewHandoffPopover.present(from: anchor)
-    }
     func openSearchPalette() {
         (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
     }
@@ -436,9 +432,8 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         guard let controller = window?.windowController as? TerminalWindowController
         else { return }
         let anchor = tableView.rowView(atRow: row, makeIfNecessary: false) ?? self
-        RestoreFlow.begin(
-            fileURL: entry.fileURL, task: entry.task,
-            from: anchor, in: controller)
+        LaunchComposer.begin(.task(fileURL: entry.fileURL, task: entry.task),
+                             from: anchor, in: controller)
     }
 }
 

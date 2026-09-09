@@ -145,7 +145,7 @@ Claude SDK bridge 仅暴露元数据查询，不调用模型，不自动 npm/pip
 
 ## 5. Module 设计：按变化来源划分
 
-不要把 Sessions 条件分支塞进现有 `TaskSidebar.reload()` / `RestoreFlow` / `TerminalWindowController`。
+不要把 Sessions 条件分支塞进现有 `TaskSidebar.reload()` / `TerminalWindowController`。（启动浮层是例外：`LaunchComposer` 就是按「挂不挂任务」分岔的，见 `LaunchSubject`。）
 以下是目标职责，不要求一次建立所有类或一类一文件。
 
 ```text
@@ -207,7 +207,7 @@ TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地�
 | --- | --- | --- |
 | `PrimarySidebar.swift` / `HandoffSidebarContent.swift` | 稳定外壳、模式切换 / TaskStore 展示、拖排、菜单 | 内容独立，不扫描 CLI 历史 |
 | `TerminalWindowController.swift` | 两侧栏布局、动画、全屏避让、终端容器 | 只持有 PrimarySidebar 并接用户意图，不扫描会话、不保存项目规则 |
-| `RestoreFlow.swift` | Handoff 摘要、Agent 选择、目的地 | 弹窗和搜索共用；不加入会话解析 |
+| `LaunchComposer.swift` | 启动浮层：任务主体、Agent、工作目录、去处 | 三个入口与搜索面板共用；不加入会话解析 |
 | `AgentLaunchPreference.swift` | 新 Agent 命令及用户选择 | 保留配置兼容；与来源身份、resume 策略分开 |
 | `WorkspaceSnapshot.swift` / `AgentResume` | 工作区恢复与原生 resume | 工作区快照使用 workspace.json；格式升级集中在启动迁移 Module，业务只读取当前模型 |
 | `PaneStatusStore` / `PaneView` | hook 会话 ID、现场状态 | 给出已知 lightty 现场映射；来源标识缺失时不得猜测跨配置根相同 ID |

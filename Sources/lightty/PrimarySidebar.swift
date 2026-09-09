@@ -79,7 +79,7 @@ final class PrimarySidebar: NSView {
     func selectMode(_ value: PrimarySidebarMode) {
         guard value != mode else { return }
         ShellMenuPopover.dismiss()
-        RestoreFlow.dismiss()
+        LaunchComposer.dismiss()
         mode = value
         applyMode()
         onModeChanged?(value)
@@ -120,14 +120,13 @@ final class PrimarySidebar: NSView {
     @objc private func searchContent() {
         (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
     }
+    /// 两种模式的「新建」走同一个启动浮层，只是初值不同：会话模式不挂任务，
+    /// 任务模式在浮层里填名字与初始正文。以前会话模式是一个两项的菜单，
+    /// 那个形状装不下工作目录，于是新会话只能落在当前终端的目录里。
     @objc private func newTask() {
-        if mode == .handoff { handoff.newTask(from: create); return }
-        ShellMenuPopover.present(from: create, items: [LaunchAgent.codex, .claudeCode].map { agent in
-            .action(agent.launchTitle) { [weak self] in
-                guard let controller = self?.window?.windowController as? TerminalWindowController else { return }
-                SessionResumeFlow.startNew(agent: agent, in: controller)
-            }
-        })
+        guard let controller = window?.windowController as? TerminalWindowController else { return }
+        LaunchComposer.begin(mode == .handoff ? .newTask : .session,
+                             from: create, in: controller, preferredEdge: .maxY)
     }
     @objc private func closePanel() { onRequestClose?() }
     override func cancelOperation(_ sender: Any?) { onRequestClose?() }

@@ -34,6 +34,9 @@ _Avoid_：将已结束的会话等同于不能恢复的会话。
 **启动命令（Agent Command）**：新终端里敲下去的第一行命令，由 `AgentCommand` 统一表达——新建会话、handoff 启动任务、恢复会话、原生会话选择器、重启后恢复终端都构造它的一个 case，不各自拼字符串。设置页配的是意图（bypass 模式、附加参数），翻译成各 CLI 的参数写法只发生在这里。
 _Avoid_：在建 pane 的地方直接写 `initialInput` 字符串。
 
+**启动浮层（Launch Composer）**：开一个新终端前把四件事摆在一屏里决定——挂不挂任务、用哪个 Agent、在哪个目录、开到哪里（分屏 / 新标签页 / 新窗口）。三个入口（Sessions 新建会话、Handoff 新建任务、任务开始处理）是它的三组初值，不是三套界面。
+_Avoid_：把它叫「任务弹窗」（会话模式也用它）、把「新建任务」当成只写文件的动作。
+
 **项目（Project）**：lightty 在 Sessions 模式下提供的会话分组，可以同时收纳 Claude Code 与 Codex CLI 会话；不是标签页，也不等同于 Handoff 任务。
 
 **组织数据（Organization）**：lightty 对项目、会话归属、排序、折叠和本地归档的管理记录；不包含 Agent 对话正文或终端现场。

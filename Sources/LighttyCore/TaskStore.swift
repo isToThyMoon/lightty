@@ -85,12 +85,16 @@ public final class TaskStore {
 
     // MARK: - 写
 
+    /// `body` 是建任务时用户自己写下的交接正文（目标、背景、下一步）。留空就是空正文，
+    /// 与以前一样。它不是 lightty 的格式：Agent 之后会按 docs/task-format.md 的节头改写
+    /// 这块内容，这里只负责原样落盘。
     @discardableResult
-    public func create(name: String, workdir: String, tool: String? = nil) throws -> (fileURL: URL, task: TaskFile) {
+    public func create(name: String, workdir: String, tool: String? = nil,
+                       body: String = "") throws -> (fileURL: URL, task: TaskFile) {
         let timestamp = now()
         let task = TaskFile(
             name: name, status: "active", workdir: workdir, tool: tool,
-            created: timestamp, updated: timestamp
+            created: timestamp, updated: timestamp, body: body
         )
         let url = uniqueURL(for: name)
         try atomicWrite(task.serialize(), to: url)

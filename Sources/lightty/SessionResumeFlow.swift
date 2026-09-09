@@ -7,14 +7,8 @@ enum SessionResumeFlow {
     // Main-thread request coalescing, not an Agent lock. Released after each bounded check.
     private static var checking = Set<AgentSessionKey>()
     static func isStarting(_ key: AgentSessionKey) -> Bool { checking.contains(key) }
-    static func startNew(agent: LaunchAgent, in controller: TerminalWindowController) {
-        guard agent != .terminal else { return }
-        guard !SessionDeletion.busyAgents.contains(agent == .codex ? .codex : .claude) else { return }
-        let configuration = newSessionConfiguration(agent: agent,
-            workingDirectory: controller.activePane?.terminal.currentWorkingDirectory)
-        controller.addTab(initialPane: PaneView(surfaceConfiguration: configuration))
-    }
-
+    /// 新会话的第一行命令与落脚目录。目录由启动浮层给定；给 nil 只在没有更好答案时
+    /// 才发生，那时落在家目录。
     static func newSessionConfiguration(agent: LaunchAgent, workingDirectory: String?) -> TerminalSurfaceConfiguration {
         var configuration = TerminalSurfaceConfiguration()
         configuration.workingDirectory = workingDirectory ?? NSHomeDirectory()

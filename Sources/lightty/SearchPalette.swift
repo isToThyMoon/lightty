@@ -28,7 +28,7 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
     private var previewBody: NSTextView { bodyScroll.documentView as! NSTextView }
     private let actionsScroll = NSScrollView()
     private let previewActions = NSStackView()
-    private var taskWorkflow: RestorePopoverController?
+    private var taskWorkflow: LaunchComposerController?
     private let hintLabel = NSTextField(labelWithString: "")
     private var results: [Result] = []
     private var selectedIndex = 0
@@ -395,8 +395,9 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         previewBody.string = result.task.body
 
         guard let controller else { return }
-        let workflow = RestorePopoverController(fileURL: result.fileURL,
-            task: result.task, controller: controller, embedded: true)
+        let workflow = LaunchComposerController(
+            subject: .task(fileURL: result.fileURL, task: result.task),
+            controller: controller, embedded: true)
         workflow.onDone = { [weak self] in self?.onDismiss?() }
         taskWorkflow = workflow
         workflow.view.translatesAutoresizingMaskIntoConstraints = false

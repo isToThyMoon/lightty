@@ -18,7 +18,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 
 - TerminalWindowController：窗口、标签页、pane 树与双侧栏布局。
 - PrimarySidebar：第一侧栏外壳、模式标题及说明；HandoffSidebarContent / SessionsSidebarContent 分别承载两种内容。
-- RestoreFlow / SearchPalette：共享任务 Agent 启动组件；ArchivedTasksView 管理设置中的归档恢复与彻底删除。
+- LaunchComposer / SearchPalette：共享启动浮层；三个入口（Sessions 新建会话、Handoff 新建任务、任务开始处理）只是它的三组初值。ArchivedTasksView 管理设置中的归档恢复与彻底删除。
 - SessionLibrary / SessionCatalogProvider：分页会话目录、取消、项目持久化；CodexSessionCatalog / ClaudeSessionCatalog 隔离来源协议。
 - Claude 官方 SDK helper：`node scripts/prepare-claude-helper.mjs` 准备 debug 依赖，再运行 `swift build && .build/debug/lightty`。打包脚本自动准备双架构运行时；应用运行时不下载依赖。
 - SessionResumeFlow：原生 CLI 恢复；目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。

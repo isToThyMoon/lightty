@@ -334,6 +334,13 @@
 "Working directory" = "Working directory";
 "Choose folder…" = "Choose folder…";
 "Task name" = "Task name";
+"Create and launch %@" = "Create and launch %@";
+"Create and open terminal" = "Create and open terminal";
+"Create only" = "Create only";
+"Initial handoff notes" = "Initial handoff notes";
+"Goal, background, next steps. The Agent reads this on launch." = "Goal, background, next steps. The Agent reads this on launch.";
+"Open a terminal without starting an Agent." = "Open a terminal without starting an Agent.";
+"A session is being deleted. Try again in a moment." = "A session is being deleted. Try again in a moment.";
 "Enter a task name." = "Enter a task name.";
 "Choose an existing folder." = "Choose an existing folder.";
 "Set as default directory on launch" = "Set as default directory on launch";

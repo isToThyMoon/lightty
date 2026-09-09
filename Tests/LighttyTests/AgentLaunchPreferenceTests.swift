@@ -23,7 +23,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         XCTAssertEqual(buttons.first { $0.title == L("New tab") }?.state, .on)
         XCTAssertTrue(buttons.contains { $0.title == L("Split in current tab") })
         XCTAssertFalse(buttons.contains { $0.title == L("New terminal") })
-        XCTAssertNotNil(descendants(palette).compactMap { $0 as? NSPopUpButton }.first)
+        XCTAssertNotNil(descendants(palette).compactMap { $0 as? ShellDropdown }.first)
         XCTAssertEqual(controller.tabCount, 1)
         let settings = SettingsView(page: .archive)
         XCTAssertTrue(descendants(settings).contains { $0 is ArchivedTasksView })
@@ -46,8 +46,9 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         let body = "## Current state\n" + String(repeating: "Long handoff preview text. ", count: 150)
         let task = TaskFile(name: "Preview", status: "todo", workdir: directory.path,
                             created: Date(), updated: Date(), body: body)
-        let popover = RestorePopoverController(fileURL: directory.appendingPathComponent("task.md"),
-                                               task: task, controller: controller)
+        let popover = LaunchComposerController(
+            subject: .task(fileURL: directory.appendingPathComponent("task.md"), task: task),
+            controller: controller)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 600),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = popover.view
@@ -198,17 +199,17 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         let controller = TerminalWindowController()
         let task = TaskFile(name: "Example", status: "todo", workdir: taskDirectory.path,
                             created: Date(), updated: Date())
-        let popover = RestorePopoverController(fileURL: taskDirectory.appendingPathComponent("task.md"),
-                                               task: task, controller: controller)
+        let popover = LaunchComposerController(
+            subject: .task(fileURL: taskDirectory.appendingPathComponent("task.md"), task: task),
+            controller: controller)
         let views = descendants(popover.view)
-        let picker = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first)
+        let picker = try XCTUnwrap(views.compactMap { $0 as? ShellDropdown }.first)
         let buttons = views.compactMap { $0 as? NSButton }
         let tab = try XCTUnwrap(buttons.first { $0.title == L("New tab") })
         let split = try XCTUnwrap(buttons.first { $0.title == L("Split in current tab") })
         XCTAssertEqual(tab.state, .on)
         split.performClick(nil)
-        picker.selectItem(at: 1)
-        picker.sendAction(try XCTUnwrap(picker.action), to: picker.target)
+        picker.select(LaunchAgent.codex.rawValue)
         XCTAssertEqual(split.state, .on)
         XCTAssertEqual(tab.state, .off)
         XCTAssertTrue(buttons.contains { $0.title == L("Launch %@", "Codex") })
@@ -238,9 +239,10 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         try AppState.shared.taskStore.create(name: "Handoff launch", workdir: taskDirectory.path)
         let file = taskDirectory.appendingPathComponent("Handoff launch.md")
         let task = try AppState.shared.taskStore.load(at: file)
-        let popover = RestorePopoverController(fileURL: file, task: task, controller: controller)
+        let popover = LaunchComposerController(subject: .task(fileURL: file, task: task),
+                                               controller: controller)
         _ = popover.view
-        let pane = try XCTUnwrap(popover.makeBoundPane())
+        let pane = try XCTUnwrap(popover.makePane())
         XCTAssertEqual(pane.terminal.launchConfiguration.initialInput, "codex --yolo\n")
     }
 
