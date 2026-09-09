@@ -3,6 +3,9 @@ import GhosttyKit
 
 /// Ghostty core `start_search` 动作的 AppKit 宿主视图。
 /// 搜索命令仍通过 `ghostty_surface_binding_action` 返回 core；这里不定义键位。
+///
+/// 只画内容，不画外壳：底、圆角、描边、投影都由承载它的 `NSPopover` 提供。
+/// 用系统气泡而不是自绘窗口，是因为那档玻璃复刻不出来——见 SystemPopover.swift。
 final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
     var onNeedleChange: ((String) -> Void)?
     var onNext: (() -> Void)?
@@ -16,15 +19,6 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
 
     init(needle: String?) {
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 9
-        layer?.borderWidth = 1
-        applyAppearanceColors()
-        shadow = NSShadow()
-        shadow?.shadowBlurRadius = 8
-        shadow?.shadowOffset = NSSize(width: 0, height: -2)
-        shadow?.shadowColor = NSColor.black.withAlphaComponent(0.12)
-
         let persisted = NSPasteboard(name: .find).string(forType: .string)
         searchField.stringValue = needle?.isEmpty == false ? needle! : (persisted ?? "")
         searchField.placeholderString = "Search"
@@ -74,18 +68,6 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    private func applyAppearanceColors() {
-        layer?.backgroundColor =
-            ShellStyle.titlebarBackground.shellResolvedCGColor(for: effectiveAppearance)
-        layer?.borderColor =
-            ShellStyle.divider.shellResolvedCGColor(for: effectiveAppearance)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyAppearanceColors()
-    }
 
     deinit { debounceWorkItem?.cancel() }
 

@@ -121,6 +121,9 @@ final class PaneView: NSView {
     let dragIdentifier: UUID
     private(set) var binding: Binding = .unnamed
     private var terminalSearchBar: TerminalSearchBar?
+    /// 搜索条住在系统气泡里：这一档玻璃是 NSPopover 的私有框架视图自己画的，
+    /// 用 NSVisualEffectView 复现不出来（材质、外观、窗口样式都试过）。
+    private var searchPopover: NSPopover?
     private var searchSelected: Int?
     private var searchTotal: Int?
     private var dropOverlay: PaneDropOverlayView?
@@ -379,6 +382,9 @@ final class PaneView: NSView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if identityPanel != nil { dismissIdentityPanel() }
+        // 搜索气泡锚在本视图上，pane 离窗（拖拽重组/关闭）时必须一起收，
+        // 否则锚点没了，气泡会留在屏幕上。
+        if terminalSearchBar != nil { endTerminalSearch(requestCore: true) }
     }
 
     private func toggleIdentityPanel() {
@@ -607,6 +613,7 @@ final class PaneView: NSView {
 
     func startTerminalSearch(needle: String?) {
         if let terminalSearchBar {
+            searchPopover?.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
             if let needle, !needle.isEmpty {
                 terminalSearchBar.setNeedle(needle)
             } else {
@@ -627,24 +634,50 @@ final class PaneView: NSView {
             terminal?.performBindingAction("navigate_search:previous")
         }
         bar.onClose = { [weak self] in self?.endTerminalSearch(requestCore: true) }
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(bar)
-        NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: terminal.topAnchor, constant: 8),
-            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-        ])
+
+        let size = bar.fittingSize
+        bar.frame = NSRect(origin: .zero, size: size)
+        let controller = NSViewController()
+        controller.view = bar
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.contentSize = size
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        popover.hideAnchorArrow()
+        popover.show(relativeTo: searchAnchorRect(size: size), of: self, preferredEdge: .maxY)
         terminalSearchBar = bar
+        searchPopover = popover
         bar.update(selected: searchSelected, total: searchTotal)
         DispatchQueue.main.async { [weak bar] in bar?.focus() }
     }
 
+    /// 搜索气泡的定位矩形：终端顶边下 8、pane 右边界内 8——与它还贴在视图里时逐像素相同。
+    /// 气泡向 `.maxY` 一侧展开并在矩形上居中，所以这里给的是卡片底边的中点。
+    private func searchAnchorRect(size: NSSize) -> NSRect {
+        NSRect(x: bounds.maxX - 8 - size.width / 2,
+               y: terminal.convert(terminal.bounds, to: self).maxY - 8 - size.height,
+               width: 1, height: 1)
+    }
+
+    /// `NSPopover` 只记住 show 时那一个矩形，pane 改尺寸（开合侧栏、拖分屏、缩放窗口）
+    /// 它不会自己重算，会停在旧位置。每次布局都把矩形喂回去。
+    override func layout() {
+        super.layout()
+        guard let popover = searchPopover, let bar = terminalSearchBar else { return }
+        // layout 调用很密，矩形没变就别回写：每次赋值气泡都会重排一次。
+        let rect = searchAnchorRect(size: bar.frame.size)
+        if popover.positioningRect != rect { popover.positioningRect = rect }
+    }
+
     func endTerminalSearch(requestCore: Bool) {
-        guard let bar = terminalSearchBar else {
+        guard terminalSearchBar != nil else {
             if requestCore { terminal.performBindingAction("end_search") }
             return
         }
         terminalSearchBar = nil
-        bar.removeFromSuperview()
+        searchPopover?.close()
+        searchPopover = nil
         if requestCore { terminal.performBindingAction("end_search") }
         focusTerminal()
     }
