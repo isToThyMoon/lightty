@@ -46,9 +46,14 @@ public struct AgentSession: Equatable, Sendable {
     public let updatedAt: Date?
     /// Source metadata only; unrelated to lightty's local organization archive state.
     public let sourceArchived: Bool
+    /// Agent 自己报告这段会话当前有进程在跑。**与 lightty 是否打开它无关**——
+    /// 在 lightty 里打开的会话同样会被报告为在跑，两者的区别由呈现侧决定。
+    /// 只有能问出这件事的来源才会填（目前是 Claude 的活会话表）；问不出来一律 false，
+    /// 所以 false 只意味着「没有证据」，不代表「一定没在跑」。
+    public let sourceRunning: Bool
 
     public init(key: AgentSessionKey, title: String, workingDirectory: String?,
-                updatedAt: Date?, sourceArchived: Bool = false) {
+                updatedAt: Date?, sourceArchived: Bool = false, sourceRunning: Bool = false) {
         self.key = key
         self.title = String(title.unicodeScalars.filter {
             !CharacterSet.controlCharacters.contains($0)
@@ -56,6 +61,7 @@ public struct AgentSession: Equatable, Sendable {
         self.workingDirectory = workingDirectory
         self.updatedAt = updatedAt
         self.sourceArchived = sourceArchived
+        self.sourceRunning = sourceRunning
     }
 }
 

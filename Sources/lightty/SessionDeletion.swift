@@ -54,7 +54,8 @@ enum SessionDeletion {
             DispatchQueue.global(qos: .userInitiated).async {
                 let result = Result { try delete(session.key, source: source,
                     acceptingUnknownOccupancy: acceptingUnknownOccupancy,
-                    checkProcesses: { try requireClaudeSessionAvailable(session.key, known: associations) }) }
+                    checkProcesses: { try requireClaudeSessionAvailable(session.key, known: associations,
+                                                                       executable: source.executable) }) }
                 DispatchQueue.main.async {
                     switch result {
                     case .success:
@@ -96,7 +97,9 @@ enum SessionDeletion {
         guard UUID(uuidString: key.nativeID) != nil, key.agent == source.agent,
               source.root.standardizedFileURL.path == key.sourceRoot,
               source.root.path != "/" else { throw Failure.invalidSource }
-        if case .inUse(let pid) = SessionOccupancy.check(key) { throw Failure.occupiedProcess(pid) }
+        if case .inUse(let pid) = SessionOccupancy.check(key, executable: source.executable) {
+            throw Failure.occupiedProcess(pid)
+        }
         var environment = ProcessInfo.processInfo.environment
         for name in environment.keys where name.hasPrefix("LIGHTTY_") { environment.removeValue(forKey: name) }
         environment["PATH"] = HookInstaller.searchPath().joined(separator: ":")
@@ -110,7 +113,7 @@ enum SessionDeletion {
             case .claude:
                 do {
                     if let checkProcesses { try checkProcesses() }
-                    else { try requireClaudeSessionAvailable(key, known: [:]) }
+                    else { try requireClaudeSessionAvailable(key, known: [:], executable: source.executable) }
                 } catch Failure.unknownOccupancy where acceptingUnknownOccupancy {
                     // Explicit consent for this request only. Occupied and other failures still throw.
                 }
@@ -133,15 +136,25 @@ enum SessionDeletion {
     }
 
     static func requireClaudeSessionAvailable(_ target: AgentSessionKey,
-                                              known: [AgentProcessIdentity: AgentSessionKey]) throws {
+                                              known: [AgentProcessIdentity: AgentSessionKey],
+                                              executable: String? = nil) throws {
         // lsof alone misses Claude, which need not keep its transcript descriptor open.
         guard let data = try? SessionHelperProcess.readPage(executable: URL(fileURLWithPath: "/bin/ps"),
             arguments: ["-axo", "pid=,comm="], directory: URL(fileURLWithPath: "/"),
             environment: ["PATH": "/usr/bin:/bin"], cancelled: { false }, timeout: 3) else {
             throw Failure.unknownOccupancy(nil)
         }
-        // PID reuse must never inherit the previous process's session identity.
         var live: [Int32: AgentSessionKey] = [:]
+        // Claude 自己就知道每个活着的进程在跑哪段会话。以前只认 lightty 自己开的 pane，
+        // 用户在别处开着的 claude 一律算「说不清」，于是删除几乎每次都要弹一次警告。
+        if let executable,
+           let registry = SessionOccupancy.liveClaudeSessions(executable: executable, root: target.sourceRoot) {
+            for (pid, id) in registry {
+                live[pid] = AgentSessionKey(agent: .claude, sourceRoot: target.sourceRoot, nativeID: id)
+            }
+        }
+        // PID reuse must never inherit the previous process's session identity.
+        // 自己的 pane 后合并：这份身份是核对过进程标识的，比问来的更可信。
         for (identity, key) in known where AgentProcessIdentity.read(identity.pid) == identity {
             live[identity.pid] = key
         }

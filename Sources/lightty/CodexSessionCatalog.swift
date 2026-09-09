@@ -14,8 +14,30 @@ struct CodexSessionCatalog: SessionCatalogProvider {
             "modelProviders": [], "archived": archived, "sortKey": "updated_at"]
         if let cursor { params["cursor"] = cursor }
         let response = try rpc.request("thread/list", params: params, cancelled: cancelled)
-        return SessionCatalogPage(sessions: try Self.decode(response, source: source, archived: archived),
+        let sessions = try Self.decode(response, source: source, archived: archived)
+        return SessionCatalogPage(sessions: Self.markRunning(sessions, root: source.root.path),
                                   nextCursor: response["nextCursor"] as? String)
+    }
+
+    /// 标出哪些会话此刻正开着，让列表在用户点下去之前就能说明白，
+    /// 而不是点完撞上「该会话已在其他终端中打开」那个提示框。
+    ///
+    /// codex 没有 Claude 那样的活会话表（那要先连上共用的后台服务），只能读操作系统
+    /// 的文件表。一次 `lsof -c codex` 实测 0.01 秒、4KB 输出，挂在刷新上不算负担。
+    ///
+    /// 问不出来就原样返回：这是锦上添花，不能因为它失败而让列表读不出来。
+    /// 因此「没有标记」只意味着没有证据，不代表一定没开着——那个提示框仍然是最后一道防线。
+    static func markRunning(_ sessions: [AgentSession], root: String) -> [AgentSession] {
+        guard sessions.contains(where: { !$0.sourceRunning }),
+              let open = SessionOccupancy.openSessionIDs(agent: .codex, root: root),
+              !open.isEmpty else { return sessions }
+        return sessions.map { session in
+            guard open.contains(session.key.nativeID) else { return session }
+            return AgentSession(key: session.key, title: session.title,
+                                workingDirectory: session.workingDirectory,
+                                updatedAt: session.updatedAt,
+                                sourceArchived: session.sourceArchived, sourceRunning: true)
+        }
     }
 
     static func decode(_ page: [String: Any], source: SessionCatalogSource,

@@ -86,4 +86,56 @@ final class SessionOccupancyTests: XCTestCase {
         let differentProcess = Data("p123\0cclaude\0\nf3\0au\0n/tmp/other\0\np456\0ccat\0\nf4\0au\0n\(path)\0\n".utf8)
         XCTAssertEqual(SessionOccupancy.inspect(differentProcess, for: key), .unknown)
     }
+
+    func testClaudeLiveRegistryIsReadAsPidToSession() {
+        let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
+        let data = Data("""
+        [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
+         {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
+        """.utf8)
+        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeSessions(data),
+                       [51228: id, 51233: other])
+        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeSessions(Data("[]".utf8)), [:])
+        // cwd 也要读出来：官方开发包偶尔给不出会话目录，靠这张表补空。
+        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeRows(data)?.map(\.cwd), ["/w", "/w"])
+        // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信。
+        let noCWD = Data("[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]".utf8)
+        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeRows(noCWD)?.count, 1)
+        XCTAssertNil(SessionOccupancy.decodeLiveClaudeRows(noCWD)?.first?.cwd)
+    }
+
+    /// 认不出来必须是「问不出来」（nil），不能是空表——空表会被读成「一个都没在跑」，
+    /// 于是一段正开着的会话会被当成可以删。
+    func testUnrecognizedClaudeRegistryOutputIsUnknownRatherThanEmpty() {
+        for text in ["", "not json", "{\"pid\":1}",
+                     "[{\"cwd\":\"/w\"}]",
+                     "[{\"pid\":0,\"sessionId\":\"\(id)\"}]",
+                     "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]",
+                     "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]",
+                     "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]"] {
+            XCTAssertNil(SessionOccupancy.decodeLiveClaudeSessions(Data(text.utf8)), text)
+        }
+    }
+
+    /// 一次问出「哪些会话正开着」——列表要在点下去之前标注，逐条问 N 次不现实。
+    func testOpenSessionIDsAreCollectedInOneScan() {
+        let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
+        let root = "/fixture/.codex"
+        var text = "p1\0ccodex\0\nf3\0au\0n\(root)/sessions/2026/09/09/rollout-2026-09-09T00-00-00-\(id).jsonl\0\n"
+        text += "p2\0ccodex\0\nf4\0aw\0n\(root)/archived_sessions/rollout-x-\(other).jsonl\0\n"
+        // 只读打开不算证据；别的命令打开也不算。
+        text += "p3\0ccodex\0\nf5\0ar\0n\(root)/sessions/rollout-y-11111111-1111-1111-1111-111111111111.jsonl\0\n"
+        text += "p4\0ccat\0\nf6\0au\0n\(root)/sessions/rollout-z-22222222-2222-2222-2222-222222222222.jsonl\0\n"
+        XCTAssertEqual(SessionOccupancy.decodeOpenSessionIDs(Data(text.utf8), agent: .codex, root: root),
+                       [id, other])
+        // 不是会话记录的文件不算。
+        let noise = "p1\0ccodex\0\nf3\0au\0n\(root)/config.toml\0\n"
+        XCTAssertTrue(SessionOccupancy.decodeOpenSessionIDs(Data(noise.utf8), agent: .codex, root: root).isEmpty)
+    }
+
+    /// codex 没有活会话表，所以就算传了可执行文件路径也只能走文件表那条路。
+    func testCodexIgnoresTheClaudeOnlyRegistryPath() {
+        let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
+        XCTAssertEqual(SessionOccupancy.check(key, executable: "/nonexistent/codex"), .unknown)
+    }
 }

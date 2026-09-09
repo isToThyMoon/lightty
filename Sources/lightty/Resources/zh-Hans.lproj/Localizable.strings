@@ -24,6 +24,7 @@
 /* 菜单栏 */
 "About lightty" = "关于 lightty";
 "Open in lightty" = "已打开";
+"Open in another terminal" = "在其他终端中打开";
 "Development build" = "开发版本";
 "Thank you for finding lightty." = "谢谢你，找到了 lightty。";
 "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "这是我的第一个 Swift App。\n它将始终免费、开源。\n愿它能为你的日常使用，带来一点点帮助。";
