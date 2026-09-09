@@ -259,6 +259,7 @@
 "Could not read this CLI session source." = "Could not read this CLI session source.";
 "Project changes could not be saved. The previous data has been preserved." = "Project changes could not be saved. The previous data has been preserved.";
 "The original session folder is missing. Choose a folder to continue." = "The original session folder is missing. Choose a folder to continue.";
+"This session has no recorded folder. Choose a folder to continue." = "This session has no recorded folder. Choose a folder to continue.";
 "This CLI session source is no longer available." = "This CLI session source is no longer available.";
 "Could not resume this session." = "Could not resume this session.";
 "Check the CLI and session folder, then try again." = "Check the CLI and session folder, then try again.";

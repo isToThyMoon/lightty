@@ -73,6 +73,71 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         let cancelledAt = Date().addingTimeInterval(0.05)
         XCTAssertThrowsError(try run("while :; do :; done", cancelled: { Date() > cancelledAt }))
     }
+
+    /// 官方开发包列会话时只在转录文件的**头 64KB** 里找工作目录。用户第一句话里
+    /// 贴了图片时，第一条用户记录有几百 KB，`cwd` 写在这条记录的末尾，落在窗口
+    /// 之外——整条会话就报不出工作目录，点开会弹「原会话目录不存在」。
+    ///
+    /// 夹具照着真实文件的形状搭：`cwd` 排在超长正文之后，绝对位置越过 65536。
+    /// （真实文件里它在第 486191 字节。）关键是**不能让 `cwd` 排到正文前面**——
+    /// 那样它落在窗口内，官方接口自己就读到了，这条测试会变成什么都没测。
+    /// 下面那句断言就是守着这一点的。
+    func testWorkingDirectoryIsRecoveredWhenTheOfficialSummaryWindowMissesIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("claude-oversized-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("projects/project-a")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let id = UUID().uuidString.lowercased()
+        let directory = "/tmp/中文 project"
+
+        func line(_ record: [String: Any]) throws -> Data {
+            var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+            data.append(10)
+            return data
+        }
+        var file = Data()
+        for type in ["mode", "permission-mode", "atis-latch", "bridge-session", "file-history-snapshot"] {
+            file.append(try line(["type": type, "sessionId": id]))
+        }
+        // 标题走单独一条小记录：超长那条被跳过后，会话仍要有名字，否则它根本不进列表。
+        file.append(try line(["type": "ai-title", "sessionId": id, "aiTitle": "贴图开头的会话"]))
+        // 这一条得手写：字段顺序就是这条测试的全部意义，`JSONSerialization` 不保证顺序。
+        let body = String(repeating: "图", count: 200_000)
+        let prefix = Data(("{\"type\":\"user\",\"sessionId\":\"\(id)\",\"parentUuid\":null,"
+            + "\"isSidechain\":false,\"entrypoint\":\"cli\","
+            + "\"timestamp\":\"2026-09-09T00:00:00Z\","
+            + "\"message\":{\"role\":\"user\",\"content\":\"\(body)\"},").utf8)
+        XCTAssertGreaterThan(file.count + prefix.count, 65_536,
+                             "cwd 必须落在官方那 64KB 窗口之外，否则这条测试测不到东西")
+        file.append(prefix)
+        file.append(Data("\"cwd\":\"\(directory)\"}\n".utf8))
+        file.append(try line(["type": "assistant", "sessionId": id, "uuid": UUID().uuidString,
+            "timestamp": "2026-09-09T00:00:01Z",
+            "message": ["role": "assistant", "content": "好的"]]))
+        try file.write(to: project.appendingPathComponent("\(id).jsonl"))
+
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude")
+        let provider = ClaudeSessionCatalog(source: source, helperDirectory: helper)
+        let page = try provider.page(archived: false, cursor: nil, cancelled: { false })
+        let session = try XCTUnwrap(page.sessions.first { $0.key.nativeID == id })
+        XCTAssertEqual(session.workingDirectory, directory)
+    }
+
+    /// 「目录记下来了但现在不在」和「压根没读出目录」是两回事，不能共用一句话。
+    func testFolderPromptSeparatesAMissingFolderFromAnUnrecordedOne() throws {
+        let existing = FileManager.default.temporaryDirectory.appendingPathComponent("resume-folder-\(UUID())")
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: existing) }
+        let file = existing.appendingPathComponent("not-a-folder")
+        try Data().write(to: file)
+
+        XCTAssertNil(SessionResumeFlow.folderPromptMessage(for: existing.path))
+        let unrecorded = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: nil))
+        let missing = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: existing.path + "/gone"))
+        let notAFolder = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: file.path))
+        XCTAssertEqual(missing, notAFolder)
+        XCTAssertNotEqual(unrecorded, missing, "没读出目录不能说成目录不存在")
+    }
 }
 
 @MainActor

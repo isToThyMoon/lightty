@@ -39,10 +39,9 @@ enum SessionResumeFlow {
         }
         guard !checking.contains(session.key) else { return }
         var cwd = session.workingDirectory
-        var isDirectory: ObjCBool = false
-        if cwd == nil || !FileManager.default.fileExists(atPath: cwd ?? "", isDirectory: &isDirectory) || !isDirectory.boolValue {
+        if let message = folderPromptMessage(for: cwd) {
             let picker = NSOpenPanel()
-            picker.message = L("The original session folder is missing. Choose a folder to continue.")
+            picker.message = message
             picker.canChooseFiles = false
             picker.canChooseDirectories = true
             guard picker.runModal() == .OK else { return }
@@ -57,7 +56,7 @@ enum SessionResumeFlow {
                                              configuration: source.configuration, workingDirectory: cwd)
             guard checking.insert(session.key).inserted else { return }
             DispatchQueue.global(qos: .userInitiated).async {
-                let occupancy = SessionOccupancy.check(session.key)
+                let occupancy = SessionOccupancy.check(session.key, executable: source.executable)
                 DispatchQueue.main.async { [weak controller] in
                     checking.remove(session.key)
                     guard let controller, let window = controller.window, window.isVisible else { return }
@@ -83,6 +82,25 @@ enum SessionResumeFlow {
                 }
             }
         } catch { showError(error, in: controller.window) }
+    }
+
+    /// 恢复之前要不要让用户挑目录，以及挑之前该跟他说什么。返回 nil 表示直接能用。
+    ///
+    /// 两件不同的事说法也得不同：目录记下来了但现在不在，和**压根就没读出目录**。
+    /// 后者说成「原会话目录不存在」是替用户下了一个我们并不知道的结论——目录多半
+    /// 还好端端在那儿，只是这段会话的工作目录我们没拿到。
+    ///
+    /// 抽成函数是因为 `open` 里紧接着就是模态框，那一段测不了。
+    static func folderPromptMessage(for path: String?) -> String? {
+        guard let path else {
+            return L("This session has no recorded folder. Choose a folder to continue.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return L("The original session folder is missing. Choose a folder to continue.")
+        }
+        return nil
     }
 
     static func nativePicker(source: SessionCatalogSource, in controller: TerminalWindowController) {

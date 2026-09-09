@@ -263,6 +263,7 @@
 "Could not read this CLI session source." = "无法读取此 CLI 会话来源。";
 "Project changes could not be saved. The previous data has been preserved." = "项目修改保存失败，原有数据已保留。";
 "The original session folder is missing. Choose a folder to continue." = "原会话目录不存在，请选择继续操作的目录。";
+"This session has no recorded folder. Choose a folder to continue." = "这段会话没有记录工作目录，请选择继续操作的目录。";
 "This CLI session source is no longer available." = "此 CLI 会话来源已不可用。";
 "Could not resume this session." = "无法恢复此会话。";
 "Check the CLI and session folder, then try again." = "请检查 CLI 和会话目录后重试。";
