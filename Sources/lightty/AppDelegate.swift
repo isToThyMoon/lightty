@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController?
     private var aboutWindowController: AboutWindowController?
 
+    private var textEditingShortcuts: TextEditingShortcuts?
     private var shiftTapMonitor: Any?
     private var lastShiftTap: TimeInterval = 0
     private weak var fontDownloadMenuItem: NSMenuItem?
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgentLaunchPreference.migrateLegacyCommands()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
+        textEditingShortcuts = TextEditingShortcuts()
         installShiftTapMonitor()
         // 语言 / 终端主题在设置页改了之后菜单文案与勾选态要跟上：整份重建。
         NotificationCenter.default.addObserver(
