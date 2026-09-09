@@ -44,7 +44,16 @@ enum ShellMenuPopover {
     private static var window: ShellMenuWindow?
 
     /// 贴锚点下方、右缘对齐的自绘卡片（ChatGPT 桌面版式，无气泡小三角）。
-    /// 不用 NSPopover：它的三角是固有外观关不掉。空间不够时翻到锚点上方。
+    /// 空间不够时翻到锚点上方。
+    ///
+    /// 当初自绘的理由是「NSPopover 的三角关不掉」。这条**已经不成立**：
+    /// `NSPopover.hideAnchorArrow()` 能关掉它（见 ShellGlass.swift），搜索条已经这么用了。
+    /// 现在仍然自绘，只是因为这套的观感已经够好，不值得为它冒私有属性的风险。
+    ///
+    /// 换过去的话，10 个调用点一个都不用改——它们只传菜单项数组，只需把这个方法内部
+    /// 换成一个 NSPopover，自绘的行原样搬进它的内容视图。什么时候值得换：
+    ///   - 需要把这类卡片浮到**终端**上（自绘这套在那儿会变白板，见 blurredBackdrop）
+    ///   - 底图不刷新开始露馅（父窗口移动、改大小、明暗切换、底下内容在动）
     static func present(from anchor: NSView, items: [Item]) {
         dismiss()
         guard let parent = anchor.window else { return }
@@ -74,11 +83,17 @@ enum ShellMenuPopover {
         menu.makeKeyAndOrderFront(nil)
     }
 
-    /// 卡片底图：父窗口在卡片区域下方的画面 + 小半径高斯模糊。
-    /// 不用 NSVisualEffectView 的 behindWindow 材质：它的模糊半径固定且很大，
-    /// 开关这类小元素被糊成一片、再罩一层就什么都看不见；ChatGPT 客户端那种
-    /// 「隐约看得出下面形状」的玻璃感是小半径模糊。自己截图自己糊，半径可控，
-    /// 也不受系统「减少透明度」影响。（Metal 承载的终端画面截不到，落到卡片底色。）
+    /// 卡片底图：父窗口在卡片区域下方的画面 + 小半径高斯模糊。自己截图自己糊，
+    /// 半径可控，也不受系统「减少透明度」影响。
+    ///
+    /// 别指望用 `NSVisualEffectView` 复刻系统气泡那档玻璃——试过，做不到。真气泡运行时
+    /// 是 `material 0 / 窗口后模糊 / 跟随窗口活跃态 / 无遮罩`，照这套参数设出来的
+    /// 视图长相差一大截；15 种材质、5 种外观、子窗口与独立窗口、`.borderless` 与
+    /// `.titled` 都比过，没有一档对得上。那层玻璃是 `NSPopoverFrame` 私有类自己画的，
+    /// 要它就只能用 NSPopover 本身。
+    ///
+    /// 这套截图的硬限制：ghostty 用 IOSurface 画的终端画面截不到，卡片浮到终端上
+    /// 只会露出卡片底色（一块白板）。底图也只在打开时截一次，之后不刷新。
     static func blurredBackdrop(of parent: NSWindow, under frame: NSRect) -> NSImage? {
         guard let root = parent.contentView?.superview else { return nil }
         let rootRect = root.convert(parent.convertFromScreen(frame), from: nil)
