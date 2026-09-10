@@ -90,6 +90,43 @@ final class PaneStatusPresenter {
     private lazy var libraryRefreshes = Coalescer(.after(1.5)) {
         AppState.shared?.sessionLibrary.refresh()
     }
+
+    /// 拉一次还赶不上就再拉几次。
+    ///
+    /// 「一轮结束」和「agent 把标题写进自己目录」之间有延迟，长短取决于那一轮有多少
+    /// 内容——固定等 1.5 秒只是赌它够快。实测输过：同一批起的三段会话，两段赶上了、
+    /// 第三段没赶上，那一段的标题就永远停在「终端 N」，因为在此之后没有任何东西会
+    /// 再拉一次。还有一种更隐蔽的输法：赶上的那一刻 agent 只写了预览、还没写正式
+    /// 名字，标题于是停在预览上，看着像成了。
+    ///
+    /// **必须有上限。** `.done` 是粘滞态，而库自己的变更通知也会走进 `flush`，
+    /// 无限重试会变成永远转下去——下面那句只认 `fromHook` 正是为了这个。
+    static let titleAttempts = 5
+    /// pane → 还能再拉几次。标题落地或次数用完就移除，不留残条。
+    private var titleWaits: [UUID: Int] = [:]
+
+    /// 标题没落地就再拉一次，直到次数用完。
+    private func updateTitleWait(for pane: PaneView, landed: Bool) {
+        let id = pane.dragIdentifier
+        let next = Self.nextTitleWait(
+            landed: landed, hasSession: pane.displayedSessionKey != nil, attemptsLeft: titleWaits[id])
+        titleWaits[id] = next.remaining
+        if next.refresh { scheduleLibraryRefresh() }
+    }
+
+    /// 「还要不要再拉一次库、还剩几次」。
+    ///
+    /// 抽成纯函数是为了让**会不会永远转下去**这条性质测得到：整个刷新链路是
+    /// 单例 + 通知 + 合流，端到端构不出来，而这条重试恰恰是唯一有可能自激的地方。
+    ///
+    /// - 标题落地了：清掉记录，不再拉。
+    /// - 这个 pane 里根本没有会话：标题本来就该是 pane 名，不是没赶上，不重试。
+    /// - 次数用完：清掉记录。**这是终止的保证**，少了它就是永动机。
+    static func nextTitleWait(landed: Bool, hasSession: Bool,
+                              attemptsLeft: Int?) -> (remaining: Int?, refresh: Bool) {
+        guard !landed, hasSession, let left = attemptsLeft, left > 0 else { return (nil, false) }
+        return (left - 1, true)
+    }
     private func scheduleLibraryRefresh() { libraryRefreshes.schedule() }
 
     private func flush() {
@@ -108,12 +145,17 @@ final class PaneStatusPresenter {
             // 从这里够不到，而 header 有「胶囊隐身」这个现成标记能定位它
             let status = store.status(for: pane.dragIdentifier)
             pane.header.apply(status)
-            pane.refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
+            let titleLanded = pane.refreshSessionTitle(
+                records: AppState.shared?.sessionLibrary.records ?? [])
             // 一轮结束时 agent 才把总结标题写进自己的目录。会话库只有会话侧栏会去拉，
             // 不在这里补一次，pane 上的标题得等用户主动打开侧栏才更新。
             // 只认 hook 事件（`fromHook`）：`.done` 是粘滞态，若也认库自己的变更通知，
             // 刷新会把自己再触发一遍，永远转下去。
-            if fromHook, status?.state == .done { scheduleLibraryRefresh() }
+            if fromHook, status?.state == .done {
+                titleWaits[pane.dragIdentifier] = Self.titleAttempts
+                scheduleLibraryRefresh()
+            }
+            updateTitleWait(for: pane, landed: titleLanded)
         }
 
         // 侧栏与 header 同样定向：通知带着变化的 pane，只刷那几行。

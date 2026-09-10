@@ -54,18 +54,25 @@ final class PaneView: NSView {
         refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
     }
 
-    func refreshSessionTitle(records: [AgentSession]) {
+    /// - Returns: 会话标题有没有落地。`false` 有两种情形：这个 pane 里根本没有会话，
+    ///   或者会话在，但库里那条记录的标题还是空的——**agent 是一轮结束之后才把标题
+    ///   写进自己目录的，拉库那一下常常赶在它前面**。调用方据此决定要不要再拉一次，
+    ///   见 `PaneStatusPresenter`。
+    @discardableResult
+    func refreshSessionTitle(records: [AgentSession]) -> Bool {
         let sessionTitle = displayedSessionKey.flatMap { key in
             records.first { $0.key == key }?.title.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let title = sessionTitle.flatMap { $0.isEmpty ? nil : $0 } ?? terminalName
+        let resolved = sessionTitle.flatMap { $0.isEmpty ? nil : $0 }
+        let title = resolved ?? terminalName
         let agent = displayedSessionKey?.agent
-        guard header.title != title || header.sessionAgent != agent else { return }
+        guard header.title != title || header.sessionAgent != agent else { return resolved != nil }
         header.sessionAgent = agent
         header.title = title
         refreshIdentityPanel()
         onMetadataChange?(self)
         NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        return resolved != nil
     }
 
     /// Establish identity atomically, before installing the pane in a window.
