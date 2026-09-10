@@ -281,7 +281,12 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        ShellTableRowView()
+        let view = ShellTableRowView()
+        // 这里的选中是键盘光标，不是状态：`tableViewSelectionDidChange` 是空的，
+        // 它只记录上下键/点击停在哪儿，回车拿它开气泡。失焦还留着就会被当成
+        // 「这个任务怎么了」——而真正的状态信号是行上那个绿点。
+        view.showsSelectionOnlyWhenFocused = true
+        return view
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {

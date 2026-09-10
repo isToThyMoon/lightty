@@ -523,8 +523,29 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
         needsDisplay = true
     }
 
+    /// 选中态只在这张表持有焦点时画。
+    ///
+    /// 两个侧栏的选中不是一回事，所以这是个开关而不是统一行为：
+    ///
+    /// - **Sessions** 的选中是**派生的**——它跟着当前聚焦终端里那段会话走
+    ///   （`syncTerminalSelection`）。那是应用状态，侧栏没焦点时也该看得见，
+    ///   因为它回答的正是「我现在这个标签页里跑的是哪一段」。
+    /// - **Handoff** 的选中只是**键盘光标**：`tableViewSelectionDidChange` 是空的，
+    ///   它不反映任何状态，只记录上一次点/上下键停在哪儿，回车拿它开气泡。
+    ///   失焦之后还留着，就成了一个看起来像状态、其实什么都不代表的高亮——
+    ///   而 Handoff 模式真正的状态信号（绿点、「活跃」）在旁边，两个互相打架。
+    var showsSelectionOnlyWhenFocused = false
+
+    /// 这一帧到底画不画选中。`isEmphasized` 由 AppKit 维护：表是 key window 里的
+    /// first responder 时为真。hover 也要看它——不画选中的时候，选中行照样该有
+    /// 悬停反馈，否则鼠标划过去那一行是死的。
+    private var drawsSelection: Bool {
+        guard selectionHighlightStyle != .none, isSelected else { return false }
+        return !showsSelectionOnlyWhenFocused || isEmphasized
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isHovered, !isSelected else { return }
+        guard isHovered, !drawsSelection else { return }
         ShellStyle.hoverFill.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: 2, dy: 2),
@@ -533,12 +554,21 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        guard selectionHighlightStyle != .none else { return }
+        guard drawsSelection else { return }
         ShellStyle.selectionFill.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: 2, dy: 2),
             xRadius: ShellStyle.rowCornerRadius,
             yRadius: ShellStyle.rowCornerRadius).fill()
+    }
+
+    /// AppKit 换了 `isEmphasized` 不一定重画这一行——焦点从侧栏移走时，
+    /// 那一行会保持旧样子直到别的原因触发重绘。
+    override var isEmphasized: Bool {
+        didSet {
+            guard showsSelectionOnlyWhenFocused, isEmphasized != oldValue else { return }
+            needsDisplay = true
+        }
     }
 }
 
