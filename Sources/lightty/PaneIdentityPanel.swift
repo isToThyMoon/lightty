@@ -551,6 +551,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 checked: false, role: .action, foreground: foreground,
                 enabled: blockedReason == nil)
             row.identifier = Self.handoffRowIdentifier
+            row.restsFilled = true
             row.translatesAutoresizingMaskIntoConstraints = false
             handoffSlot.addSubview(row)
             NSLayoutConstraint.activate([
@@ -1021,10 +1022,28 @@ private final class TaskRowView: NSView {
 
     /// 禁用行即便被标成高亮也不上底色：上了色它就跟可点的行长得一样，
     /// 而按下去什么都不会发生。这条与上面那句「不高亮」的注释配套。
+    /// 常驻浅底：列表里的行不需要它——上下文本身就说明那是一排可选项；单独站在
+    /// 第一层的那一行需要，否则只是一串带颜色的文字，用户不会把鼠标移上去试。
+    /// 与任务行（`TaskFieldRow`）同一套数值：静止 0.06、指上去 0.11、圆角 6。
+    var restsFilled = false {
+        didSet {
+            layer?.cornerRadius = restsFilled ? 6 : 0
+            applyFill()
+        }
+    }
+
     private func applyFill() {
-        layer?.backgroundColor = highlighted && enabled
-            ? rowForeground.withAlphaComponent(0.1).cgColor
-            : NSColor.clear.cgColor
+        let alpha: CGFloat
+        switch (highlighted && enabled, restsFilled, enabled) {
+        case (true, _, _): alpha = restsFilled ? 0.11 : 0.1
+        case (false, true, true): alpha = 0.06
+        // 点不动时底色也要压下去：留着满格的浅底，它看着仍然像能点。
+        case (false, true, false): alpha = 0.03
+        default: alpha = 0
+        }
+        layer?.backgroundColor = alpha == 0
+            ? NSColor.clear.cgColor
+            : rowForeground.withAlphaComponent(alpha).cgColor
     }
 
     override func updateTrackingAreas() {
@@ -1039,7 +1058,20 @@ private final class TaskRowView: NSView {
     }
 
     // 点不动的行照样吃掉 mouseDown：让它穿到底下去会关掉面板，看着像"点了没反应"。
-    override func mouseEntered(with event: NSEvent) { guard enabled else { return }; onHover?() }
+    //
+    // 高亮的归属分两种：列表里的行由面板统一管（移到哪一行、上下键走到哪一行），
+    // 所以这里只发 `onHover`；常驻浅底的那一行不在列表里，没人接它的 `onHover`，
+    // 得自己管进出。
+    override func mouseEntered(with event: NSEvent) {
+        guard enabled else { return }
+        if restsFilled { highlighted = true }
+        onHover?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if restsFilled { highlighted = false }
+    }
+
     override func mouseDown(with event: NSEvent) { guard enabled else { return }; onTap?() }
 }
 
