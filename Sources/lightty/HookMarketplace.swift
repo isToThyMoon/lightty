@@ -2,10 +2,11 @@ import CryptoKit
 import Foundation
 import LighttyCore
 
-/// lightty 自带的插件 marketplace —— 我们的 hook 定义住在**我们自己的文件里**。
+/// lightty 自带的插件 marketplace —— 我们的 hook 定义与 handoff 技能住在
+/// **我们自己的文件里**。
 ///
-/// 两家 agent 都支持「插件自带 hooks」，且元数据位置不冲突（实测见
-/// docs/specs/pane-status.md §2.1.1），所以一棵目录树同时服务两家：
+/// 两家 agent 都支持「插件自带 hooks」与「插件自带 skills」，且元数据位置不冲突
+/// （实测见 docs/specs/pane-status.md §2.1.1），所以一棵目录树同时服务两家：
 ///
 /// ```
 /// ~/.lightty/marketplace/
@@ -16,7 +17,13 @@ import LighttyCore
 ///     .codex-plugin/plugin.json            ← Codex 读这份（清单里声明 "hooks": "./hooks.json"）
 ///     hooks/hooks.json                     ← Claude Code 从这里读 hook 定义
 ///     hooks.json                           ← Codex 从这里读（由它的清单指定）
+///     skills/handoff/SKILL.md              ← **两家共用一份**，各自清单里都声明 "skills": "./skills/"
 /// ```
+///
+/// 技能只有一份而 hooks 有两份，是因为两家对 hooks 的读法不同（目录约定 vs
+/// 清单指路，且事件表也不一样），而 SKILL.md 的格式与目录布局两家完全一致。
+/// 调用写法两家不同（`/插件名:技能名` vs `$插件名:技能名`），但那是**敲进终端**
+/// 时的事，与这棵树无关，见 `HandoffProtocol.skillInvocation`。
 ///
 /// **整棵树在运行时生成，不作为 bundle 资源随包发布**：`hooks.json` 里写的是
 /// `~/.lightty/bin/lightty-hook` 的绝对路径，每次启动重新生成，"app 被挪过"
@@ -93,6 +100,10 @@ enum HookMarketplace {
         return Generation(root: root, command: command, rewritten: rewritten)
     }
 
+    /// 插件里那份 `SKILL.md` 的字节。两家共用一份，正文见 `HandoffProtocol`。
+    /// 与 `hooksDocument` 同一套命名：这一层说的是"写进树里的那份文档"。
+    static let skillDocument = Data(HandoffProtocol.skillDocument.utf8)
+
     /// 纯函数：不碰磁盘就能算出该 agent 当前内容对应的版本串。
     /// `report(for:)` 靠它判断"已装的是不是当前版本"，不必为了看一眼而生成整棵树。
     ///
@@ -100,16 +111,64 @@ enum HookMarketplace {
     /// 「改了 Claude Code 的事件表」把 Codex 的版本也顶掉，用户那一行凭空冒出
     /// 一句"有更新"，点下去装的还是同样的东西。
     static func version(for agent: HookAgent, command: String) -> String {
-        // 只喂这一家自己的 hooks 内容：清单里除了版本串本身没有别的会变的东西，
-        // 把版本喂给算版本的哈希会自我循环。
-        version(hooks: hooksDocument(for: agent, command: command))
+        version(hooks: hooksDocument(for: agent, command: command),
+                manifests: manifestBytes(for: agent))
     }
 
-    /// 版本完全由**一份** hooks 文档决定，别的什么都不看——
-    /// 「改一家的事件表不会动另一家的版本」这条性质就落在这个签名上。
-    static func version(hooks document: Data) -> String {
+    /// 这一家的两份清单里**除版本串以外**的全部内容，喂哈希用。
+    ///
+    /// 为什么要喂：清单不是不变的。`skills`、`hooks` 指向哪儿、description、Codex 那份
+    /// 的 `interface` 与 `policy`——改任何一个都改变了"装进去的是什么"，而两家 CLI
+    /// 只按版本串决定要不要重新拷贝。清单不进哈希的话，只改清单就是版本纹丝不动、
+    /// 用户 cache 里还是旧的，**症状同样是静默的**——和技能不进哈希是同一类 bug。
+    ///
+    /// 为什么去掉 `version`：版本串本身是这个哈希的结果，喂进去就自我循环了。
+    ///
+    /// 为什么 marketplace 清单也算数：安装那两条命令每次都先跑
+    /// `plugin marketplace add <root>`（见 `HookAgent.installCommands`），所以版本一跳、
+    /// 用户点了更新，marketplace 快照跟着刷新。它不是白喂的。
+    ///
+    /// 按家各喂各的，跨家独立性照旧：改 Codex 清单不会顶掉 Claude Code 的版本。
+    static func manifestBytes(for agent: HookAgent) -> Data {
+        var bytes = marketplaceManifest(for: agent)
+        bytes.append(serialize(pluginManifestBody(for: agent)))
+        return bytes
+    }
+
+    /// 版本由**该家的 hooks 文档 + 那份 SKILL.md + 该家两份清单**共同决定。
+    /// 这三样就是"装进 CLI 缓存里的全部东西"，少喂一样，改它就不会触发重装。
+    ///
+    /// 为什么必须都进：两家 CLI 在安装时把插件**拷贝**进自己的 cache，只有版本串
+    /// 变了才会重新拷贝。任何一样没进哈希，改它都是"版本纹丝不动、用户 cache 里
+    /// 还是旧的"，而且**没有任何症状**——用户以为改生效了。
+    ///
+    /// 三条性质由这个签名撑着，缺一不可：
+    ///
+    /// - **改一家的事件表不动另一家**：hooks 按家分开喂
+    /// - **改一家的清单不动另一家**：清单同样按家分开喂
+    /// - **改技能两家一起动**：技能是共用的一份，两个版本同时变——这是对的，
+    ///   两家都得重新拷贝才能拿到新技能
+    ///
+    /// **这次改动会让所有既有用户的版本串跳一次**，两家各提示一次 Update。这是
+    /// 必需的代价：技能是后加的，不重装就进不了 CLI 的 cache，用户点"更新交接
+    /// 文档"只会静默失败。看到"升级后两家都弹更新"**不是回归**，不要靠把技能或
+    /// 清单从哈希里拿掉来"修"它——那正好退回上面那个没有症状的 bug。
+    ///
+    /// 三段之间插分隔符：三份字节直接首尾相接的话，"某个字节从 hooks 挪到清单"
+    /// 理论上能撞出同一个哈希。实际撞不上（一边是 JSON 一边是 Markdown），
+    /// 但分隔符不要钱。
+    ///
+    /// - Parameters:
+    ///   - skill: 只为测试留的开口——生产路径永远用默认值那一份。
+    ///   - manifests: **不给默认值**。给了的话，别处就能算出一个"看起来像生产版本、
+    ///     其实少喂了清单"的串，而这正是这次要堵的洞。
+    static func version(hooks document: Data, skill: Data = skillDocument,
+                        manifests: Data) -> String {
         var hasher = SHA256()
-        hasher.update(data: document)
+        for segment in [document, skill, manifests] {
+            hasher.update(data: segment)
+            hasher.update(data: Data([0x00]))
+        }
         let digest = hasher.finalize().prefix(4).map { String(format: "%02x", $0) }.joined()
         // `+build` 是 semver 的 build metadata 段，`claude plugin validate` 零警告通过，
         // 且实测 `claude plugin update` 会把它当成"版本变了"而重新拷贝。
@@ -126,15 +185,19 @@ enum HookMarketplace {
             // 两份清单同处一个插件目录，但各自带各自的版本号——它们本来就是
             // 两家分开读的文件，谁也看不见对方那份
             ("plugins/\(pluginName)/.claude-plugin/plugin.json",
-             claudePluginManifest(version: version(for: .claudeCode, command: command))),
+             pluginManifest(for: .claudeCode, version: version(for: .claudeCode, command: command))),
             ("plugins/\(pluginName)/.codex-plugin/plugin.json",
-             codexPluginManifest(version: version(for: .codex, command: command))),
+             pluginManifest(for: .codex, version: version(for: .codex, command: command))),
             // 两家读的是**不同的文件**，所以各给各的事件表：把 Codex 的
             // `PermissionRequest` 塞给 Claude Code（反之亦然）只是噪音。
             ("plugins/\(pluginName)/hooks/hooks.json",
              hooksDocument(for: .claudeCode, command: command)),
             ("plugins/\(pluginName)/hooks.json",
              hooksDocument(for: .codex, command: command)),
+            // 技能反过来只有一份：SKILL.md 的格式与 skills/<名>/SKILL.md 的布局
+            // 两家一致，两份清单指的是同一个目录。
+            ("plugins/\(pluginName)/skills/\(HandoffProtocol.skillName)/SKILL.md",
+             skillDocument),
         ]
     }
 
@@ -155,11 +218,52 @@ enum HookMarketplace {
         return serialize(["hooks": document])
     }
 
+    /// 这一家读哪份 marketplace 清单。两家读的是两个不同路径上的两份文件，
+    /// 内容也不同（Codex 那份多 `policy` 与 `category`）。
+    static func marketplaceManifest(for agent: HookAgent) -> Data {
+        switch agent {
+        case .claudeCode: return claudeMarketplaceManifest()
+        case .codex: return codexMarketplaceManifest()
+        }
+    }
+
+    /// 这一家的插件清单**去掉 `version` 之后**的内容。写文件时补上版本，算哈希时不补。
+    static func pluginManifestBody(for agent: HookAgent) -> [String: Any] {
+        switch agent {
+        case .claudeCode:
+            return [
+                "name": pluginName,
+                "description": pluginDescription,
+                "author": ["name": "lightty"],
+                // Claude Code 不写这个键也默认去 skills/ 找；显式写出来是为了跟
+                // Codex 那份对齐，也免得默认约定哪天变了我们才发现
+                "skills": "./skills/",
+            ]
+        case .codex:
+            return [
+                "name": pluginName,
+                "description": pluginDescription,
+                // Codex 不看 hooks/ 目录约定，要在清单里明说去哪儿读
+                "hooks": "./hooks.json",
+                "skills": "./skills/",
+                "interface": ["displayName": "lightty", "shortDescription": "Pane status"],
+            ]
+        }
+    }
+
+    /// 写进树里的那份插件清单：内容 + 版本。键序由 `serialize` 的 `sortedKeys` 决定，
+    /// 所以"先建字典再塞版本"和原来直接写出来是同样的字节。
+    private static func pluginManifest(for agent: HookAgent, version: String) -> Data {
+        var body = pluginManifestBody(for: agent)
+        body["version"] = version
+        return serialize(body)
+    }
+
     private static func claudeMarketplaceManifest() -> Data {
         serialize([
             "name": marketplaceName,
             "owner": ["name": "lightty"],
-            "description": "lightty agent status hooks",
+            "description": "lightty agent status hooks and the handoff skill",
             "plugins": [["name": pluginName, "source": "./plugins/\(pluginName)"]],
         ])
     }
@@ -178,25 +282,10 @@ enum HookMarketplace {
         ])
     }
 
-    private static func claudePluginManifest(version: String) -> Data {
-        serialize([
-            "name": pluginName,
-            "version": version,
-            "description": "Reports agent lifecycle to lightty.",
-            "author": ["name": "lightty"],
-        ])
-    }
-
-    private static func codexPluginManifest(version: String) -> Data {
-        serialize([
-            "name": pluginName,
-            "version": version,
-            "description": "Reports agent lifecycle to lightty.",
-            // Codex 不看 hooks/ 目录约定，要在清单里明说去哪儿读
-            "hooks": "./hooks.json",
-            "interface": ["displayName": "lightty", "shortDescription": "Pane status"],
-        ])
-    }
+    /// 两份清单共用：插件现在装的是两样东西，只说 hooks 会让用户在
+    /// `claude plugin list` 里看不出技能是哪儿来的。
+    private static let pluginDescription =
+        "Reports agent lifecycle to lightty, and provides the handoff skill."
 
     /// `sortedKeys` 不是审美：字节要能逐次复现，否则每次启动都"内容变了"。
     /// `withoutEscapingSlashes` 让用户打开文件看到的是真实路径而不是 `\/Users\/…`。
