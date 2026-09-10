@@ -125,6 +125,42 @@ final class PaneView: NSView {
         return true
     }
 
+    /// 让 pane 里的 agent 按交接协议重写绑定任务的正文。
+    ///
+    /// 跟 `renameSession(to:)` 是同一条路：替用户按键盘——先粘一行/一段，再单独
+    /// 按一次回车提交。挡得住「agent 正在跑」（`acceptsInjectedCommand`），
+    /// 挡不住「这个 pane 前台是别的程序」。
+    ///
+    /// **这一支的「前台不是 agent」比 `rename` 那支后果大一档，别照抄那边的说法。**
+    /// `rename` 发的是一行，前台是 shell 时最多冒一句 command not found。没装插件
+    /// 那一支发的是十几行（`HandoffProtocol.directInstruction`），逐行都会被 shell
+    /// 当命令执行，其中一行还含反引号——shell 里那是命令替换，会去执行任务文件
+    /// 那个路径。实际后果有限（`.md` 不可执行），但值得知道边界在哪。
+    ///
+    /// 正常路径上没有注入风险：core 的粘贴编码无条件 strip 掉 0x1B
+    /// （见 `TerminalSurfaceView.sendText` 指向的 `input/paste.zig`），路径里就算
+    /// 有 ESC 也拼不出粘贴终止符；`TaskFileName.sanitize` 又把空白折叠掉，
+    /// lightty 自己建的文件名不含换行。
+    ///
+    /// 插件装没装在这里查，不在建行的时候查：`HookInstaller.report(for:)` 要扫
+    /// PATH、读两个配置文件，而列表每敲一个字就重建一次行。放在点击这一下，
+    /// 一次用户动作读几个文件无所谓，也不必为此维护一份会过期的缓存。
+    @discardableResult
+    func updateHandoff() -> Bool {
+        guard let fileURL = taskFileURL,
+              let agent = displayedSessionKey?.agent,
+              acceptsInjectedCommand else { return false }
+        // 装了但"装的是旧内容"同样调不起技能——技能是后加的，旧缓存里没有它。
+        // 判断在 `HookInstaller.handoffSkillAvailable` 里，那儿测得到。
+        let installed = HookInstaller.handoffSkillAvailable(for: agent)
+        guard let input = AgentCommand.handoff(
+            agent: agent, path: fileURL.path, skillInstalled: installed).shellInput
+        else { return false }
+        terminal.sendText(input)
+        terminal.sendReturn()
+        return true
+    }
+
     func reconcileSessionProcess() { statusStore.reconcileProcess(for: dragIdentifier) }
     var sessionProcessIdentity: AgentProcessIdentity? {
         guard displayedSessionKey != nil else { return nil }
@@ -481,6 +517,19 @@ final class PaneView: NSView {
             }
         }
         panel.onUnbindTask = { [weak self] in self?.unbind() }
+        // 送没送出去要如实回给面板：pane 没了当没送出去，面板会重建那一行而不是关掉列表。
+        panel.onUpdateHandoff = { [weak self] in self?.updateHandoff() ?? false }
+        panel.handoffActionProvider = { [weak self] in
+            // 认不出这个 pane 里跑的是哪家 agent 就不给这一行：两家的技能调用
+            // 写法不同，猜错是静默失败——什么都不会发生，用户还以为点过了。
+            guard let self, self.taskFileURL != nil,
+                  self.displayedSessionKey != nil else { return nil }
+            return self.acceptsInjectedCommand
+                ? .ready
+                // 只说「正忙」：这一行的标题里已经有「Agent」了，右侧再说一遍是重复，
+                // 而且那点宽度正是标题需要的（面板只有 272 宽）。
+                : .blocked(reason: L("Busy"))
+        }
         panel.onTaskRenameCommit = { [weak self] name in
             guard let self, case .bound(let url) = self.binding else { return }
             do {

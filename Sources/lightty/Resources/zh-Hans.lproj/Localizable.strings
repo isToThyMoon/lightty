@@ -361,3 +361,22 @@
 "Enter a task name." = "请输入任务名称。";
 "Choose an existing folder." = "请选择有效的文件夹。";
 "Set as default directory on launch" = "启动后设为默认目录";
+
+/* Handoff 设置页与 handoff 文档更新按钮 */
+"Handoff" = "Handoff";
+"This is what lightty says to the Agent when a terminal has a task bound. It is fixed in this version." = "终端绑定了任务时，lightty 替你对 Agent 说的话。这一版固定，不可改。";
+"Injected at session start" = "会话开场时注入";
+"Sent once when a session starts in a terminal that already has a task bound." = "终端已绑定任务时，会话一开场发一次。";
+"Injected when a task is bound later" = "中途绑定任务时注入";
+"Skill" = "技能";
+"When lightty injects" = "什么时候会注入";
+"Session start: injected whenever the terminal has a task bound." = "会话开场：只要终端绑了任务就注入。";
+"Later binding or rename: injected again only when the session or the file path changed." = "中途绑定或改名：只有会话或文件路径变了才重新注入。";
+"Have the Agent summarize it" = "让 Agent 总结并更新 handoff";
+"Busy" = "正忙";
+"Sent with the next message after a task is bound, rebound, or renamed." = "绑定、改绑或改名之后，随你的下一句话一起发。";
+"Typing the invocation runs it; the Agent can also reach it when you ask in your own words. Append what the next session should focus on to tailor the document to it." = "在终端里输入上面的写法即可运行；你用自己的话提出要求时，Agent 也能自己调起它。想让文档偏向某个方向，在写法后面接一句下一段会话要做什么即可。";
+"%@ cannot run it yet. Install or update the lightty plugin under General, Agent status hooks, Manage…." = "%@ 目前还调不起它。到「通用 → Agent 状态钩子 → 管理…」里安装或更新 lightty 插件。";
+"Typed in when the plugin is not installed" = "插件没装时敲进终端的内容";
+"The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "按钮会退回到这一段。它自带全部约定，所以不依赖插件，也不依赖开场注入的那段文字。";
+"Unbinding: nothing is injected, and the next binding starts fresh." = "解除绑定：不再注入；下次绑定重新开始。";

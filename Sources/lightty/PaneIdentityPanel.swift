@@ -6,6 +6,7 @@ import LighttyCore
 ///   [●] pane 名（无框编辑，回车提交；与 header 胶囊逐像素同构，不能加任何前缀）
 ///   ─────────────────────────
 ///   任务  <当前任务 / 未选择>              ⌄   （点击 → 岛体向下长出选择列表）
+///   让 Agent 总结并更新 handoff                （绑了任务且认得出 agent 时才有）
 ///   （列表态）搜索输入 + 过滤列表：回车执行高亮行；无匹配回车 = 以输入文本
 ///   新建任务并绑定。列表底部是当前任务的两个操作：重命名、解除绑定。
 ///
@@ -15,12 +16,18 @@ import LighttyCore
 final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 基础两行的高度；列表展开时岛体高度 = base + 列表实高。
     static let baseHeight: CGFloat = 62
+    /// 「让 Agent 总结」那一行占的高度（间距 6 + 行高 24）。这一行是**条件出现**的，
+    /// 所以它不能并进 `baseHeight`——没有它的时候岛体不该凭空多出一块空白。
+    static let handoffRowSpace: CGFloat = 30
     static let panelWidth: CGFloat = 272
     /// 任务行的标识，供测试定位。
     static let taskFieldIdentifier = NSUserInterfaceItemIdentifier("paneIdentity.taskField")
+    /// 「让 Agent 总结」那一行的标识，供测试定位。
+    static let handoffRowIdentifier = NSUserInterfaceItemIdentifier("paneIdentity.handoffRow")
     /// 面板常驻 frame 高度上限（岛体在其中生长，面板本身永不动画）：
-    /// 搜索行 34 + 七行候选 + 底栏（分隔线与两个操作）+ 留白。
-    static let maxHeight: CGFloat = baseHeight + 34 + 7 * 26 + 5 + 2 * 26 + 8
+    /// 固定两行 + 可选的总结行 + 搜索行 34 + 七行候选 + 底栏（分隔线与两个操作）+ 留白。
+    static let maxHeight: CGFloat =
+        baseHeight + handoffRowSpace + 34 + 7 * 26 + 5 + 2 * 26 + 8
 
     struct TaskChoice {
         let name: String
@@ -34,11 +41,33 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     var onCreateTask: ((String) -> Void)?
     var onUnbindTask: (() -> Void)?
     var onTaskRenameCommit: ((String) -> Void)?
+    /// 让 pane 里的 agent 按交接协议重写这份任务的正文。
+    ///
+    /// 返回值是**真的送出去了没有**。送不出去的情形是真实存在的：面板开着的时候
+    /// agent 转忙，而那一行的状态只在 `rebuildRows` 里算过一次（见
+    /// `handoffActionProvider`），此刻还写着可点。这时候必须让调用方知道，否则
+    /// 列表照关，用户看到的就是"点了，好像做了"。
+    var onUpdateHandoff: (() -> Bool)?
     var onDismiss: (() -> Void)?
     /// 岛体期望高度变化（列表开合）：PaneView 负责动画 island frame。
     var onIslandHeightChange: ((CGFloat) -> Void)?
     /// 任务数据源（每次打开列表时拉取）。
     var taskProvider: (() -> [TaskChoice])?
+
+    /// 「更新交接文档」这一行现在能不能点。
+    ///
+    /// 返回 `nil` = 这一行根本不出现。用在"这个 pane 里没有我们认得的 agent"——
+    /// 不知道是 claude 还是 codex 就不知道该敲什么写法，摆一行点不动的出来只是噪音。
+    /// `blocked` 则是"能做，只是现在不行"，那种要显示出来并给出理由。
+    enum HandoffAction: Equatable { case ready, blocked(reason: String) }
+    /// 每次重建行时问一次。刻意不缓存：这个判断只读内存里的绑定与活动状态，很便宜，
+    /// 存一份没有收益。
+    ///
+    /// **但"不缓存"并不等于这一行跟得上。** 重建只由 `applyFilter`（打开列表、每敲
+    /// 一个字）触发，面板不监听 `.lighttyPaneStatusDidChange`；面板开着时 agent 转忙，
+    /// 这一行仍然写着可点。真正的守卫在发送前（`PaneView.updateHandoff` 会重新验一遍），
+    /// 送不出去时 `onUpdateHandoff` 返回 false，那一支会当场重建让它变灰。
+    var handoffActionProvider: (() -> HandoffAction?)?
 
     /// 岛体背景层：frame 由 PaneView 驱动；第一行身份内容与背景 frame 解耦，
     /// 展开时状态点和标题保持原位。
@@ -63,6 +92,17 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let separator = NSView()
     private let taskField = TaskFieldRow()
     private let taskEditor = NSTextField()
+    /// 「让 Agent 总结并更新 handoff」——第一层，任务行正下方。
+    ///
+    /// 原先它在任务列表底部，路径是「点胶囊 → 点任务行展开列表 → 才看得见」。
+    /// 这是任务进行中反复要做的动作，两次点击太深；改名和解绑是管归属的事，
+    /// 偶尔做一次，留在列表底部正合适。
+    private var handoffRow: TaskRowView?
+    /// 上一次这一行在不在。只用来判断「要不要通知岛体改高度」，见 `refreshHandoffRow`。
+    private var handoffRowWasShown = false
+    private let handoffSlot = NSView()
+    private var handoffSlotHeight: NSLayoutConstraint!
+    private var fixedContentHeight: NSLayoutConstraint!
 
     // —— 内联任务选择器
     private let listContainer = NSView()
@@ -106,7 +146,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     var titleOffsetFromDot: CGFloat { nameField.frame.minX - dotView.frame.maxX }
 
     var currentIslandHeight: CGFloat {
-        listOpen ? Self.baseHeight + listHeight : Self.baseHeight
+        let base = Self.baseHeight + (handoffRow == nil ? 0 : Self.handoffRowSpace)
+        return listOpen ? base + listHeight : base
     }
 
     private var listHeight: CGFloat {
@@ -215,7 +256,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
         agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
         agentIconGap = nameField.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
-        for v in [separator, taskField, taskEditor] {
+        for v in [separator, taskField, taskEditor, handoffSlot] {
             v.translatesAutoresizingMaskIntoConstraints = false
             extras.addSubview(v)
         }
@@ -239,11 +280,16 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         let fixedContentLeadingConstraint = fixedContent.leadingAnchor.constraint(
             equalTo: contentHost.leadingAnchor)
         self.fixedContentLeadingConstraint = fixedContentLeadingConstraint
+        // 固定区高度可变：多出来的那一截正是「让 Agent 总结」那一行。没有它时
+        // 常数回到 `baseHeight`，岛体和以前一模一样高。
+        fixedContentHeight = fixedContent.heightAnchor.constraint(
+            equalToConstant: Self.baseHeight)
+        handoffSlotHeight = handoffSlot.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: contentHost.topAnchor),
             fixedContentLeadingConstraint,
             fixedContent.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
-            fixedContent.heightAnchor.constraint(equalToConstant: Self.baseHeight),
+            fixedContentHeight,
 
             dotView.leadingAnchor.constraint(
                 equalTo: fixedContent.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
@@ -283,6 +329,14 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             taskEditor.leadingAnchor.constraint(equalTo: taskField.valueLeadingAnchor),
             taskEditor.trailingAnchor.constraint(equalTo: taskField.trailingAnchor, constant: -10),
             taskEditor.centerYAnchor.constraint(equalTo: taskField.centerYAnchor),
+
+            // 总结行的槽位：与任务行同一套左右缩进，紧跟其下 6pt。刻意不钉底边——
+            // 固定区的高度由 `fixedContentHeight` 说了算，槽位空着时高度收成 0，
+            // 不会从下面把 extras 顶开。
+            handoffSlot.leadingAnchor.constraint(equalTo: extras.leadingAnchor, constant: 8),
+            handoffSlot.trailingAnchor.constraint(equalTo: extras.trailingAnchor, constant: -8),
+            handoffSlot.topAnchor.constraint(equalTo: taskField.bottomAnchor, constant: 6),
+            handoffSlotHeight,
 
             // —— 列表区：紧接 base 区之下（岛体没长到时 isHidden 遮蔽）
             listContainer.topAnchor.constraint(equalTo: fixedContent.bottomAnchor),
@@ -404,6 +458,9 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     func applyStatusDot(_ color: NSColor?) {
         guard statusDotColor != color else { return }
         statusDotColor = color
+        // 状态色变了，「能不能让 Agent 总结」多半也变了（thinking / tool 时不能）。
+        // 重建走 `applyColors` 收口。这条推送是 header 在状态变化时直接打进来的，
+        // 所以第一层这一行跟得上——它原先待的那个列表没有这条通路，只能等下次重建。
         applyColors()
     }
 
@@ -462,6 +519,79 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             ])
         taskField.apply(taskName: boundTaskName, isOpen: listOpen, foreground: foreground)
         taskField.isHidden = !taskEditor.isHidden
+        // 放在最后：`foreground` 是这个函数定下来的，在它之前建行会拿到上一轮的颜色。
+        // 明暗切换、主题切换、状态变化全都经过这里，这一行的颜色也就跟着对。
+        refreshHandoffRow()
+    }
+
+    // MARK: - 让 Agent 总结
+
+    /// 重建「让 Agent 总结并更新 handoff」那一行。
+    ///
+    /// `handoffActionProvider` 返回 nil = 这一行整个不出现（认不出这个 pane 里跑的是
+    /// 哪家 agent，见该属性的注释）。出现时把固定区撑高一截，岛体跟着长。
+    ///
+    /// 每次重建而不是复用一个实例：`TaskRowView` 的文字颜色、禁用态都在 init 里定死，
+    /// 改状态就得重建，这跟列表里那些行是同一套做法。
+    private func refreshHandoffRow() {
+        // `applyColors` 会经由 `viewDidChangeEffectiveAppearance` 在很早的时刻被调到，
+        // 而这两条约束是在布局那一段才建的。没建好就什么都不做——隐式解包的约束
+        // 在这里取 `constant` 会直接崩。
+        guard handoffSlotHeight != nil, fixedContentHeight != nil else { return }
+        handoffRow?.removeFromSuperview()
+        handoffRow = nil
+
+        if boundTaskName != nil, let availability = handoffActionProvider?() {
+            let blockedReason: String? = {
+                guard case .blocked(let reason) = availability else { return nil }
+                return reason
+            }()
+            let row = TaskRowView(
+                title: L("Have the Agent summarize it"), detail: blockedReason,
+                checked: false, role: .action, foreground: foreground,
+                enabled: blockedReason == nil)
+            row.identifier = Self.handoffRowIdentifier
+            row.translatesAutoresizingMaskIntoConstraints = false
+            handoffSlot.addSubview(row)
+            NSLayoutConstraint.activate([
+                row.leadingAnchor.constraint(equalTo: handoffSlot.leadingAnchor),
+                row.trailingAnchor.constraint(equalTo: handoffSlot.trailingAnchor),
+                row.topAnchor.constraint(equalTo: handoffSlot.topAnchor),
+                row.bottomAnchor.constraint(equalTo: handoffSlot.bottomAnchor),
+            ])
+            // 点不动时不登记动作：`TaskRowView` 自己已经吃掉了 mouseDown，这里再挂
+            // 一个空闭包只是多一条要维护的路。这一行不在 `rowViews` 里，够不着
+            // 列表那条按下标调用的键盘路径。
+            if blockedReason == nil {
+                row.onTap = { [weak self] in
+                    guard let self else { return }
+                    // 送不出去就别关面板。这一行的可点状态是上一次重建时算的，
+                    // 面板开着的这段时间 agent 可能已经转忙；关掉面板等于告诉
+                    // 用户"做了"。重建一次让它当场变灰，用户看得见为什么。
+                    guard self.onUpdateHandoff?() == true else {
+                        self.refreshHandoffRow()
+                        return
+                    }
+                    self.onDismiss?()
+                }
+            }
+            handoffRow = row
+        }
+
+        let shown = handoffRow != nil
+        handoffSlot.isHidden = !shown
+        handoffSlotHeight.constant = shown ? 24 : 0
+        fixedContentHeight.constant =
+            Self.baseHeight + (shown ? Self.handoffRowSpace : 0)
+        needsLayout = true
+        window?.invalidateCursorRects(for: self)
+        // 出现/消失会改变岛体该有的高度，得让 PaneView 把岛重新长到位，否则新行
+        // 被裁在岛外面。只在真的变了时才通知：`applyColors` 调得很勤（明暗切换、
+        // 每次状态推送），每次都喊一嗓子会在形变过程中和动画抢方向盘。
+        if shown != handoffRowWasShown {
+            handoffRowWasShown = shown
+            onIslandHeightChange?(currentIslandHeight)
+        }
     }
 
     // MARK: - 内联任务选择器
@@ -562,6 +692,9 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         // 已绑定：底部放当前任务的两个操作。改名原本挂在任务行右边一支 20×20、
         // 半透明的铅笔上，没人找得到；挪到这里和解绑并排——用户点开列表本来就是
         // 在管任务归属，两个同类操作放在一处。
+        //
+        // 「让 Agent 总结」不在这儿：它是任务进行中反复要做的动作，藏在列表里要点
+        // 两次才够得着，已经提到第一层了（见 `refreshHandoffRow`）。
         if boundTaskName != nil {
             add(TaskRowView(
                 title: L("Rename this task…"), detail: nil, checked: false,
@@ -589,7 +722,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             onIslandHeightChange?(currentIslandHeight)
         }
         layoutSubtreeIfNeeded()
-        setHighlight(0, scroll: true)
+        setHighlight(firstEnabledRow(), scroll: true)
         window?.invalidateCursorRects(for: self)
     }
 
@@ -651,6 +784,27 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private func hoverHighlight(_ index: Int) {
         guard !isScrolling else { return }
         setHighlight(index)
+    }
+
+    /// 从 `index` 出发按 `step` 找下一个点得动的行；找不到就留在原地（到头了）。
+    ///
+    /// 上下键必须跳过禁用行：停在上面它会亮起来、看着能按，按下去却什么都不发生，
+    /// 列表连关都不关。鼠标那条路早就挡住了（`TaskRowView.mouseEntered`），键盘这条
+    /// 一直漏着。
+    private func nextEnabledRow(from index: Int, step: Int) -> Int {
+        var candidate = index + step
+        while rowViews.indices.contains(candidate) {
+            if rowViews[candidate].enabled { return candidate }
+            candidate += step
+        }
+        return index
+    }
+
+    /// 重建之后落脚的第一行。跳过禁用行。列表里现在没有会被禁用的行了（唯一那条
+    /// 已经提到第一层），但这两个helper 保持按 `enabled` 走：下一条禁用行进来时
+    /// 不必再想起这件事，而代价只是一次 `firstIndex`。
+    private func firstEnabledRow() -> Int {
+        rowViews.firstIndex(where: { $0.enabled }) ?? 0
     }
 
     /// `scroll`：键盘移动或筛选重置高亮时把行滚进视口。鼠标 hover 触发的高亮绝不能滚——
@@ -757,10 +911,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             }
             return true
         case #selector(NSResponder.moveDown(_:)) where control === searchField:
-            setHighlight(min(highlighted + 1, max(rowViews.count - 1, 0)), scroll: true)
+            setHighlight(nextEnabledRow(from: highlighted, step: 1), scroll: true)
             return true
         case #selector(NSResponder.moveUp(_:)) where control === searchField:
-            setHighlight(max(highlighted - 1, 0), scroll: true)
+            setHighlight(nextEnabledRow(from: highlighted, step: -1), scroll: true)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             if control === taskEditor {
@@ -804,11 +958,20 @@ private final class TaskRowView: NSView {
     /// 操作和候选同色时，用户看不出底下那两行不是"又一个任务"。
     enum Role { case choice, action, destructive }
 
+    /// 点不动的行：文字压暗、不给手型光标、不高亮、`onTap` 不触发。
+    /// 只用在「这个操作现在做不了，但值得让用户看见它存在」——理由写在 `detail`
+    /// 里，藏掉整行等于让用户以为功能不存在。现在的唯一用户是第一层那条
+    /// 「让 Agent 总结」（agent 正忙时禁用）。
+    ///
+    /// 面板要读它来跳过键盘高亮（见 `nextEnabledRow`），所以不是 private。
+    let enabled: Bool
+
     init(title: String, detail: String?, checked: Bool, role: Role,
-         foreground: NSColor) {
+         foreground: NSColor, enabled: Bool = true) {
         self.rowForeground = foreground
+        self.enabled = enabled
         super.init(frame: .zero)
-        HoverCursor.installPointingHand(on: self)
+        if enabled { HoverCursor.installPointingHand(on: self) }
         wantsLayer = true
         layer?.cornerRadius = 5
 
@@ -828,6 +991,7 @@ private final class TaskRowView: NSView {
         case .action: label.textColor = ShellStyle.navigationAccent
         case .destructive: label.textColor = .systemRed
         }
+        if !enabled { label.textColor = foreground.withAlphaComponent(0.3) }
 
         let detailLabel = NSTextField(labelWithString: detail ?? "")
         detailLabel.font = .systemFont(ofSize: 9.5)
@@ -855,8 +1019,10 @@ private final class TaskRowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// 禁用行即便被标成高亮也不上底色：上了色它就跟可点的行长得一样，
+    /// 而按下去什么都不会发生。这条与上面那句「不高亮」的注释配套。
     private func applyFill() {
-        layer?.backgroundColor = highlighted
+        layer?.backgroundColor = highlighted && enabled
             ? rowForeground.withAlphaComponent(0.1).cgColor
             : NSColor.clear.cgColor
     }
@@ -872,8 +1038,9 @@ private final class TaskRowView: NSView {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { onHover?() }
-    override func mouseDown(with event: NSEvent) { onTap?() }
+    // 点不动的行照样吃掉 mouseDown：让它穿到底下去会关掉面板，看着像"点了没反应"。
+    override func mouseEntered(with event: NSEvent) { guard enabled else { return }; onHover?() }
+    override func mouseDown(with event: NSEvent) { guard enabled else { return }; onTap?() }
 }
 
 

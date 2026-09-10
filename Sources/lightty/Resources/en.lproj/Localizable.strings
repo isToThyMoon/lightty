@@ -344,3 +344,22 @@
 "Enter a task name." = "Enter a task name.";
 "Choose an existing folder." = "Choose an existing folder.";
 "Set as default directory on launch" = "Set as default directory on launch";
+
+/* Handoff 设置页与交接文档更新按钮 */
+"Handoff" = "Handoff";
+"This is what lightty says to the Agent when a terminal has a task bound. It is fixed in this version." = "This is what lightty says to the Agent when a terminal has a task bound. It is fixed in this version.";
+"Injected at session start" = "Injected at session start";
+"Sent once when a session starts in a terminal that already has a task bound." = "Sent once when a session starts in a terminal that already has a task bound.";
+"Injected when a task is bound later" = "Injected when a task is bound later";
+"Skill" = "Skill";
+"When lightty injects" = "When lightty injects";
+"Session start: injected whenever the terminal has a task bound." = "Session start: injected whenever the terminal has a task bound.";
+"Later binding or rename: injected again only when the session or the file path changed." = "Later binding or rename: injected again only when the session or the file path changed.";
+"Have the Agent summarize it" = "Have the Agent summarize it";
+"Busy" = "Busy";
+"Sent with the next message after a task is bound, rebound, or renamed." = "Sent with the next message after a task is bound, rebound, or renamed.";
+"Typing the invocation runs it; the Agent can also reach it when you ask in your own words. Append what the next session should focus on to tailor the document to it." = "Typing the invocation runs it; the Agent can also reach it when you ask in your own words. Append what the next session should focus on to tailor the document to it.";
+"%@ cannot run it yet. Install or update the lightty plugin under General, Agent status hooks, Manage…." = "%@ cannot run it yet. Install or update the lightty plugin under General, Agent status hooks, Manage….";
+"Typed in when the plugin is not installed" = "Typed in when the plugin is not installed";
+"The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text.";
+"Unbinding: nothing is injected, and the next binding starts fresh." = "Unbinding: nothing is injected, and the next binding starts fresh.";

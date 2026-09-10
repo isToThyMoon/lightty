@@ -222,6 +222,125 @@ final class PaneIdentityPanelTests: XCTestCase {
         }
     }
 
+    /// 行只看「点了没」，不看事件内容——但 `NSEvent()` 是个空壳，构造一个真的更稳。
+    private func click(_ view: NSView) throws {
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        view.mouseDown(with: event)
+    }
+
+    /// 「让 Agent 总结」在第一层——任务行正下方，点一次胶囊就能看到。
+    ///
+    /// 它原先在任务列表底部，够着它要点两次（胶囊 → 任务行）。这是任务进行中反复
+    /// 要做的动作，不该藏在管归属的那一层里。
+    func testSummarizeRowSitsOnTheFirstLevelUnderTheTaskRow() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.handoffActionProvider = { .ready }
+        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: .claude)
+        panel.layoutSubtreeIfNeeded()
+
+        // 没有展开任何列表，这一行就该在。
+        let row = try XCTUnwrap(panel.descendants.first {
+            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
+        }, "第一层就该有这一行，不必先展开任务列表")
+        let taskRow = try XCTUnwrap(panel.descendants.first {
+            $0.identifier == PaneIdentityPanel.taskFieldIdentifier
+        })
+        let rowFrame = panel.convert(row.bounds, from: row)
+        let taskFrame = panel.convert(taskRow.bounds, from: taskRow)
+        XCTAssertLessThan(rowFrame.maxY, taskFrame.minY + 0.5,
+                          "要在任务行下方（面板坐标系 y 向上）")
+
+        let titles = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(titles.contains(L("Have the Agent summarize it")))
+    }
+
+    /// 条件出现：认不出 agent 就没有这一行，而且岛体不该为它留空。
+    func testSummarizeRowCostsNoHeightWhenItIsAbsent() {
+        _ = NSApplication.shared
+        for provider in [nil, { PaneIdentityPanel.HandoffAction.ready }]
+            as [(() -> PaneIdentityPanel.HandoffAction?)?] {
+            let panel = PaneIdentityPanel()
+            panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                                 height: PaneIdentityPanel.maxHeight)
+            panel.handoffActionProvider = provider
+            panel.update(paneName: "Terminal", taskName: "Some task",
+                         dot: .systemGray, agent: .claude)
+            panel.layoutSubtreeIfNeeded()
+
+            let present = panel.descendants.contains {
+                $0.identifier == PaneIdentityPanel.handoffRowIdentifier
+            }
+            XCTAssertEqual(present, provider != nil)
+            XCTAssertEqual(
+                panel.currentIslandHeight,
+                PaneIdentityPanel.baseHeight
+                    + (provider == nil ? 0 : PaneIdentityPanel.handoffRowSpace),
+                "没有这一行时岛体不该凭空多出一块空白")
+        }
+    }
+
+    /// 没绑任务就没有这一行：没有可写回的地址，摆出来只是噪音。
+    func testSummarizeRowNeedsABoundTask() {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.handoffActionProvider = { .ready }
+        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: .claude)
+        panel.layoutSubtreeIfNeeded()
+        XCTAssertFalse(panel.descendants.contains {
+            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
+        })
+    }
+
+    /// agent 正忙时这一行还在（藏掉等于让用户以为没这功能），但点不动、给出理由。
+    func testSummarizeRowIsDisabledWhileTheAgentIsBusy() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.handoffActionProvider = { .blocked(reason: L("Busy")) }
+        var sent = 0
+        panel.onUpdateHandoff = { sent += 1; return true }
+        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: .claude)
+        panel.layoutSubtreeIfNeeded()
+
+        let row = try XCTUnwrap(panel.descendants.first {
+            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
+        })
+        let titles = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(titles.contains(L("Busy")), "要说明为什么点不动")
+
+        try click(row)
+        XCTAssertEqual(sent, 0, "禁用行不能把指令送出去")
+    }
+
+    /// 送不出去时不关面板——关掉等于告诉用户"做了"。
+    func testAFailedSendKeepsThePanelOpen() throws {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
+                             height: PaneIdentityPanel.maxHeight)
+        panel.handoffActionProvider = { .ready }
+        panel.onUpdateHandoff = { false }
+        var dismissed = 0
+        panel.onDismiss = { dismissed += 1 }
+        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: .claude)
+        panel.layoutSubtreeIfNeeded()
+
+        let row = try XCTUnwrap(panel.descendants.first {
+            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
+        })
+        try click(row)
+        XCTAssertEqual(dismissed, 0)
+    }
+
     /// 改名的入口在列表底部，和解除绑定并排——不是任务行右边那支 20×20 的铅笔。
     func testRenameLivesInTheListNextToUnbind() throws {
         _ = NSApplication.shared
