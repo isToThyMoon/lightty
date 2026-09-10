@@ -126,7 +126,31 @@ class SidebarListScrollView: NSScrollView {
         tile()
     }
 
+    /// 重入闸。**没有它会 100% CPU 打死**（2026-09-09 两次采样确认），环是这样的：
+    ///
+    /// ```
+    /// tile() → super.tile() → _setContentViewFrame: → NSClipView.setFrameSize:
+    ///   → NSTableView.resizeWithOldSuperviewSize: → setFrameSize:
+    ///   → _postFrameChangeNotification → _reflectDocumentViewFrameChange
+    ///   → reflectScrolledClipView: → _tileWithoutRecursing → 回到 tile()
+    /// ```
+    ///
+    /// `_tileWithoutRecursing` 本来就是 AppKit 的防重入闸，但它挡的是自己那条路；
+    /// 我们在被重入调进来的那一层又调一次 `super.tile()`，等于从闸的外面绕回去。
+    /// 每一圈 `super.tile()` 把 clip 宽度按 bounds 算回满宽、我们再减掉导轨，两个
+    /// 值来回翻，下面那句 `if` 永远不成立，于是转到天荒地老。
+    ///
+    /// 栈里还夹着 `_fitsWidthInAutohideScrollersScrollView:`——滚动条自动隐藏要
+    /// 按宽度决定显不显示，而显不显示又改变可用宽度，这是让两个值真的翻起来的
+    /// 那个推手。所以它只在特定行数/宽度组合下发作，平时看不出来。
+    private var isTiling = false
+
     override func tile() {
+        // 重入时直接返回：外层那一次还没走完，它的 `super.tile()` 会把这一轮该做的
+        // 布局做完，回来再统一收窄。这里再调一次 `super.tile()` 就是重新点火。
+        guard !isTiling else { return }
+        isTiling = true
+        defer { isTiling = false }
         super.tile()
         // Reserve the same rail even while hidden, so rows don't jump as scrolling starts.
         var frame = contentView.frame
