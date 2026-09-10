@@ -26,6 +26,9 @@ _Avoid_：不加限定地称为“会话”（容易与 Agent 会话混淆）。
 **Handoff 任务（Handoff Task）**：以交接文档保存目标、进展与下一步的长期工作条目，可以跨越多个 Agent 会话。
 _Avoid_：将任务等同于某一次 Agent 对话。
 
+**交接协议（Handoff Protocol）**：lightty 代替用户对 Agent 说的那套话——会话开场注入什么、Agent 写回交接文档时必须遵守什么。分两层：机械契约（写回哪个路径、frontmatter 归 lightty、临时文件加 mv）没有弹性；内容原则（为接手者写、引用不复制、脱敏、面向下一步）是目标不是规则，随模型变强而变好。全 app 只有一处真值，注入文本、技能文本、设置页展示都取自它。
+_Avoid_：把它叫「提示词」（那是实现形态，不是它在领域里的角色）、与 Handoff 任务或任务文件混用。
+
 **Agent 会话（Agent Session）**：由 Claude Code CLI 或 Codex CLI 保存在本机、可通过其原生恢复机制继续的对话历史；在 Sessions 模式中简称“会话”，不泛指 ChatGPT App、IDE 或云端记录。
 _Avoid_：将已结束的会话等同于不能恢复的会话。
 

@@ -146,29 +146,17 @@ private func handoffToInject(event: String, paneID: String, sessionID: String?) 
 
 /// 把任务文件拼成注入的上下文。文件读不到 → nil（不注入，也不报错）。
 ///
-/// 框架文本固定英文：这是跨会话的协议语言，与界面语言无关
-/// （同 Sources/lightty/Localization.swift 的边界说明）。
+/// 这里只管「读得到读不到」，文本一个字都不在这儿：注入、插件里那份 SKILL.md、
+/// 设置页展示等四处共用 `HandoffProtocol` 那一份真值，见
+/// `Sources/LighttyCore/HandoffProtocol.swift`。在这里另写一段，等于让用户在
+/// 设置页读到的和 agent 真正收到的是两样东西——那种不一致最难被发现。
+///
+/// 交给协议的是任务文件**全文**（含 frontmatter）：协议里「只重写 frontmatter
+/// 结束的 `---` 之后」那条指令，得让 agent 对着实物看，否则它引用的是一个
+/// 看不见的东西。
 private func handoffContext(path: String, lateBinding: Bool) -> String? {
     guard let body = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-
-    let opener = lateBinding
-        ? "This terminal pane has just been bound to a task in lightty (or its binding changed), and"
-        : "This terminal pane is bound to a task in lightty, and"
-
-    return """
-        \(opener) the handoff document below is that \
-        task's running record, left by the previous sessions at `\(path)`.
-
-        Read it before doing anything else: continue from its "Next steps" section, and treat \
-        "Key decisions & constraints" as reference material rather than work to redo. When this \
-        session's work is done, write the updated handoff back to that same absolute path \
-        (`\(path)`): rewrite only the body after the frontmatter terminator, refresh `updated` in \
-        the frontmatter, and write a temp file in the same directory then mv it over the target.
-
-        ----- BEGIN HANDOFF DOCUMENT -----
-        \(body)
-        ----- END HANDOFF DOCUMENT -----
-        """
+    return HandoffProtocol.injection(path: path, body: body, lateBinding: lateBinding)
 }
 
 // MARK: - 主流程
