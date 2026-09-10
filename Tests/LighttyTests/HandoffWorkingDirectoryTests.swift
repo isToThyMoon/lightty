@@ -169,9 +169,22 @@ extension SessionAssociationTests {
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
 
         let controller = LaunchComposerController(subject: .newTask, controller: nil)
-        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 800),
-                            styleMask: [.titled], backing: .buffered, defer: false)
-        host.contentViewController = controller
+        // 刻意不挂进 NSWindow。原先把它设成窗口的 contentViewController，是想模拟气泡
+        // 给出的外部尺寸约束——但 NSWindow 不是 NSPopover，它自己那套约束回灌会在
+        // 同一个进程里累积：实测同样的测量做到第三次，`contentStack.fittingSize` 就
+        // 不再跟着正文变，两次读数都是 499，测试于是按确定顺序挂在全量里、单独跑却过。
+        // 换成普通父视图 + 一个宽度约束，被测路径没变（`viewDidLayout` 仍然从
+        // `contentStack.fittingSize` 算 `preferredContentSize`），而且做多少次都一样。
+        // 代价要说明白：这条不再覆盖"真气泡的尺寸约束下还能缩回来"，它本来也没稳定
+        // 覆盖住——那一版在第三次之后给的是错的答案。
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 800))
+        host.addSubview(controller.view)
+        controller.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            controller.view.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            controller.view.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            controller.view.topAnchor.constraint(equalTo: host.topAnchor),
+        ])
         func settle() {
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
