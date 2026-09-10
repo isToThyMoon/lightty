@@ -48,24 +48,48 @@ enum LaunchComposer {
         return .task(fileURL: fileURL, task: (try? AppState.shared.taskStore.load(at: fileURL)) ?? task)
     }
 
-    /// 摘要 = 正文 Next steps / Current state / Blockers 三节（分诊最短可读集）。
-    /// 中文节头是 2026-08-30 协议迁英文前的旧格式，为既有任务文件保留解析。
+    /// 摘要 = 正文的 Next steps 一节。
+    ///
+    /// 只认这一个节头，是因为下面这段**不是只识别**：它把认出来的节拼起来再截
+    /// 14 行。多认一个节头等于让最重要的那节被前面的节挤出上限——认得越多，
+    /// 摘要越可能停在「当前状态」上，看不到下一步。
+    ///
+    /// 实测（2026-09-09，`~/.lightty/tasks/` 里 8 个真实任务文件）：没有一个以
+    /// `## Next steps` 开头，6 个开头是 Current state / 当前状态；但其中 6 个在
+    /// 正文靠后有 `## Next steps`。收窄之后这 6 个的摘要变成下一步本身；余下 2 个
+    /// （一个无节头、一个用 `## 仓库与环境`）本来就走下面「显示正文开头」的兜底，
+    /// 不受影响。所以是 6 个变好、2 个不变，没有变差的。
+    ///
+    /// 中文 `## 下一步` 留着：那是 2026-08-30 协议迁英文前的旧格式，既有文件还在用。
+    ///
+    /// 收窄的代价说准一点：**对上面那 8 个文件**没有变差的。有一种形状会变差——
+    /// 有 `## Current state` 之类、没有 `## Next steps`、且那一节不在正文前 12 行内：
+    /// 旧代码摘要是当前状态本身，新代码退回显示前 12 行的无关前言。样本里没有这种
+    /// 文件，但它不是臆想。
+    ///
+    /// 节头匹配用 `hasPrefix` 而不是 `==`，是为了容忍 `## Next steps（2026-09-04）`
+    /// 这种带括号补充的写法（用户的既有文件里就有）；大小写不敏感是因为收窄后这里
+    /// 成了单点，写成 `## Next Steps` 就会整段掉进兜底，而旧代码有 6 个候选还能互相兜。
     static func summarize(_ body: String) -> String {
-        let interesting = [
-            "## Next steps", "## Current state", "## Blockers & risks",
-            "## 下一步", "## 当前状态", "## 卡点与风险",
-        ]
+        let interesting = ["## next steps", "## 下一步"]
         var lines: [String] = []
         var keeping = false
         for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.hasPrefix("## ") {
-                keeping = interesting.contains(where: { line.hasPrefix($0) })
+                let lowered = line.lowercased()
+                keeping = interesting.contains(where: { lowered.hasPrefix($0) })
             }
             if keeping { lines.append(String(line)) }
             if lines.count > 14 { break }
         }
-        let result = lines.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // 「认出了节头、节里却什么都没有」产出的不是空串，是那行标题本身——直接返回
+        // 会让气泡里只显示 `## Next steps` 五个字。节头之外没有内容就当没认出来。
+        let hasContent = lines.contains {
+            !$0.hasPrefix("## ") && !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        let result = hasContent
+            ? lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
         if !result.isEmpty { return result }
         // 兜底：agent 写的节头不在协议集合里时，展示正文开头——有内容
         // 就不该显示「暂无摘要」
