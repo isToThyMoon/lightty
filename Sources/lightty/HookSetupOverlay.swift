@@ -14,7 +14,15 @@ import AppKit
 /// 而 app 已经有成熟的窗内浮层语言（搜索面板、灵动岛）。
 final class HookSetupOverlay: NSView {
     /// 主动弹过一次就不再弹，之后可从设置的通用页重新打开。
+    /// **只管「还没装」那一支**——那是一次性的自我介绍，看过就够了。
     private static let dismissedKey = "lightty.hookSetup.dismissed"
+
+    /// 「已装但装的是旧内容」按版本记「暂不」：上面那个永久标记不能拿来管更新。
+    /// 插件内容变了就是一件新事（比如这次多了交接技能，旧缓存里根本没有它），
+    /// 用一个永久开关把它一起静音，等于让用户在一年前的一次点击上永远失去提醒。
+    private static func dismissedUpdateKey(_ agent: HookAgent) -> String {
+        "lightty.hookSetup.dismissedUpdate.\(agent.rawValue)"
+    }
 
     var onDismiss: (() -> Void)?
 
@@ -38,20 +46,43 @@ final class HookSetupOverlay: NSView {
         controller.presentHookSetup()
     }
 
-    /// 启动后自动调用。只有「装了 agent 却没装 hook」才值得打断——
-    /// 没装 agent 的人看到这个只会困惑，装好了的人再看就是纯噪音。
+    /// 启动后自动调用。两种情况值得打断，其余都是噪音。
+    ///
+    /// 1. **装了 agent 却没装 hook**——没装 agent 的人看到只会困惑，所以要求
+    ///    `isAgentPresent`；看过一次就记永久标记，那是一次性的自我介绍。
+    /// 2. **装了，但装进去的是旧内容**。这一支原来不弹，注释写着「installed
+    ///    无事可做」——那句话在插件只有 hooks 的时候是对的：事件表旧一点，无非
+    ///    少几条状态。现在不对了：插件里还有交接技能，而两家 CLI 都是**安装时
+    ///    拷贝**，旧缓存里没有 `skills/` 目录，调用名不认识时两家都**静默失败**。
+    ///    用户什么都不会看到，只会发现按钮退回了往终端里贴一整段文字。
+    ///    所以这一支必须提醒，而且按版本记「暂不」，不与上面那个永久标记共用。
     static func presentIfNeeded(in controller: TerminalWindowController) {
-        guard !FilePreferences.shared.bool(forKey: dismissedKey) else { return }
-        let worthAsking = HookInstaller.reports().contains { report in
+        guard shouldPresent(reports: HookInstaller.reports()) else { return }
+        present(in: controller)
+    }
+
+    /// 判断抽出来是为了测得到：这一条刚错过一次——原来对 `.installed` 一律返回
+    /// false，注释还写着「无事可做」，于是插件内容更新时谁都不会被提醒。
+    /// 读偏好的那一支参数化，测试不必去碰用户真实的 preferences。
+    static func shouldPresent(
+        reports: [HookInstaller.Report],
+        setupDismissed: Bool = FilePreferences.shared.bool(forKey: dismissedKey),
+        dismissedUpdateVersion: (HookAgent) -> String? = {
+            FilePreferences.shared.string(forKey: dismissedUpdateKey($0))
+        }
+    ) -> Bool {
+        reports.contains { report in
             guard report.isAgentPresent else { return false }
             switch report.state {
-            case .notInstalled, .partial: return true
-            // unreadable 我们帮不上忙（铁律是绝不覆盖），installed 无事可做
-            case .installed, .unreadable, .agentMissing: return false
+            case .notInstalled, .partial:
+                return !setupDismissed
+            case .installed:
+                return report.needsUpdate && dismissedUpdateVersion(report.agent) != report.version
+            // unreadable 我们帮不上忙（铁律是绝不覆盖）
+            case .unreadable, .agentMissing:
+                return false
             }
         }
-        guard worthAsking else { return }
-        present(in: controller)
     }
 
     // MARK: - 构建
@@ -299,6 +330,10 @@ final class HookSetupOverlay: NSView {
     @objc private func closeTapped() {
         // 主动弹过就记下，之后从设置打开
         FilePreferences.shared.set(true, forKey: Self.dismissedKey)
+        // 「暂不」对更新只压住**这一个版本**：插件内容再变就是一件新事，该再问一次。
+        for report in HookInstaller.reports() where report.needsUpdate {
+            FilePreferences.shared.set(report.version, forKey: Self.dismissedUpdateKey(report.agent))
+        }
         onDismiss?()
     }
 
