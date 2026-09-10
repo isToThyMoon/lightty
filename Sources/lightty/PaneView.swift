@@ -671,18 +671,25 @@ final class PaneView: NSView {
     private var spotlightVeil: NSView?
 
     /// 从侧栏/菜单栏/搜索等处跳转到本 pane 后的落点提示。
-    /// 不给目标加图形（圈线在终端画面里是异物），而是请控制器把同标签页
-    /// 其余 pane 短暂压暗——视线本能落在唯一清晰的那块上。做减法的聚光灯，
-    /// 与内核的 unfocused-split-opacity 同一门语言。
+    /// 不给目标加图形（圈线在终端画面里是异物），而是让目标自己浮现一次。
+    /// **动的只能是该看的那块**：会动的东西必然抢视线，压暗其余 pane 等于
+    /// 把动画放在了不该看的地方，视线反而被拽走。
     func flashReveal() {
         (window?.windowController as? TerminalWindowController)?.spotlight(on: self)
     }
 
-    /// 聚光灯的「暗」侧：盖一层终端背景色纱再淡出。用背景色而非黑色，
-    /// 是把内容往各自底色方向压对比，明暗主题都成立（黑纱在浅色主题发脏）；
-    /// 取本 pane 的实况背景（header 跟踪的 per-surface 值）而非全局 config，
-    /// 明暗切换后、各 pane 主题不同时都各自取对。
-    func dimForSpotlight() {
+    /// 聚光灯：给目标盖一层它自己的终端背景色，随即淡出——内容从底色里浮出来。
+    /// 用背景色而非黑/白，是把内容往各自底色方向收再放回来，明暗主题都成立
+    /// （黑纱在浅色主题发脏）；取本 pane 的实况背景（header 跟踪的 per-surface
+    /// 值）而非全局 config，明暗切换后、各 pane 主题不同时都各自取对。
+    ///
+    /// 分「停留 → 淡出」两拍，不用一条 ease 曲线一淡到底：一条曲线中段就淡掉大半，
+    /// 视线从侧栏移过来时已经没了。停留那一拍留给这段路程，短一点就够——只要提示
+    /// 别在人赶到之前散掉，多出来的时间都是在挡着不让读。
+    ///
+    /// 峰值 0.6 而非全盖：现在糊住的是刚点开的那块，得让人在提示还亮着的时候就
+    /// 能开始读，而不是先等它散。
+    func flashSpotlight() {
         spotlightVeil?.removeFromSuperview()
         let veil = ShellPassthroughView(frame: bounds)
         veil.autoresizingMask = [.width, .height]
@@ -691,12 +698,10 @@ final class PaneView: NSView {
             .withAlphaComponent(0.6).cgColor
         addSubview(veil, positioned: .above, relativeTo: nil)
         spotlightVeil = veil
-        // 纱先停住给视线定位，再收走；直接一条 ease 曲线会淡得太早，
-        // 显式分成「停留 → 淡出」两拍。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self, weak veil] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak veil] in
             guard let veil, veil.superview != nil else { return }
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.45
+                context.duration = 0.4
                 context.timingFunction = ShellStyle.easeInOutCubic
                 veil.animator().alphaValue = 0
             }, completionHandler: { [weak self, weak veil] in
