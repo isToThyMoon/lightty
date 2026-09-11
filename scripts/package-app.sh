@@ -94,6 +94,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
     <key>SUFeedURL</key><string>https://github.com/isToThyMoon/lightty/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key><string>f072X9FONA/coPDuRgaSX9r/wPLjcSwxr6wFmTeWKy4=</string>
+    <!-- Finder 右键 → Services。NSMessage 对应 FinderServiceProvider 里的 selector；
+         只对 /Applications 或 ~/Applications 下的 .app 生效，改动后 pbs -update 或重新登录才刷新。 -->
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key><dict><key>default</key><string>New Lightty Tab Here</string></dict>
+            <key>NSMessage</key><string>openTab</string>
+            <key>NSRequiredContext</key><dict><key>NSTextContent</key><string>FilePath</string></dict>
+            <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string><string>public.plain-text</string></array>
+        </dict>
+        <dict>
+            <key>NSMenuItem</key><dict><key>default</key><string>New Lightty Window Here</string></dict>
+            <key>NSMessage</key><string>openWindow</string>
+            <key>NSRequiredContext</key><dict><key>NSTextContent</key><string>FilePath</string></dict>
+            <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string><string>public.plain-text</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
