@@ -195,9 +195,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
 
         nameField.font = .systemFont(ofSize: 11, weight: .medium)
-        nameField.isBordered = false
-        nameField.drawsBackground = false
-        nameField.focusRingType = .none
         nameField.delegate = self
 
         // —— 扩展区
