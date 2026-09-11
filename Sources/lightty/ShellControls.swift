@@ -381,6 +381,7 @@ extension ShellTextArea: NSTextViewDelegate {
 final class ShellFieldBox: NSView {
     let field: NSTextField
     private let placeholderLabel: NSTextField?
+    private var textStorageObserver: NSObjectProtocol?
 
     static let height: CGFloat = 28
 
@@ -429,6 +430,12 @@ final class ShellFieldBox: NSView {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(fieldTextDidChange(_:)),
                 name: NSControl.textDidChangeNotification, object: field)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(fieldDidBeginEditing(_:)),
+                name: NSControl.textDidBeginEditingNotification, object: field)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(fieldDidEndEditing(_:)),
+                name: NSControl.textDidEndEditingNotification, object: field)
             updatePlaceholder()
         }
         applyLook()
@@ -436,7 +443,10 @@ final class ShellFieldBox: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if let textStorageObserver { NotificationCenter.default.removeObserver(textStorageObserver) }
+    }
 
     @objc private func fieldTextDidChange(_ notification: Notification) {
         updatePlaceholder()
@@ -446,6 +456,33 @@ final class ShellFieldBox: NSView {
         guard let placeholderLabel else { return }
         let editor = field.currentEditor() as? NSTextView
         placeholderLabel.isHidden = !field.stringValue.isEmpty || editor?.hasMarkedText() == true
+    }
+
+    @objc private func fieldDidBeginEditing(_ notification: Notification) {
+        if let textStorageObserver {
+            NotificationCenter.default.removeObserver(textStorageObserver)
+            self.textStorageObserver = nil
+        }
+        guard let textStorage = (field.currentEditor() as? NSTextView)?.textStorage else {
+            updatePlaceholder()
+            return
+        }
+        textStorageObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: textStorage,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updatePlaceholder()
+        }
+        updatePlaceholder()
+    }
+
+    @objc private func fieldDidEndEditing(_ notification: Notification) {
+        if let textStorageObserver {
+            NotificationCenter.default.removeObserver(textStorageObserver)
+            self.textStorageObserver = nil
+        }
+        updatePlaceholder()
     }
 
     override func viewDidChangeEffectiveAppearance() {
