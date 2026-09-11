@@ -15,6 +15,14 @@ struct GhosttyConfigValues {
     var isTransparent: Bool { backgroundOpacity < 1 }
 }
 
+extension Notification.Name {
+    static let ghosttyGlobalConfigDidChange = Notification.Name("ghosttyGlobalConfigDidChange")
+}
+
+enum GhosttyConfigNotification {
+    static let valuesKey = "values"
+}
+
 /// libghostty 生命周期与回调的唯一持有者。
 /// 调用序列与回调约定见 docs/libghostty-embedding.md（钉在 vendor 的 ghostty.h，API 不稳定）。
 final class GhosttyRuntime {
@@ -653,7 +661,12 @@ final class GhosttyRuntime {
                 }
             } else {
                 DispatchQueue.main.async {
-                    GhosttyRuntime.shared?.configValues = values
+                    guard let runtime = GhosttyRuntime.shared else { return }
+                    runtime.configValues = values
+                    NotificationCenter.default.post(
+                        name: .ghosttyGlobalConfigDidChange,
+                        object: runtime,
+                        userInfo: [GhosttyConfigNotification.valuesKey: values])
                 }
             }
             return true

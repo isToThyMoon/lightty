@@ -5,8 +5,11 @@ import AppKit
 final class EmptyTabView: NSView {
     /// 点“新建标签页”按钮。
     var onNewTab: (() -> Void)?
+    private var configObserver: NSObjectProtocol?
+    private var terminalConfigValues: GhosttyConfigValues
 
     init() {
+        terminalConfigValues = GhosttyRuntime.shared.configValues
         super.init(frame: .zero)
         wantsLayer = true
         applyBackground()
@@ -51,16 +54,37 @@ final class EmptyTabView: NSView {
             button.heightAnchor.constraint(equalToConstant: 28),
             button.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
         ])
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyGlobalConfigDidChange,
+            object: GhosttyRuntime.shared,
+            queue: .main
+        ) { [weak self] note in
+            guard let values = note.userInfo?[GhosttyConfigNotification.valuesKey]
+                    as? GhosttyConfigValues else { return }
+            self?.terminalConfigValues = values
+            self?.applyTheme(values)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    deinit {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+    }
+
     /// 铺一层终端底色（含 background-opacity）：空态才不会露出桌面，观感和
     /// 一个空终端 pane 一致，而不是一个透明的窟窿。
     private func applyBackground() {
-        let cfg = GhosttyRuntime.shared.configValues
-        layer?.backgroundColor = cfg.backgroundColor
-            .withAlphaComponent(cfg.backgroundOpacity).cgColor
+        applyTheme(terminalConfigValues)
+    }
+
+    /// Empty-tab chrome sits on the terminal surface, so its semantic light/dark appearance
+    /// follows the terminal background rather than the surrounding application shell.
+    private func applyTheme(_ values: GhosttyConfigValues) {
+        let name: NSAppearance.Name = values.backgroundColor.isLightColor ? .aqua : .darkAqua
+        if appearance?.name != name { appearance = NSAppearance(named: name) }
+        layer?.backgroundColor = values.backgroundColor
+            .withAlphaComponent(values.backgroundOpacity).cgColor
     }
 
     override func viewDidChangeEffectiveAppearance() {
