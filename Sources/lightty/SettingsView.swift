@@ -337,10 +337,15 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             field.cell?.isScrollable = true
             field.cell?.wraps = false
             field.delegate = self
-            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
             field.setAccessibilityLabel(L("%@ extra arguments", agent.title))
+            // 套进 ShellFieldBox：这两个框原来是彻底原生的——系统凹槽加系统焦点环，
+            // 深色下就是一圈浅边配近黑底，和同一张卡片里其他控件完全两种语言。
+            // 系统焦点环还跟着用户的系统强调色走，与「重点色只从 ShellStyle.accent
+            // 取」那条相冲。
+            let box = ShellFieldBox(field)
+            box.widthAnchor.constraint(equalToConstant: 200).isActive = true
             agentCommandFields[agent] = field
-            agents.addRow(title: L("%@ extra arguments", agent.title), control: field)
+            agents.addRow(title: L("%@ extra arguments", agent.title), control: box)
         }
         column.addArrangedSubview(agents)
         agents.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true

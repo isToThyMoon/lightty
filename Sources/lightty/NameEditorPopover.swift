@@ -55,18 +55,12 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
 
         field.stringValue = initial
         field.font = .systemFont(ofSize: 12)
-        field.focusRingType = .none
-        field.isBordered = false
-        field.drawsBackground = false
         field.delegate = self
-        field.wantsLayer = true
         (field.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
-        let fieldWrap = NSView()
-        fieldWrap.wantsLayer = true
-        fieldWrap.layer?.cornerRadius = ShellStyle.controlCornerRadius
-        fieldWrap.addSubview(field)
-        field.translatesAutoresizingMaskIntoConstraints = false
+        // 原来这里是 ShellFieldBox 的一份手抄件，还抄歪了：圆角 8（别处 7）、
+        // 高 26（别处 28），底色也是一次性刷上去的，明暗切换不跟。换成本尊。
+        let fieldWrap = ShellFieldBox(field)
 
         // 无确认按钮：回车提交、Esc/点外部取消（多一步确认是冗余操作）
         let hint = NSTextField(labelWithString: L("Press Return to confirm"))
@@ -86,26 +80,13 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             root.widthAnchor.constraint(equalToConstant: 240),
             fieldWrap.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            fieldWrap.heightAnchor.constraint(equalToConstant: 26),
-            field.leadingAnchor.constraint(equalTo: fieldWrap.leadingAnchor, constant: 8),
-            field.trailingAnchor.constraint(equalTo: fieldWrap.trailingAnchor, constant: -8),
-            field.centerYAnchor.constraint(equalTo: fieldWrap.centerYAnchor),
         ])
-        applyColors(to: fieldWrap)
         view = root
     }
 
     func focusField() {
         view.window?.makeFirstResponder(field)
         field.currentEditor()?.selectAll(nil)
-    }
-
-    private func applyColors(to wrap: NSView) {
-        // ⚠️ 不得访问 self.view：loadView 内 view 尚未赋值，getter 会重入
-        // loadView 造成无限递归爆栈。用 wrap 自身外观（未挂载时回退 NSApp 外观）。
-        wrap.layer?.backgroundColor =
-            ShellStyle.controlFill.shellResolvedCGColor(for: wrap.effectiveAppearance)
-        field.textColor = ShellStyle.primaryText
     }
 
     var onCancel: (() -> Void)?
