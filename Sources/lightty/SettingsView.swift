@@ -86,8 +86,10 @@ final class SettingsView: NSView, NSTextFieldDelegate {
 
         backRow.onClick = { [weak self] in self?.onDismiss?() }
 
-        ShellTextFieldStyle.configure(
-            searchField, font: .systemFont(ofSize: 12.5), placeholder: L("Search settings…"))
+        // NSSearchField owns the icon, placeholder and field-editor insets as a unit.
+        // The borderless plain-text style breaks their alignment when editing begins.
+        searchField.font = .systemFont(ofSize: 12.5)
+        searchField.placeholderString = L("Search settings…")
         searchField.controlSize = .regular
         searchField.target = self
         searchField.action = #selector(searchChanged)
