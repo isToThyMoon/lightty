@@ -296,7 +296,12 @@ final class ShellTextArea: NSView {
     private func applyLook() {
         layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
         textView.textColor = ShellStyle.primaryText
-        textView.insertionPointColor = ShellStyle.primaryText
+        // 光标颜色**不要设**：AppKit 默认跟随系统强调色，应用里其他输入框（都是
+        // NSTextField 的 field editor）用的就是这个默认。这里一旦写死，同一个浮层
+        // 里上面是蓝光标、下面是黑光标。
+        //
+        // 这是唯一一处跟随系统强调色而不走 ShellStyle.accent 的地方，是刻意的：
+        // 文本光标是系统级的输入提示，不是我们的「选中 / 开启」着色。
         placeholderLabel.textColor = ShellStyle.tertiaryText
     }
 
