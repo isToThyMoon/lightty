@@ -431,8 +431,13 @@ final class ShellTextButton: NSButton {
             fill = NSColor.systemRed.withAlphaComponent(isHovered ? 0.18 : 0.10)
             enabledText = .systemRed
         } else {
-            fill = isHovered ? ShellStyle.hoverFill : .clear
-            enabledText = ShellStyle.secondaryText
+            // 次要动作也是按钮，静止时就得有底。原来是「平时一串字、划过才浮一块
+            // hoverFill」——而 hoverFill(#F0ECEA) 和输入框的 controlFill(#EFEBE9)
+            // 只差一档灰，浮出来那块跟旁边的输入框长得一模一样，既不像按钮，也几乎
+            // 看不见。整体往下压一档：静止 selectionFill、悬停 pressedFill，比输入框
+            // 深一层，"能按的"和"能填的"就分开了。
+            fill = isHovered ? ShellStyle.pressedFill : ShellStyle.selectionFill
+            enabledText = ShellStyle.primaryText
         }
         let dimmed = !isEnabled || looksDisabled
         layer?.backgroundColor = (dimmed ? .clear : fill)
