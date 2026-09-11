@@ -24,14 +24,13 @@ final class EmptyTabView: NSView {
         title.alignment = .center
 
         let subtitle = NSTextField(
-            wrappingLabelWithString:
+            labelWithString:
                 L("Open a task from the sidebar, or create a new tab."))
         subtitle.font = .systemFont(ofSize: 12)
         subtitle.textColor = ShellStyle.secondaryText
         subtitle.alignment = .center
         subtitle.isSelectable = false
-        subtitle.maximumNumberOfLines = 2
-        subtitle.preferredMaxLayoutWidth = 240
+        subtitle.maximumNumberOfLines = 1
 
         let button = ShellTextButton(
             L("New tab"), emphasis: .primary, target: self,
@@ -51,7 +50,6 @@ final class EmptyTabView: NSView {
             stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -40),
             button.heightAnchor.constraint(equalToConstant: 28),
             button.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
-            subtitle.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
         ])
     }
 
