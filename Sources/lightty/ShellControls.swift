@@ -366,12 +366,42 @@ extension ShellTextArea: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) { refreshPlaceholder() }
 }
 
+/// 让 cell 画的文字和 field editor 画的文字落在同一列上。
+///
+/// 没聚焦时文字由 cell 画在 `titleRect` 原点；聚焦后由接管的 field editor 画在
+/// `editorFrame` 原点再加一段 `lineFragmentPadding`。`isBezeled = false` 时这两个
+/// 矩形相同（实测都等于 bounds），差的正好就是这段 padding，于是点进输入框的
+/// 那一刻文字会整体横移 2pt。占位文字最显眼，真实文字一样跳。
+///
+/// **对齐要改 cell 这一侧，不能去抹平 field editor 的 padding。** 抹平了确实也
+/// 对齐，但空框时光标正好落在文本容器的最左边，会被边缘切掉一半——2pt 的光标
+/// 变成 1pt，和别处的输入框对不上（实测：敲一个字、光标离开行首就恢复成 2pt）。
+/// 只覆写 `titleRect` 不动 `drawingRect` / `editWithFrame`，field editor 的位置
+/// 一如原样。
+final class ShellTextFieldCell: NSTextFieldCell {
+    /// AppKit 给 field editor 的 `lineFragmentPadding` 默认值。
+    /// `ShellFieldFocusTests` 会拿真的 field editor 来对，变了就挂。
+    static let editorPadding: CGFloat = 2
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        var title = super.titleRect(forBounds: rect)
+        title.origin.x += Self.editorPadding
+        title.size.width = max(0, title.width - Self.editorPadding)
+        return title
+    }
+}
+
 /// `ShellFieldBox` 里那支输入框：只多做一件事——把**真的拿到焦点**报出去。
 ///
 /// `NSControl` 那两条编辑通知不能当焦点用（begin 那条要等第一次敲键才发），
 /// `becomeFirstResponder` 才是。收尾用 `textDidEndEditing`：实测一个字都没敲、
 /// 直接把焦点移走时它也会调到。
 final class ShellTextField: NSTextField {
+    override class var cellClass: AnyClass? {
+        get { ShellTextFieldCell.self }
+        set { _ = newValue }
+    }
+
     /// true = 刚拿到焦点，false = 刚失去焦点。
     var onFocusChange: ((Bool) -> Void)?
 
@@ -432,16 +462,10 @@ final class ShellFieldBox: NSView {
     private func focusChanged(_ focused: Bool) {
         editing = focused
         guard focused, let editor = field.currentEditor() as? NSTextView else { return }
-        // 光标用我们自己的字色。`ShellTextArea` 一直是这么设的，单行框没设，用的是
-        // 系统默认那支更淡的——两个框上下并排就看出来一深一浅。
+        // 光标钉在我们自己的字色上。AppKit 的默认值眼下正好也跟着 textColor 走
+        // （量过别处没设这一行的输入框，颜色一致），这里写明是不指望那个默认。
         editor.insertionPointColor = ShellStyle.primaryText
-        // 没聚焦时文字由 cell 画在 `titleRect` 的原点；聚焦后由接管的 field editor
-        // 画在 `editorFrame` 原点再加一段 `lineFragmentPadding`。`isBezeled = false`
-        // 时这两个矩形是同一个（实测都等于 bounds），差的**正好就是这段 padding**，
-        // 默认 2pt。抹平它，聚焦前后文字才落在同一列上。
-        //
-        // 占位文字最显眼，但真实文字一样会跳——它不是占位文字特有的毛病。
-        editor.textContainer?.lineFragmentPadding = 0
+        // 文字对齐不在这里做，在 `ShellTextFieldCell` 那一侧——原因见它的注释。
     }
 
     override func viewDidChangeEffectiveAppearance() {

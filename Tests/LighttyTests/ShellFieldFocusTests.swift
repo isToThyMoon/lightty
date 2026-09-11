@@ -69,22 +69,37 @@ final class ShellFieldFocusTests: XCTestCase {
         XCTAssertEqual(borderAlpha(box), 0, accuracy: 0.01, "焦点走了边框就该熄")
     }
 
-    /// 接管过来的 field editor 要抹平 `lineFragmentPadding`：它就是 cell 与
-    /// field editor 两条绘制路径之间的全部差值，不抹平，聚焦前后文字横跳。
+    /// cell 画的文字要和 field editor 画的文字落在同一列上。
     @MainActor
-    func testFieldEditorDrawsWhereTheCellDrew() {
+    func testTheCellDrawsWhereTheFieldEditorDraws() {
         let (box, window) = makeBox()
         window.makeFirstResponder(box.field)
         guard let editor = box.field.currentEditor() as? NSTextView else {
             return XCTFail("聚焦后应当有 field editor")
         }
-        XCTAssertEqual(editor.textContainer?.lineFragmentPadding, 0,
-            "留着这段 padding，文字在聚焦那一刻就会整体横移它那么多")
         guard let cell = box.field.cell as? NSTextFieldCell else { return XCTFail("拿不到 cell") }
         XCTAssertEqual(cell.titleRect(forBounds: box.field.bounds).minX,
                        editor.frame.minX + (editor.textContainer?.lineFragmentPadding ?? 0),
                        accuracy: 0.01,
-                       "两条路径的文字起点要落在同一列上")
+                       "两条路径的文字起点要落在同一列上，否则聚焦那一刻文字横跳")
+    }
+
+    /// 对齐必须改 cell 那一侧。**别去抹平 field editor 的 `lineFragmentPadding`**：
+    /// 抹平了也对齐，但空框时光标正好落在文本容器最左边，被边缘切掉一半——2pt
+    /// 的光标变成 1pt，和别处的输入框对不上（敲一个字、光标离开行首就恢复）。
+    ///
+    /// 这一条同时钉住 `ShellTextFieldCell.editorPadding` 那个常量：它就是拿真的
+    /// field editor 量出来的值，AppKit 哪天改了这里就挂。
+    @MainActor
+    func testTheFieldEditorKeepsItsPaddingSoTheCaretIsNotClipped() {
+        let (box, window) = makeBox()
+        window.makeFirstResponder(box.field)
+        guard let editor = box.field.currentEditor() as? NSTextView else {
+            return XCTFail("聚焦后应当有 field editor")
+        }
+        XCTAssertEqual(editor.textContainer?.lineFragmentPadding,
+                       ShellTextFieldCell.editorPadding,
+                       "cell 那一侧就是按这个值让位的；抹成 0 会切掉行首的光标")
     }
 
     /// 光标颜色两个框要一致，用我们自己的字色。
