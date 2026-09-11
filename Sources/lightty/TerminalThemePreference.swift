@@ -1,6 +1,6 @@
 import Foundation
 
-/// Lightty 只选择 `theme` 的职权开关；其余 terminal 配置始终允许用户覆盖。
+/// 控制整套随包终端配置是否独立使用。保留原存储键以延续用户的开关选择。
 enum TerminalThemePreference {
     static let defaultsKey = "lightty.terminalTheme.useBuiltIn"
 

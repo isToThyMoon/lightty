@@ -442,7 +442,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             GhosttyRuntime.shared.reloadGlobalConfig()
             PreferenceKind.terminalTheme.post()
         }
-        accentGroup.addRow(title: L("Use the built-in Lightty terminal theme"), control: toggle)
+        accentGroup.addRow(title: L("Use the built-in Lightty terminal configuration"), control: toggle)
         column.addArrangedSubview(accentGroup)
         accentGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     }

@@ -233,7 +233,7 @@
 "System language" = "跟随系统";
 "Language changes apply to menus and sidebars right away; a few labels refresh after relaunch." = "语言切换立即作用于菜单与侧栏；个别文案重启后刷新。";
 "Terminal" = "终端";
-"Use the built-in Lightty terminal theme" = "终端使用 Lightty 内置主题";
+"Use the built-in Lightty terminal configuration" = "使用 Lightty 内置终端配置";
 "No matching settings" = "没有匹配的设置项";
 
 /* 重点色 */

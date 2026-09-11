@@ -229,7 +229,7 @@
 "System language" = "System language";
 "Language changes apply to menus and sidebars right away; a few labels refresh after relaunch." = "Language changes apply to menus and sidebars right away; a few labels refresh after relaunch.";
 "Terminal" = "Terminal";
-"Use the built-in Lightty terminal theme" = "Use the built-in Lightty terminal theme";
+"Use the built-in Lightty terminal configuration" = "Use the built-in Lightty terminal configuration";
 "No matching settings" = "No matching settings";
 
 /* 重点色 */

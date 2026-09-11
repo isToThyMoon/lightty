@@ -47,7 +47,7 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertEqual(view.currentPage, .appearance)
         XCTAssertTrue(labels(in: view).contains(L("Appearance")))
         XCTAssertTrue(labels(in: view).contains(L("Theme")))
-        XCTAssertTrue(labels(in: view).contains(L("Use the built-in Lightty terminal theme")))
+        XCTAssertTrue(labels(in: view).contains(L("Use the built-in Lightty terminal configuration")))
         XCTAssertFalse(labels(in: view).contains(L("Agent status hooks")))
         XCTAssertTrue(labels(in: view).contains(L("Back to app")))
 
@@ -56,7 +56,7 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertEqual(view.currentPage, .general)
         XCTAssertTrue(labels(in: view).contains(L("Language")))
         XCTAssertFalse(labels(in: view).contains(L("Theme")))
-        XCTAssertFalse(labels(in: view).contains(L("Use the built-in Lightty terminal theme")))
+        XCTAssertFalse(labels(in: view).contains(L("Use the built-in Lightty terminal configuration")))
         XCTAssertTrue(labels(in: view).contains(L("Agent status hooks")))
     }
 

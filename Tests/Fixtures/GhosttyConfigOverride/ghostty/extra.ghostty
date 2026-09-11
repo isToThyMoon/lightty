@@ -1,0 +1,2 @@
+# Recursive user configuration must also be ignored in built-in mode.
+cursor-style = underline

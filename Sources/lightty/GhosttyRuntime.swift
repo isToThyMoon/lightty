@@ -37,7 +37,7 @@ final class GhosttyRuntime {
             fatalError("ghostty_init failed")
         }
 
-        // 终端配置边界：先加载随包基线，再让 Ghostty 用户配置覆盖它，最后把
+        // 终端配置边界：先加载随包基线，仅在关闭内置配置时允许用户覆盖，最后把
         // finalize 后的同一份 config 原样交给 ghostty_app_new。Lightty 不在壳层
         // 二次解析或改写 terminal 选项。有意跳过 load_cli_args：这里的命令行属于
         // Lightty，而不是 Ghostty.app。
@@ -139,11 +139,14 @@ final class GhosttyRuntime {
     /// 与 Ghostty `+show-config` 可直接 diff 的最小配置探针。
     /// 只用于开发诊断，不参与正常 UI 或配置逻辑。
     var terminalConfigProbe: String {
+        var cursorStyle: UnsafePointer<CChar>?
+        _ = Self.get(loadedConfig, &cursorStyle, "cursor-style")
         let values = [
             "background = \(configValues.backgroundColor.hexRGB)",
             "foreground = \(configValues.foregroundColor.hexRGB)",
             "background-opacity = \(configValues.backgroundOpacity)",
             "background-blur = \(configValues.backgroundBlur)",
+            "cursor-style = \(cursorStyle.map { String(cString: $0) } ?? "unknown")",
         ]
         let diagnostics = configDiagnostics.map { "diagnostic = \($0)" }
         return (values + diagnostics).joined(separator: "\n")
@@ -158,9 +161,8 @@ final class GhosttyRuntime {
         reloadConfig(surface: nil, soft: false)
     }
 
-    /// 启动与 reload 共用的唯一配置入口。普通随包配置只提供缺省值，用户的
-    /// 全局配置与递归 config-file 均可覆盖它；勾选内置主题时，仅把 `theme`
-    /// 选择在用户配置之后重放，不接管其他 terminal 选项。
+    /// 启动与 reload 共用的唯一配置入口。内置模式不加载用户配置；关闭后，
+    /// 用户全局配置及递归 config-file 可覆盖随包基线。
     private static func loadGlobalConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
 
@@ -169,13 +171,9 @@ final class GhosttyRuntime {
             return nil
         }
 
-        ghostty_config_load_default_files(config)
-        ghostty_config_load_recursive_files(config)
-
-        if TerminalThemePreference.usesBuiltInTheme(),
-           !loadBundledConfig(named: "lightty-theme", into: config) {
-            ghostty_config_free(config)
-            return nil
+        if !TerminalThemePreference.usesBuiltInTheme() {
+            ghostty_config_load_default_files(config)
+            ghostty_config_load_recursive_files(config)
         }
 
         ghostty_config_finalize(config)
