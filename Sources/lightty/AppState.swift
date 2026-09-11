@@ -10,7 +10,8 @@ final class AppState {
     let sessionLibrary: SessionLibrary
     var windowControllers: [TerminalWindowController] = []
 
-    init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true) {
+    init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true,
+         sessionLibrary: SessionLibrary? = nil) {
         // LIGHTTY_TASK_DIR：调试用的任务目录覆盖（跑一套假任务而不动 ~/.lightty/tasks）
         let override = ProcessInfo.processInfo.environment["LIGHTTY_TASK_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -18,7 +19,7 @@ final class AppState {
             .appendingPathComponent(".lightty/tasks", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.taskStore = TaskStore(directory: dir)
-        self.sessionLibrary = SessionLibrary(fileURL: (taskDirectory != nil || override != nil ? dir : dir.deletingLastPathComponent())
+        self.sessionLibrary = sessionLibrary ?? SessionLibrary(fileURL: (taskDirectory != nil || override != nil ? dir : dir.deletingLastPathComponent())
             .appendingPathComponent(PersistenceFormat.organization.fileName), providers: taskDirectory != nil ? [] : nil)
         // 上次崩溃/强杀留下的 pane 运行时目录在这里回收（按 owner.pid 判活，
         // 不会误删另一个 lightty 实例的）。必须在任何 pane 创建之前跑。
@@ -31,7 +32,7 @@ final class AppState {
     func newWindow(initialPane: PaneView = PaneView()) -> TerminalWindowController {
         let controller = TerminalWindowController(initialPane: initialPane)
         windowControllers.append(controller)
-        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: controller)
+        controller.syncSessionWindow()
         controller.window?.makeKeyAndOrderFront(nil)
         initialPane.focusTerminal()
         return controller

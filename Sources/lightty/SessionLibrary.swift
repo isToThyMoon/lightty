@@ -5,8 +5,38 @@ extension Notification.Name {
     static let lighttySessionLibraryDidChange = Notification.Name("lighttySessionLibraryDidChange")
 }
 
-/// App-owned catalog and user organization. Windows observe snapshots, not provider formats.
+/// Application session model: catalog, organization, pane bindings and window selection.
+/// Views consume SessionChange + value snapshots; only this module reconciles runtime identity.
+/// All state transitions and publications run on the main thread, like PaneStatusStore.
 final class SessionLibrary {
+    private struct ObservedProcess {
+        let external: Bool
+        let source: DispatchSourceProcess
+    }
+    private let hostProcessID: Int32
+    private var observedProcesses: [AgentProcessIdentity: ObservedProcess] = [:]
+    private let statusStore: PaneStatusStore
+    var statusSocketPath: URL { statusStore.socketPath }
+    private var runtime = SessionRuntime()
+    private var recordIndex: [AgentSessionKey: AgentSession] = [:]
+    private var started = false
+    private var pendingChange = SessionChange()
+    private lazy var notifications = Coalescer(.nextTick) { [weak self] in
+        guard let self else { return }
+        let change = self.pendingChange
+        self.pendingChange = SessionChange()
+        guard !change.isEmpty else { return }
+        NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: self,
+                                        userInfo: ["change": change])
+    }
+    private struct MetadataRequest { let baseline: AgentSession?; var attempts: Int }
+    private var metadataRequests: [AgentSessionKey: MetadataRequest] = [:]
+    private let metadataRefreshDelay: TimeInterval
+    private lazy var metadataRefreshes = Coalescer(.after(metadataRefreshDelay)) { [weak self] in
+        guard let self, !self.loading, !self.metadataRequests.isEmpty else { return }
+        for key in self.metadataRequests.keys { self.metadataRequests[key]?.attempts -= 1 }
+        self.refresh()
+    }
     private(set) var records: [AgentSession] = []
     private(set) var organization = SessionOrganization()
     private(set) var errors: [SessionAgent: String] = [:]
@@ -37,9 +67,16 @@ final class SessionLibrary {
         refresh()
     }
 
-    init(fileURL: URL, providers: [SessionCatalogProvider]? = nil) {
+    init(fileURL: URL, providers: [SessionCatalogProvider]? = nil,
+         statusStore: PaneStatusStore = .shared, metadataRefreshDelay: TimeInterval = 1.5,
+         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier) {
+        self.hostProcessID = hostProcessID
         self.fileURL = fileURL
         self.providers = providers
+        self.statusStore = statusStore
+        self.metadataRefreshDelay = metadataRefreshDelay
+        NotificationCenter.default.addObserver(self, selector: #selector(statusDidChange(_:)),
+            name: .lighttyPaneStatusDidChange, object: nil)
         diskQueue.async { [weak self] in
             do {
                 let value: SessionOrganization
@@ -60,6 +97,128 @@ final class SessionLibrary {
                 }
             }
         }
+    }
+
+    /// Application lifecycle, never view visibility. Calling start again has no effects.
+    func start() {
+        guard !started else { return }
+        started = true
+        if !loaded, !loading { refresh() }
+        else { hydrateAssociatedSessions() }
+    }
+
+    func paneState(for id: UUID) -> PaneSessionState? { runtime.panes[id] }
+    func markRead(_ id: UUID) { statusStore.markRead(id) }
+    var openedSessionKeys: Set<AgentSessionKey> { runtime.openedSessionKeys }
+    func presence(for key: AgentSessionKey) -> SessionPresence {
+        if openedSessionKeys.contains(key) { return .inLightty }
+        if recordIndex[key]?.sourceProcesses.contains(where: { observedProcesses[$0]?.external == true }) == true {
+            return .elsewhere
+        }
+        return .unknown
+    }
+    func openPaneIDs(for key: AgentSessionKey) -> Set<UUID> {
+        Set(runtime.openedPaneIDs.filter { runtime.panes[$0]?.sessionKey == key })
+    }
+    func selectedPane(in window: UUID) -> UUID? { runtime.windows[window]?.selected }
+    func selectedSession(in window: UUID) -> AgentSessionKey? {
+        selectedPane(in: window).flatMap { runtime.panes[$0]?.sessionKey }
+    }
+
+    func updateWindow(_ window: UUID, panes: Set<UUID>, selected: UUID?) {
+        let next = SessionRuntime.Window(panes: panes, selected: selected.flatMap { panes.contains($0) ? $0 : nil })
+        guard runtime.windows[window] != next else { return }
+        let before = openedSessionKeys
+        runtime.windows[window] = next
+        emit(SessionChange(windows: [window], sessions: before.union(openedSessionKeys)))
+    }
+
+    func removeWindow(_ window: UUID) {
+        let before = openedSessionKeys
+        guard runtime.windows.removeValue(forKey: window) != nil else { return }
+        emit(SessionChange(windows: [window], sessions: before.union(openedSessionKeys)))
+    }
+
+    func registerPane(_ id: UUID, name: String, directory: String?) {
+        precondition(runtime.inputs[id] == nil, "A pane must be registered exactly once")
+        runtime.inputs[id] = .init(name: name, directory: directory)
+        statusStore.attach(id)
+        reconcilePane(id)
+    }
+
+    func removePane(_ id: UUID) {
+        runtime.inputs.removeValue(forKey: id)
+        reconcilePane(id)
+        for (window, state) in runtime.windows where state.panes.contains(id) {
+            updateWindow(window, panes: state.panes.subtracting([id]),
+                         selected: state.selected == id ? nil : state.selected)
+        }
+        statusStore.detach(id)
+    }
+
+    func associate(_ binding: PaneSessionState.Binding, with id: UUID, at date: Date = Date()) {
+        guard runtime.inputs[id] != nil else { return }
+        runtime.inputs[id]?.intent = binding
+        runtime.inputs[id]?.associatedAt = date
+        runtime.inputs[id]?.supersededStatus = statusStore.status(for: id)
+        runtime.inputs[id]?.exited = false
+        reconcilePane(id)
+        hydrateAssociatedSessions()
+    }
+
+    func renamePane(_ id: UUID, to name: String) {
+        runtime.inputs[id]?.name = name
+        reconcilePane(id)
+    }
+
+    func updateDirectory(_ directory: String?, for id: UUID) {
+        runtime.inputs[id]?.directory = directory
+        reconcilePane(id)
+    }
+
+    func commandFinished(in id: UUID, at date: Date) {
+        guard let input = runtime.inputs[id], date >= input.associatedAt,
+              statusStore.commandFinished(for: id, at: date) else { return }
+        runtime.inputs[id]?.intent = .none
+        reconcilePane(id)
+    }
+
+    func reconcileProcess(in id: UUID, terminalExited: Bool = false) {
+        if terminalExited { runtime.inputs[id]?.exited = true }
+        statusStore.reconcileProcess(for: id)
+        reconcilePane(id)
+    }
+
+    /// A CLI operation/hook invalidates metadata, not just its title. All consumers share the read.
+    /// Official catalogs can lag the hook; bounded retries stop on changed metadata or cancellation.
+    func invalidateMetadata(for key: AgentSessionKey) {
+        metadataRequests[key] = .init(baseline: recordIndex[key], attempts: 5)
+        metadataRefreshes.schedule()
+    }
+
+    @objc private func statusDidChange(_ notification: Notification) {
+        guard PaneStatusStore.source(from: notification) === statusStore else { return }
+        let ids = PaneStatusStore.paneID(from: notification).map { [$0] } ?? Array(runtime.inputs.keys)
+        for id in ids where runtime.inputs[id] != nil {
+            let previous = runtime.panes[id]
+            reconcilePane(id)
+            guard let next = runtime.panes[id], let key = next.sessionKey else { continue }
+            if next.sessionKey != previous?.sessionKey ||
+                (next.status?.state == .done && next.status != previous?.status) {
+                invalidateMetadata(for: key)
+            }
+        }
+    }
+
+    private func reconcilePane(_ id: UUID) {
+        emit(runtime.update(id, status: statusStore.status(for: id),
+                            isUnread: statusStore.unreadActivity(for: id) != nil, records: recordIndex,
+                            home: FileManager.default.homeDirectoryForCurrentUser))
+    }
+
+    private func emit(_ change: SessionChange) {
+        pendingChange.merge(change)
+        if !pendingChange.isEmpty { notifications.schedule() }
     }
 
     func source(for agent: SessionAgent) -> SessionCatalogSource? {
@@ -109,6 +268,8 @@ final class SessionLibrary {
     }
 
     func cancelLoading() {
+        metadataRequests.removeAll()
+        metadataRefreshes.cancel()
         cancellation?.cancel()
         generation += 1
         // Keep the next-page cursor usable after the user cancels an in-flight page.
@@ -133,6 +294,8 @@ final class SessionLibrary {
                     self.loading = self.activeRequests > 0
                     self.reconcileDeletedSessions()
                     self.publish()
+                    self.hydrateAssociatedSessions()
+                    self.settleMetadataRequests()
                 }
                 switch result {
                 case .success(let page):
@@ -207,7 +370,95 @@ final class SessionLibrary {
     }
 
     private func publish() {
-        NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: self)
+        let next = Dictionary(records.map { ($0.key, $0) }, uniquingKeysWith: { _, new in new })
+        let changed = Set(recordIndex.keys).union(next.keys).filter { recordIndex[$0] != next[$0] }
+        recordIndex = next
+        observeSourceProcesses()
+        if !changed.isEmpty {
+            for id in runtime.inputs.keys { reconcilePane(id) }
+        }
+        emit(SessionChange(catalog: true, sessions: changed))
+    }
+
+    private func observeSourceProcesses() {
+        let identities = recordIndex.values.reduce(into: Set<AgentProcessIdentity>()) { $0.formUnion($1.sourceProcesses) }
+        for (identity, observation) in observedProcesses where !identities.contains(identity) {
+            observation.source.cancel()
+            observedProcesses.removeValue(forKey: identity)
+        }
+        for identity in identities where observedProcesses[identity] == nil {
+            guard identity.liveness == .running, let external = isExternalProcess(identity) else { continue }
+            let source = DispatchSource.makeProcessSource(identifier: identity.pid, eventMask: .exit, queue: .main)
+            observedProcesses[identity] = .init(external: external, source: source)
+            source.setEventHandler { [weak self] in self?.sourceProcessExited(identity) }
+            source.activate()
+            // The process may exit between inspection and registering the kernel notification.
+            if identity.liveness == .exited { sourceProcessExited(identity) }
+        }
+    }
+
+    /// Record ownership while the process tree exists; closing a pane never reclassifies its
+    /// process as external. An unreadable ancestry is unknown, not evidence of another terminal.
+    private func isExternalProcess(_ identity: AgentProcessIdentity) -> Bool? {
+        // A common ancestor also proves separate process trees; inspecting launchd or another
+        // protected system ancestor is unnecessary. Keep start times to avoid PID-reuse matches.
+        var hostAncestors = Set<AgentProcessIdentity>()
+        var ancestor = AgentProcessIdentity.parent(of: hostProcessID)
+        for _ in 0..<64 {
+            guard let pid = ancestor, let process = AgentProcessIdentity.read(pid),
+                  hostAncestors.insert(process).inserted else { break }
+            ancestor = AgentProcessIdentity.parent(of: pid)
+        }
+        var pid = identity.pid
+        var visited = Set<Int32>()
+        for _ in 0..<64 {
+            if pid == hostProcessID { return false }
+            if pid == 1 { return true }
+            if let process = AgentProcessIdentity.read(pid), hostAncestors.contains(process) { return true }
+            guard pid > 1, visited.insert(pid).inserted,
+                  let parent = AgentProcessIdentity.parent(of: pid) else { return nil }
+            pid = parent
+        }
+        return nil
+    }
+
+    private func sourceProcessExited(_ identity: AgentProcessIdentity) {
+        guard let observation = observedProcesses.removeValue(forKey: identity) else { return }
+        observation.source.cancel()
+        let affected = Set(recordIndex.values.filter { $0.sourceProcesses.contains(identity) }.map(\.key))
+        emit(SessionChange(sessions: affected))
+    }
+
+    /// Restored or invalidated sessions need not be on page one. Follow cursors until the
+    /// current read reaches their records, the source ends or fails; cached data is not a fresh read.
+    private func hydrateAssociatedSessions() {
+        guard started, loaded, !loading else { return }
+        let requested = Set(runtime.panes.values.compactMap(\.sessionKey)).union(metadataRequests.keys)
+        let missing = requested.filter { key in
+            if recordIndex[key] == nil { return true }
+            guard metadataRequests[key] != nil else { return false }
+            return ![false, true].contains { archived in
+                seen[Query(agent: key.agent, archived: archived)]?.contains(key) == true
+            }
+        }
+        let agents = Set(missing.filter { key in
+            errors[key.agent] == nil && source(for: key.agent)?.root.standardizedFileURL.path == key.sourceRoot
+        }.map(\.agent))
+        for provider in activeProviders where agents.contains(provider.source.agent) {
+            for archived in [false, true] {
+                let query = Query(agent: provider.source.agent, archived: archived)
+                if let cursor = cursors[query] { request(provider, archived: archived, cursor: cursor) }
+            }
+        }
+        if activeRequests > 0 { loading = true; publish() }
+    }
+
+    private func settleMetadataRequests() {
+        guard !loading else { return }
+        metadataRequests = metadataRequests.filter { key, request in
+            request.attempts > 0 && recordIndex[key] == request.baseline
+        }
+        if !metadataRequests.isEmpty { metadataRefreshes.schedule() }
     }
     private func reconcileDeletedSessions() {
         guard !loading, !saving, organizationReady, storageError == nil else { return }
@@ -232,7 +483,11 @@ final class SessionLibrary {
         deletedKeys.removeAll()
         if !removed.isEmpty { updateOrganization { $0.forgetSessions(removed) } }
     }
-    deinit { cancellation?.cancel() }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        cancellation?.cancel()
+        observedProcesses.values.forEach { $0.source.cancel() }
+    }
 }
 
 private final class CatalogCancellation {

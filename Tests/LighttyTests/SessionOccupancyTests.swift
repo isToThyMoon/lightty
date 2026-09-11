@@ -118,7 +118,7 @@ final class SessionOccupancyTests: XCTestCase {
     }
 
     /// 一次问出「哪些会话正开着」——列表要在点下去之前标注，逐条问 N 次不现实。
-    func testOpenSessionIDsAreCollectedInOneScan() {
+    func testOpenSessionPIDsAreCollectedInOneScan() {
         let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
         let root = "/fixture/.codex"
         var text = "p1\0ccodex\0\nf3\0au\0n\(root)/sessions/2026/09/09/rollout-2026-09-09T00-00-00-\(id).jsonl\0\n"
@@ -126,11 +126,11 @@ final class SessionOccupancyTests: XCTestCase {
         // 只读打开不算证据；别的命令打开也不算。
         text += "p3\0ccodex\0\nf5\0ar\0n\(root)/sessions/rollout-y-11111111-1111-1111-1111-111111111111.jsonl\0\n"
         text += "p4\0ccat\0\nf6\0au\0n\(root)/sessions/rollout-z-22222222-2222-2222-2222-222222222222.jsonl\0\n"
-        XCTAssertEqual(SessionOccupancy.decodeOpenSessionIDs(Data(text.utf8), agent: .codex, root: root),
-                       [id, other])
+        XCTAssertEqual(SessionOccupancy.decodeOpenSessionPIDs(Data(text.utf8), agent: .codex, root: root),
+                       [id: [1], other: [2]])
         // 不是会话记录的文件不算。
         let noise = "p1\0ccodex\0\nf3\0au\0n\(root)/config.toml\0\n"
-        XCTAssertTrue(SessionOccupancy.decodeOpenSessionIDs(Data(noise.utf8), agent: .codex, root: root).isEmpty)
+        XCTAssertTrue(SessionOccupancy.decodeOpenSessionPIDs(Data(noise.utf8), agent: .codex, root: root).isEmpty)
     }
 
     /// codex 没有活会话表，所以就算传了可执行文件路径也只能走文件表那条路。

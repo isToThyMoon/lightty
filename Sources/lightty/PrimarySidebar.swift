@@ -9,7 +9,7 @@ enum PrimarySidebarMode: String, Codable, CaseIterable {
     }
 }
 
-/// Stable panel chrome; mode contents own their own data and interactions.
+/// Stable panel chrome; mode contents present shared app models and own only their UI state.
 final class PrimarySidebar: NSView {
     var onRequestClose: (() -> Void)?
     var onModeChanged: ((PrimarySidebarMode) -> Void)?

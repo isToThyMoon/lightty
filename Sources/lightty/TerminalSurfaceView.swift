@@ -97,6 +97,9 @@ final class TerminalSurfaceView: NSView {
     /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
+    /// Viewing is a user event, not a focus-state transition: clicking/typing in an
+    /// already-focused terminal must acknowledge a completion received since then.
+    var onInteraction: (() -> Void)?
     var onWorkingDirectoryChange: ((String?) -> Void)?
 
     private(set) var currentWorkingDirectory: String?
@@ -378,20 +381,27 @@ final class TerminalSurfaceView: NSView {
 
     // MARK: - 焦点与 AppKit 局部事件
 
+    func focus() {
+        guard let window else { return }
+        let alreadyFocused = window.firstResponder === self
+        if window.makeFirstResponder(self), alreadyFocused { onInteraction?() }
+    }
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result, let surface {
-            ghostty_surface_set_focus(surface, true)
+        if result {
+            if let surface { ghostty_surface_set_focus(surface, true) }
             onFocusChange?(true)
+            onInteraction?()
         }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result, let surface {
+        if result {
             suppressNextLeftMouseUp = false
-            ghostty_surface_set_focus(surface, false)
+            if let surface { ghostty_surface_set_focus(surface, false) }
             onFocusChange?(false)
         }
         return result
@@ -444,6 +454,7 @@ final class TerminalSurfaceView: NSView {
     // MARK: - 键盘（直接对齐 Ghostty SurfaceView_AppKit）
 
     override func keyDown(with event: NSEvent) {
+        onInteraction?()
         guard let surface else {
             interpretKeyEvents([event])
             return
@@ -833,6 +844,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onInteraction?()
         guard let surface else { return }
         _ = ghostty_surface_mouse_button(
             surface,
@@ -928,6 +940,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        onInteraction?()
         guard let surface else { return }
         var x = event.scrollingDeltaX
         var y = event.scrollingDeltaY
@@ -1048,14 +1061,16 @@ final class TerminalSurfaceView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
+        onInteraction?()
         performBindingAction("paste_from_clipboard")
     }
 
     @objc func pasteAsPlainText(_ sender: Any?) {
-        performBindingAction("paste_from_clipboard")
+        paste(sender)
     }
 
     @objc func pasteSelection(_ sender: Any?) {
+        onInteraction?()
         performBindingAction("paste_from_selection")
     }
 
@@ -1427,6 +1442,7 @@ extension TerminalSurfaceView: NSTextInputClient {
 
     func insertText(_ string: Any, replacementRange: NSRange) {
         guard NSApp.currentEvent != nil else { return }
+        onInteraction?()
 
         let characters: String
         switch string {

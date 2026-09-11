@@ -249,7 +249,7 @@
 
 "Handoff tasks" = "Handoff 任务";
 "Sessions" = "Sessions 会话";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "以task启动agent，试试说：“总结task”";
+"Start an agent with a task. Try saying: “Summarize the task.”" = "启动 Agent 时自动注入任务\n试着说：“总结交接文档”";
 "Click to resume your last session." = "点击继续上次会话";
 "Primary sidebar" = "第一侧栏";
 "Manage handoff tasks" = "管理 Handoff 任务";

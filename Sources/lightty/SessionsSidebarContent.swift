@@ -1,10 +1,6 @@
 import AppKit
 import LighttyCore
 
-extension Notification.Name {
-    static let lighttyTerminalSelectionDidChange = Notification.Name("lighttyTerminalSelectionDidChange")
-}
-
 final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     /// internal 而非 private：`SidebarState` 带着它，而渲染状态是这个模块对测试的
     /// 断言面——测试断言值，不必遍历视图树反推显示了什么。
@@ -36,7 +32,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private let more = NSButton(title: L("Load more sessions"), target: nil, action: nil)
     private let management = NSButton()
     /// 刷新/取消同一个按钮：它们是同一件事的两个状态，摆两个按钮会有一个永远是灰的。
-    private let refresh = NSButton()
+    private let refresh = RefreshButton()
     private let projectMore = NSButton()
     private let projectHeading = SidebarDisclosureButton(title: L("Projects"))
     private let refreshProgress = NSProgressIndicator()
@@ -49,7 +45,6 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private var renderedProjectNames: [UUID: String] = [:]
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private var sectionDisclosureRequested = false
-    private var openedSessionKeys: Set<AgentSessionKey> = []
     private var synchronizingSelection = false
 
     init(library: SessionLibrary, searchMode: Bool = false) {
@@ -83,11 +78,6 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         management.setAccessibilityLabel(L("Filter sessions"))
         management.target = self; management.action = #selector(showManagement)
         refresh.target = self; refresh.action = #selector(refreshOrCancel)
-        // 图标定一次就不再换。读取时它自己转起来，身份不变——按钮不该在光标底下变身。
-        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("Refresh"))
-        refresh.toolTip = L("Refresh")
-        refresh.setAccessibilityLabel(L("Refresh"))
-        refresh.wantsLayer = true
         projectMore.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: L("Project actions"))
         projectMore.setAccessibilityLabel(L("Project actions"))
         projectMore.isEnabled = false
@@ -168,13 +158,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         ])
         if !searchMode { searchRow.heightAnchor.constraint(equalToConstant: 0).isActive = true }
         moreHeight = more.heightAnchor.constraint(equalToConstant: 0)
-        NotificationCenter.default.addObserver(self, selector: #selector(libraryDidChange), name: .lighttySessionLibraryDidChange, object: library)
-        if !searchMode {
-            for name in [Notification.Name.lighttyTerminalSelectionDidChange, .lighttyTasksDidChange,
-                         .lighttyPaneStatusDidChange] {
-                NotificationCenter.default.addObserver(self, selector: #selector(syncTerminalSelection), name: name, object: nil)
-            }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(libraryDidChange(_:)), name: .lighttySessionLibraryDidChange, object: library)
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -188,27 +172,26 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         guard !searchMode, !synchronizingSelection else { return }
         synchronizingSelection = true
         defer { synchronizingSelection = false }
-        let controllers = AppState.shared?.windowControllers ?? []
-        let activeKey = controllers.first { $0.window === window }?.activePane?.displayedSessionKey
-        let opened = Set(controllers.flatMap { $0.panes().compactMap(\.displayedSessionKey) })
+        let activeKey = (window?.windowController as? TerminalWindowController)
+            .flatMap { library.selectedSession(in: $0.sessionWindowID) }
         let index = activeKey.flatMap { key in rows.firstIndex { $0.id == .session(key) } }
         if let index {
             if table.selectedRow != index { table.selectRowIndexes([index], byExtendingSelection: false) }
         } else if table.selectedRow != -1 { table.deselectAll(nil) }
-        guard opened != openedSessionKeys else { return }
-        openedSessionKeys = opened
+    }
+
+    private func refreshSessionPresence(_ keys: Set<AgentSessionKey>) {
+        guard !searchMode, !keys.isEmpty else { return }
         // Update only materialized cells; no catalog query, reloadData, scrolling or layout rebuild.
         table.enumerateAvailableRowViews { _, row in
-            guard self.rows.indices.contains(row),
+            guard self.rows.indices.contains(row), case .session(let session, _) = self.rows[row],
+                  keys.contains(session.key),
                   let cell = self.table.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionListCell else { return }
             self.configure(cell, for: self.rows[row])
         }
     }
-    /// Called on presentation, not on application focus or project/list interactions.
-    /// Search reuses the sidebar's catalog; concurrent presentations share an in-flight read.
-    func activate() {
-        if !library.loading && (!searchMode || !library.loaded) { library.refresh() }
-    }
+    /// Presentation consumes current state. Refresh is an explicit user action or model policy.
+    func activate() { reload() }
     func focusSearch() { window?.makeFirstResponder(search) }
     @objc func toggleProjects() {
         projectsCollapsed.toggle()
@@ -225,23 +208,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
 
     /// 第一侧栏在表格之外呈现的**全部**东西，算成一个可比较的值。
     ///
-    /// **为什么必须先算成值再比较。** 会话库的通知是零载荷的（`SessionLibrary.swift:209`），
-    /// 八个状态字段塌成同一个信号；而且这个视图**没有合流**——`#selector(reload)` 直接
-    /// 接在通知上。一次 `library.refresh()` 至少发五条（`SessionLibrary.swift:96` 一条，
-    /// 加每个 provider 每页完成时 `:135` 的 defer），于是启动首次布局期间 `reload()`
-    /// 要整跑五遍以上。
-    ///
-    /// 在那五遍里反复写视图有过一次实测到的代价：往表格活着的单元格里每次赋一个
-    /// **新造的** `NSImage`，启动 20 秒内必崩（抛「Display Window passes 比窗口里的
-    /// 视图还多」）；赋同一个缓存对象、或只改文字，都不崩。
-    ///
-    /// 别的写入是不是也有同样的代价，**没有验证过**——实测把同一个值重设进
-    /// `NSLayoutConstraint.isActive` 并不会弄脏布局。所以这里的守卫是「别做无谓的活」，
-    /// 不是「已知会崩」。
-    ///
-    /// 所以规矩是：`makeState()` 只算不写，`render(_:)` 是**唯一**写视图的地方，
-    /// 整体相等就一个字节都不写。往侧栏加新的显示项时，加进这个结构，
-    /// 不要在别处直接写视图。
+    /// `SessionChange` 已合并并区分目录与运行态更新；目录分页仍可能分多次完成。
+    /// `makeState()` 只算不写，`render(_:)` 比较后才更新视图，保持现有单元格及编辑状态。
+    /// 相同图片使用缓存对象，避免反复创建 NSImage 引起 AppKit display/layout 循环。
+    /// 新的目录显示项放进这个结构；选中和已打开状态由 `syncTerminalSelection()` 单独更新。
     struct SidebarState: Equatable {
         var rows: [Row]
         /// 会话行显示的位置串要用项目名，而 `Row.session` 只带项目的 UUID。
@@ -259,56 +229,6 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         var canCreateProject: Bool
     }
     private var renderedState: SidebarState?
-
-    /// 转一圈的时长。收尾要对齐到它的整数倍，图标才不会停在半路。
-    private static let spinTurn: CFTimeInterval = 0.9
-    /// 收尾。`debounce`：读取反复起停时，只有最后一次的收尾算数。
-    private lazy var spinStops = Coalescer(.debounce(Self.spinTurn)) { [weak self] in
-        guard let self, !self.library.loading else { return }
-        self.refresh.layer?.removeAnimation(forKey: "refresh.spin")
-    }
-
-    /// 读取时让刷新图标自己转，替代原来那个独立的转圈。
-    /// 尊重「减弱动态效果」：那种情况下不转，改成压暗——动效不能是唯一的信号。
-    private func setRefreshSpinning(_ spinning: Bool) {
-        let key = "refresh.spin"
-        guard let layer = refresh.layer else { return }
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-            layer.removeAnimation(forKey: key)
-            refresh.alphaValue = spinning ? 0.45 : 1
-            return
-        }
-        refresh.alphaValue = 1
-        guard spinning else {
-            // 不立刻摘：摘掉的瞬间图层回到 0 度，看起来就是「转一半没了」。
-            // 等当前这一圈走完再停，所以最少也会转满一圈。
-            guard let animation = layer.animation(forKey: key) else { return }
-            let now = layer.convertTime(CACurrentMediaTime(), from: nil)
-            let elapsed = max(0, now - animation.beginTime)
-            let remaining = Self.spinTurn - elapsed.truncatingRemainder(dividingBy: Self.spinTurn)
-            spinStops.schedule(delay: remaining)
-            return
-        }
-        spinStops.cancel()  // 又开始读了，别让上一轮的收尾把它停掉
-        guard layer.animation(forKey: key) == nil else { return }
-        // 图层绕**锚点**转，而 AppKit 给 layer-backed 视图的锚点不在中心。
-        // 标准写法：改完锚点把 frame 原样设回去，position 会按新锚点重算，视图不跳。
-        // 之后 AppKit 每次布局设的也是 frame，锚点在中心就一直算得对。
-        if layer.anchorPoint != CGPoint(x: 0.5, y: 0.5) {
-            let frame = layer.frame
-            layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-            layer.frame = frame
-        }
-        // 用 `transform.rotation.z` 而不是关键帧矩阵：矩阵是线性插值的，两帧之间走弦
-        // 不走弧，转起来不圆，末尾也对不准正位，摘动画就跳。角度插值没有这个问题。
-        let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
-        rotation.fromValue = 0
-        rotation.toValue = -2 * Double.pi  // macOS 的 y 轴朝上，负角才是顺时针
-        rotation.duration = Self.spinTurn
-        rotation.repeatCount = .infinity
-        rotation.timingFunction = CAMediaTimingFunction(name: .linear)  // 匀速，接得上圈
-        layer.add(rotation, forKey: key)
-    }
 
     /// 唯一写视图的地方。每一处写入都先比较，因为调用它的频率不由这里决定。
     private func render(_ state: SidebarState) {
@@ -357,12 +277,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             // 转圈只在搜索面板里有父视图；侧栏那边它不参与布局，这两行是空转。
             refreshProgress.isHidden = !state.loading
             if state.loading { refreshProgress.startAnimation(nil) } else { refreshProgress.stopAnimation(nil) }
-            // 只改提示语，不换图标：刷新与取消是同一个按钮的两个状态，
-            // 但换成 ✕ 会让它在光标底下变身——读取往往只有几百毫秒，闪一下更难受。
-            let title = state.loading ? L("Cancel") : L("Refresh")
-            refresh.toolTip = title
-            refresh.setAccessibilityLabel(title)
-            setRefreshSpinning(state.loading)
+            refresh.isRefreshing = state.loading
         }
         syncTerminalSelection()
     }
@@ -405,13 +320,14 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     }
     func controlTextDidChange(_ obj: Notification) { reload() }
 
-    /// 会话库的通知合流到下一拍再重算。**只有通知这条路合流**——用户点一下筛选、
-    /// 敲一下搜索框，那几条仍然同步跑，点了要立刻有反应。
-    ///
-    /// 一次 `library.refresh()` 至少发五条通知（`SessionLibrary.publish()` 开始一条，
-    /// 之后每个 provider 每页完成再一条）。合流之后这一串只重算一次。
+    /// 目录通知合并重算；用户筛选、搜索仍同步响应。运行态只更新选择和已打开标记。
     private lazy var libraryChanges = Coalescer(.nextTick) { [weak self] in self?.reload() }
-    @objc private func libraryDidChange() { libraryChanges.schedule() }
+    @objc private func libraryDidChange(_ notification: Notification) {
+        guard let change = SessionChange.from(notification) else { return }
+        refreshSessionPresence(change.sessions)
+        if change.catalog { libraryChanges.schedule() }
+        else { syncTerminalSelection() }
+    }
 
     @objc private func reload() { render(makeState()) }
 
@@ -516,7 +432,11 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             }
         }
         for (index, row) in rows.enumerated() where !inserted.contains(index) && (oldByID[row.id] != row || contentInvalidated) {
-            if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? SessionListCell {
+            if searchMode {
+                // Search uses read-only PaletteRowView, not SessionListCell. Refresh just this
+                // result through AppKit, retaining the table's selection and scroll position.
+                table.reloadData(forRowIndexes: [index], columnIndexes: [0])
+            } else if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? SessionListCell {
                 configure(cell, for: row)
             }
             // Moving a session into/out of a project changes its indentation and height.
@@ -702,8 +622,12 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             cell.setAgent(record.key.agent)
             // 「在别处开着」要在点下去之前就说清楚，否则用户点了才撞上那个提示框。
             // lightty 自己开着优先——那时它在不在别处跑已经不重要了。
-            let openness = openedSessionKeys.contains(record.key) ? L("Open in lightty")
-                : record.sourceRunning ? L("Open in another terminal") : ""
+            let openness: String
+            switch library.presence(for: record.key) {
+            case .inLightty: openness = L("Open in lightty")
+            case .elsewhere: openness = L("Open in another terminal")
+            case .unknown: openness = ""
+            }
             cell.detail.stringValue = [date, openness]
                 .filter { !$0.isEmpty }.joined(separator: " · ")
             cell.location.stringValue = location.hasPrefix("/") ? URL(fileURLWithPath: location).lastPathComponent : location
@@ -759,8 +683,9 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         // 那样它终端里显示的标题也跟着变；会话没开就走官方接口。唯一给不了的情况是
         // 「开着但 agent 正在跑」——这时 PTY 前台是它的输出流，塞不进命令，而从外面
         // 改又会和它自己屏幕上显示的标题不一致。
+        let paneIDs = library.openPaneIDs(for: record.key)
         let openPane = AppState.shared?.runningPanes()
-            .first { $0.pane.displayedSessionKey == record.key }?.pane
+            .first { paneIDs.contains($0.pane.dragIdentifier) }?.pane
         var items: [ShellMenuPopover.Item] = openPane == nil ? [
             .action(L("Continue in new tab")) { [weak self] in self?.open(record) },
             .action(L("Split in current tab")) { [weak self] in self?.open(record, destination: .split) },

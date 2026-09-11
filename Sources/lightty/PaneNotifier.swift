@@ -29,8 +29,8 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var authWaiters: [(Bool) -> Void] = []
     private var authRequestInFlight = false
 
-    /// pane → 上一次见到的状态。只有**跨越**进 done/attention 才提醒，
-    /// 停在 done 上的后续事件不该反复响。
+    /// pane → 上一次见到的未读提醒。只有跨越进未读 done/attention 才提醒；
+    /// 读过的 attention 仍是等待状态，但不再排队发通知。
     private var lastStates: [UUID: PaneActivity] = [:]
     private var pending: [UUID] = []
     private var installed = false
@@ -76,7 +76,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private func seedStates() {
         for (_, pane) in AppState.shared?.runningPanes() ?? [] {
             let id = pane.dragIdentifier
-            lastStates[id] = PaneStatusStore.shared.status(for: id)?.state ?? .idle
+            lastStates[id] = PaneStatusStore.shared.unreadActivity(for: id) ?? .idle
         }
     }
 
@@ -91,7 +91,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         for (controller, pane) in running {
             let id = pane.dragIdentifier
             alive.insert(id)
-            let state = PaneStatusStore.shared.status(for: id)?.state ?? .idle
+            let state = PaneStatusStore.shared.unreadActivity(for: id) ?? .idle
             // 安装时已经把当时所有 pane 录进基线（见 seedStates），所以此刻
             // 第一次见到的 pane 一定是安装之后新建的，它的初始态只能是 idle——
             // 直接跳成 done 是货真价实的跳变，该提醒。
@@ -193,8 +193,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         // 合并窗口 + 授权往返期间 pane 可能已被关掉或已读，按当下重新过滤
         let entries: [(name: String, state: PaneActivity)] = ids.compactMap { id in
             guard let match = running.first(where: { $0.pane.dragIdentifier == id }) else { return nil }
-            let state = PaneStatusStore.shared.status(for: id)?.state ?? .idle
-            guard state == .done || state == .attention else { return nil }
+            guard let state = PaneStatusStore.shared.unreadActivity(for: id) else { return nil }
             return (Self.displayName(for: match.pane), state)
         }
         guard !entries.isEmpty else { return }

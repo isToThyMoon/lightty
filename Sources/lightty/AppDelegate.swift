@@ -47,9 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 两者都幂等、都不在这里申请通知权限（首次真要发通知时才问）。
         StatusBarController.shared.install()
         PaneNotifier.shared.install()
-        // 把状态推给 pane 头与标签页侧栏。做成外部推送而不是每个 pane 自己订阅，
-        // 是为了让 PaneView 不需要知道状态体系的存在。
-        PaneStatusPresenter.shared.install()
+        // Session data has application lifetime; opening a sidebar never bootstraps it.
+        AppState.shared.sessionLibrary.start()
         // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
         // LIGHTTY_SOCK，agent 随时可能打第一发；socket 没绑好那一发就发进虚空。
         PaneStatusStore.shared.start()

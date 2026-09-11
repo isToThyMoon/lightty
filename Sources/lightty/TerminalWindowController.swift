@@ -42,6 +42,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabs.indices.contains(activeTabIndex) ? tabs[activeTabIndex] : nil
     }
     var tabCount: Int { tabs.count }
+    let sessionWindowID = UUID()
+    let sessionLibrary: SessionLibrary
 
     /// Built only when the Dock menu opens; no workspace serialization or observation.
     func appendDockTabItems(to menu: NSMenu) {
@@ -177,6 +179,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private weak var zoomedPane: PaneView?
 
     init(initialPane: PaneView = PaneView()) {
+        sessionLibrary = initialPane.sessionLibrary
         let window = TerminalWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640))
         // 新建 surface 的窗口先保持透明：contentRect 只是占位，真实尺寸要等 core 的
         // INITIAL_SIZE（window-width/height × cell）异步到达。若此时就露脸，用户会
@@ -425,7 +428,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     func selectTab(at index: Int) {
         guard tabs.indices.contains(index) else { return }
-        defer { NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self) }
+        defer { syncSessionWindow() }
         activeTabIndex = index
         for (i, tab) in tabs.enumerated() {
             tab.container.isHidden = i != index
@@ -591,7 +594,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         tabSidebar?.reload()
         WorkspaceStore.shared.scheduleSave()
-        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
+        syncSessionWindow()
+    }
+
+    /// Window layout is local; session membership and selection are app-owned model inputs.
+    func syncSessionWindow() {
+        sessionLibrary.updateWindow(sessionWindowID, panes: Set(panes().map(\.dragIdentifier)),
+                                    selected: activePane?.dragIdentifier)
     }
 
     /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
@@ -667,18 +676,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             guard focused, let self, let pane else { return }
             self.lastFocusedPane = pane
             self.updateWindowTitle(for: pane)
-            self.tabSidebar?.applyActivePane(pane.dragIdentifier)
-            NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
-            // 「已完成」是唯一粘滞的状态，它的语义是**未读**——用户看到了就该消。
-            // 焦点落到这个 pane 上就是"看到了"最直接的证据（docs/specs/pane-status.md
-            // §4.3）。不清的话，下次这个 pane 再跑完就不构成状态跳变，提醒会漏发。
-            PaneStatusStore.shared.markRead(pane.dragIdentifier)
+            self.syncSessionWindow()
         }
-        pane.terminal.onWorkingDirectoryChange = { [weak self, weak pane] directory in
+        pane.terminal.onInteraction = { [weak self, weak pane] in
             guard let self, let pane else { return }
-            self.tabSidebar?.applyWorkingDirectory(
-                directory, for: pane.dragIdentifier)
-            WorkspaceStore.shared.scheduleSave()
+            // A completion stays unread until the next interaction, even when this
+            // terminal was already first responder when the Stop hook arrived.
+            self.sessionLibrary.markRead(pane.dragIdentifier)
         }
     }
 
@@ -1414,7 +1418,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         // 头部行按钮与红绿灯同一水平线。
         let panel = PrimarySidebar(
             headerCenterY: trafficLightRowCenterFromTop(in: window) - ShellStyle.panelInset,
-            mode: primarySidebarMode, library: AppState.shared.sessionLibrary)
+            mode: primarySidebarMode, library: sessionLibrary)
         panel.onModeChanged = { [weak self] mode in
             if self?.searchPalette != nil { self?.dismissSearchPalette() }
             self?.primarySidebarMode = mode
@@ -1783,7 +1787,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let palette: NSView
         let focus: () -> Void
         if primarySidebarMode == .sessions {
-            let sessions = SessionSearchPalette(library: AppState.shared.sessionLibrary)
+            let sessions = SessionSearchPalette(library: sessionLibrary)
             sessions.onDismiss = { [weak self] in self?.dismissSearchPalette() }
             palette = sessions
             focus = { sessions.focusSearch() }
@@ -1844,6 +1848,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             WorkspaceStore.shared.freeze(with: WorkspaceSnapshot(windows: windows))
         }
         AppState.shared.windowControllers.removeAll { $0 === self }
+        sessionLibrary.removeWindow(sessionWindowID)
         // 主动关掉其中一个窗口 = 不要它了：快照只留其余窗口
         if !others.isEmpty { WorkspaceStore.shared.saveNow() }
         // 整窗的绑定 pane 一起消失，其他窗口的侧栏活跃态需要跟着退

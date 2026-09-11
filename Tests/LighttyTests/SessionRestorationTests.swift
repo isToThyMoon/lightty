@@ -7,20 +7,20 @@ import Testing
 @MainActor
 struct SessionAssociationTests {
 
-@Test func sessionTitleIsDerivedWithoutOverwritingTerminalName() {
+@Test(arguments: SessionAgent.allCases)
+func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) async throws {
     _ = NSApplication.shared
     if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    for agent in SessionAgent.allCases {
-        let key = AgentSessionKey(agent: agent, sourceRoot: SessionConfigurationLocation.standard.root(for: agent, home: home).path,
-                                  nativeID: "title-fixture")
-        let snapshot = PaneSnapshot(name: "My terminal", agentCWD: home.path, agentAlive: true,
-                                    catalogSession: key, catalogConfiguration: .standard)
-        let pane = PaneView.restored(from: snapshot, locateExecutable: { _ in "/bin/echo" })
+        let f = try SessionModelFixture(agent: agent)
+        defer { f.close() }
+        let key = f.record().key
+        let snapshot = PaneSnapshot(name: "My terminal", agentCWD: f.root.path, agentAlive: true,
+                                    catalogSession: key, catalogConfiguration: .custom(f.root.path))
+        let pane = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
         func record(_ title: String) -> AgentSession {
-            .init(key: key, title: title, workingDirectory: home.path, updatedAt: nil)
+            .init(key: key, title: title, workingDirectory: f.root.path, updatedAt: nil)
         }
-        pane.refreshSessionTitle(records: [record("Conversation")])
+        try await f.load([record("Conversation")])
         #expect(pane.header.title == "Conversation")
         #expect(pane.header.sessionAgent == agent)
         #expect(AgentSessionIcon.image(for: agent)?.isValid == true)
@@ -28,18 +28,16 @@ struct SessionAssociationTests {
         // template 由调用方按明暗着色。
         #expect(AgentSessionIcon.image(for: agent)?.isTemplate == (agent == .codex))
         #expect(pane.snapshot().name == "My terminal")
-        pane.refreshSessionTitle(records: [record("Renamed conversation")])
+        try await f.load([record("Renamed conversation")])
         #expect(pane.header.title == "Renamed conversation")
-        pane.refreshSessionTitle(records: [record("  ")])
+        try await f.load([record("  ")])
         #expect(pane.header.title == "My terminal")
-        let restored = PaneView.restored(from: pane.snapshot(), locateExecutable: { _ in "/bin/echo" })
-        restored.refreshSessionTitle(records: [record("Conversation")])
+        let restored = PaneView.restored(from: pane.snapshot(), sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
+        try await f.load([record("Conversation")])
         #expect(restored.header.title == "Conversation")
-        let unavailable = PaneView.restored(from: snapshot, locateExecutable: { _ in nil })
-        unavailable.refreshSessionTitle(records: [record("Conversation")])
+        let unavailable = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
         #expect(unavailable.header.title == "My terminal")
         #expect(unavailable.header.sessionAgent == nil)
-    }
 }
 
 @MainActor
@@ -94,7 +92,9 @@ struct SessionAssociationTests {
         // Explicit default-looking Claude paths must remain explicit, too.
         let location = SessionConfigurationLocation.custom(root.path)
         let key = AgentSessionKey(agent: agent, sourceRoot: root.path, nativeID: "ordinary-launch")
-        let pane = PaneView(statusStore: store)
+        let catalog = SessionModelCatalog(root: root, agent: agent)
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"), providers: [catalog], statusStore: store)
+        let pane = PaneView(sessionLibrary: library)
         let status = PaneStatus(ts: Date(), state: .idle, agent: agent.rawValue,
             sessionID: key.nativeID, sourceRoot: root.path, sourceConfiguration: location,
             cwd: root.path, event: "SessionStart")
@@ -106,7 +106,12 @@ struct SessionAssociationTests {
         #expect(pane.displayedSessionKey == key)
         let terminalName = pane.snapshot().name
         let records = [AgentSession(key: key, title: "Live conversation", workingDirectory: root.path, updatedAt: nil)]
-        pane.refreshSessionTitle(records: records)
+        catalog.records = records
+        library.refresh()
+        let titleDeadline = Date().addingTimeInterval(2)
+        while pane.header.title != "Live conversation", Date() < titleDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         #expect(pane.header.title == "Live conversation")
         let disk = WorkspaceStore(fileURL: root.appendingPathComponent("workspace.json"))
         disk.freeze(with: .init(windows: [.init(activeTabIndex: 0,
@@ -125,7 +130,7 @@ struct SessionAssociationTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(pane.displayedSessionKey == nil)
-        pane.refreshSessionTitle(records: records)
+        try await Task.sleep(for: .milliseconds(20))
         #expect(pane.header.title == terminalName)
         #expect(pane.header.sessionAgent == nil)
         #expect(!pane.snapshot().agentAlive)
@@ -138,7 +143,9 @@ struct SessionAssociationTests {
     let key = AgentSessionKey(agent: .codex, sourceRoot: home.appendingPathComponent(".codex").path, nativeID: "missing-cli")
     let snapshot = PaneSnapshot(name: "Unavailable", agentCWD: home.path, agentAlive: true,
                                 catalogSession: key, catalogConfiguration: .standard)
-    let pane = PaneView.restored(from: snapshot, locateExecutable: { _ in nil })
+    let f = try SessionModelFixture()
+    defer { f.close() }
+    let pane = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
     #expect(pane.displayedSessionKey == nil)
     #expect(pane.terminal.launchConfiguration.initialInput == nil)
     #expect(pane.snapshot().catalogSession == key)

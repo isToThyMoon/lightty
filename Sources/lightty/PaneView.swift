@@ -30,79 +30,57 @@ struct PaneIdentityMorphGeometry {
 /// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
-    private enum SessionAttachment {
-        case attached(PaneSessionAssociation)
-        case unavailable(PaneSessionAssociation)
-
-        var association: PaneSessionAssociation {
-            switch self {
-            case .attached(let association), .unavailable(let association): return association
-            }
+    let sessionLibrary: SessionLibrary
+    var sessionState: PaneSessionState {
+        guard let state = sessionLibrary.paneState(for: dragIdentifier) else {
+            preconditionFailure("A live PaneView must be registered in its session model")
         }
+        return state
     }
-    private var sessionAttachment: SessionAttachment?
-    private var associationEstablishedAt = Date()
-    private let statusStore: PaneStatusStore
-    /// Persist the terminal's own name, never the derived conversation title.
-    private var terminalName = ""
     private var needsWindowNumber = true
 
     func assignWindowNumber(_ number: Int) {
         guard needsWindowNumber else { return }
         needsWindowNumber = false
-        terminalName = L("Terminal %d", number)
-        refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
+        sessionLibrary.renamePane(dragIdentifier, to: L("Terminal %d", number))
+        applySessionState()
     }
 
-    /// - Returns: 会话标题有没有落地。`false` 有两种情形：这个 pane 里根本没有会话，
-    ///   或者会话在，但库里那条记录的标题还是空的——**agent 是一轮结束之后才把标题
-    ///   写进自己目录的，拉库那一下常常赶在它前面**。调用方据此决定要不要再拉一次，
-    ///   见 `PaneStatusPresenter`。
-    @discardableResult
-    func refreshSessionTitle(records: [AgentSession]) -> Bool {
-        let sessionTitle = displayedSessionKey.flatMap { key in
-            records.first { $0.key == key }?.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let resolved = sessionTitle.flatMap { $0.isEmpty ? nil : $0 }
-        let title = resolved ?? terminalName
-        let agent = displayedSessionKey?.agent
-        guard header.title != title || header.sessionAgent != agent else { return resolved != nil }
-        header.sessionAgent = agent
-        header.title = title
-        refreshIdentityPanel()
-        onMetadataChange?(self)
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-        return resolved != nil
+    @objc private func sessionsDidChange(_ notification: Notification) {
+        guard SessionChange.from(notification)?.panes[dragIdentifier] != nil else { return }
+        applySessionState()
+    }
+
+    /// Rendering has no model mutations or secondary notifications.
+    private func applySessionState() {
+        let state = sessionState
+        let metadataChanged = header.title != state.title || header.sessionAgent != state.sessionKey?.agent
+        if header.sessionAgent != state.sessionKey?.agent { header.sessionAgent = state.sessionKey?.agent }
+        if header.title != state.title { header.title = state.title }
+        header.apply(state.status, isUnread: state.isUnread)
+        if metadataChanged { refreshIdentityPanel() }
+        identityPanel?.applyStatusDot(header.activityDotColor)
+        if metadataChanged { onMetadataChange?(self) }
     }
 
     /// Establish identity atomically, before installing the pane in a window.
     func associateSession(_ association: PaneSessionAssociation) {
-        sessionAttachment = .attached(association)
-        associationEstablishedAt = Date()
-        refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
-        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
+        sessionLibrary.associate(.attached(association), with: dragIdentifier)
+        applySessionState()
         WorkspaceStore.shared.scheduleSave()
     }
 
     var sessionAssociation: PaneSessionAssociation? {
-        PaneSessionAssociation.resolve(status: statusStore.status(for: dragIdentifier),
-            fallback: sessionAttachment?.association, processExited: terminal.surface != nil && terminal.processExited,
-            candidates: AppState.shared?.sessionLibrary.records.map(\.key) ?? [],
-            home: FileManager.default.homeDirectoryForCurrentUser)
+        sessionState.binding.association
     }
     /// A known terminal/session association, not a guess based on title or working directory.
     var displayedSessionKey: AgentSessionKey? {
-        // Missing CLI/cwd preserves the restore intent, but an ordinary shell is not "Open".
-        if case .unavailable = sessionAttachment, statusStore.status(for: dragIdentifier) == nil { return nil }
-        return sessionAssociation?.key
+        sessionState.sessionKey
     }
 
     /// agent 正在跑的时候不能往 PTY 里塞东西：那一刻前台是它自己的输出流。
     var acceptsInjectedCommand: Bool {
-        switch statusStore.status(for: dragIdentifier)?.state {
-        case .thinking, .tool: return false
-        default: return true
-        }
+        sessionState.acceptsInput
     }
 
     /// 让 agent 自己改会话名——把 `/rename <名字>` 送进这个 pane。
@@ -126,9 +104,7 @@ final class PaneView: NSView {
         terminal.sendText(input)
         terminal.sendReturn()
         // `/rename` 未必触发 Stop 钩子，指望不上状态变化那条刷新路径，这里自己补一次。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            AppState.shared?.sessionLibrary.refresh()
-        }
+        if let key = displayedSessionKey { sessionLibrary.invalidateMetadata(for: key) }
         return true
     }
 
@@ -168,18 +144,17 @@ final class PaneView: NSView {
         return true
     }
 
-    func reconcileSessionProcess() { statusStore.reconcileProcess(for: dragIdentifier) }
+    func reconcileSessionProcess() {
+        sessionLibrary.reconcileProcess(in: dragIdentifier,
+            terminalExited: terminal.surface != nil && terminal.processExited)
+    }
     var sessionProcessIdentity: AgentProcessIdentity? {
-        guard displayedSessionKey != nil else { return nil }
-        return statusStore.status(for: dragIdentifier)?.agentProcess
+        sessionState.processIdentity
     }
 
     private func shellCommandFinished(at date: Date) {
-        guard date >= associationEstablishedAt,
-              statusStore.commandFinished(for: dragIdentifier, at: date) else { return }
-        sessionAttachment = nil
-        refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
-        NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: self)
+        sessionLibrary.commandFinished(in: dragIdentifier, at: date)
+        applySessionState()
         WorkspaceStore.shared.scheduleSave()
     }
     enum Binding {
@@ -219,8 +194,8 @@ final class PaneView: NSView {
         if let top = numbers.max() { paneCounter = max(paneCounter, top) }
     }
 
-    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init(), statusStore: PaneStatusStore = .shared) {
-        self.statusStore = statusStore
+    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init(), sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary) {
+        self.sessionLibrary = sessionLibrary
         let paneID = UUID()
         dragIdentifier = paneID
         // pane 身份下发给 shell：agent 的 hook 是 shell 的孙进程，环境变量沿进程树
@@ -229,12 +204,12 @@ final class PaneView: NSView {
         configuration.envVars["LIGHTTY_PANE_ID"] = paneID.uuidString
         // 状态走 datagram socket 推送，不落文件（状态是用完即弃的中间态）。
         // 路径按本实例 pid 命名，随 spawn 下发——多实例各收各的。
-        configuration.envVars["LIGHTTY_SOCK"] = statusStore.socketPath.path
+        configuration.envVars["LIGHTTY_SOCK"] = sessionLibrary.statusSocketPath.path
         terminal = TerminalSurfaceView(configuration: configuration)
         Self.paneCounter += 1
         super.init(frame: .zero)
-        terminalName = L("Terminal %d", Self.paneCounter)
-        header.title = terminalName
+        sessionLibrary.registerPane(paneID, name: L("Terminal %d", Self.paneCounter), directory: configuration.workingDirectory)
+        header.title = sessionState.title
         header.dot = .unnamed
         header.dragIdentifier = dragIdentifier
         header.onSelect = { [weak self] in self?.focusTerminal() }
@@ -274,24 +249,32 @@ final class PaneView: NSView {
         header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
+            self.reconcileSessionProcess()
             self.onClose?(self)
         }
         terminal.onCommandFinished = { [weak self] date in self?.shellCommandFinished(at: date) }
+        terminal.onWorkingDirectoryChange = { [weak self] directory in
+            guard let self else { return }
+            self.sessionLibrary.updateDirectory(directory, for: self.dragIdentifier)
+            WorkspaceStore.shared.scheduleSave()
+        }
 
         // 运行时目录 + 状态监听。放在 init 而不是各个关闭路径的对称位置，是因为
         // pane 的死法有好几种（✕、cmd+W、关 tab、关窗、shell 退出），deinit 是唯一
         // 能一网打尽的点；跨窗口拖动时 PaneView 本体存活，不会误触发。
-        statusStore.attach(paneID)
+        NotificationCenter.default.addObserver(self, selector: #selector(sessionsDidChange(_:)),
+            name: .lighttySessionLibraryDidChange, object: sessionLibrary)
     }
 
     deinit {
         let paneID = dragIdentifier
-        let statusStore = statusStore
+        NotificationCenter.default.removeObserver(self)
+        let library = sessionLibrary
         // deinit 不保证在主线程；store 是主线程独占的
         if Thread.isMainThread {
-            statusStore.detach(paneID)
+            library.removePane(paneID)
         } else {
-            DispatchQueue.main.async { statusStore.detach(paneID) }
+            DispatchQueue.main.async { library.removePane(paneID) }
         }
     }
 
@@ -364,7 +347,7 @@ final class PaneView: NSView {
         if let shellCWD = terminal.currentWorkingDirectory, !shellCWD.isEmpty {
             return shellCWD
         }
-        if let agentCWD = statusStore.status(for: dragIdentifier)?.cwd,
+        if let agentCWD = sessionState.status?.cwd,
             !agentCWD.isEmpty {
             return agentCWD
         }
@@ -391,10 +374,10 @@ final class PaneView: NSView {
 
     /// Project the same association used by navigation; absence of a hook is not an exit.
     func snapshot() -> PaneSnapshot {
-        statusStore.reconcileProcess(for: dragIdentifier)
+        reconcileSessionProcess()
         let association = sessionAssociation
         return PaneSnapshot(
-            name: terminalName,
+            name: sessionState.terminalName,
             workingDirectory: terminal.currentWorkingDirectory,
             taskFile: taskFileURL?.path,
             agent: association?.key.agent.rawValue,
@@ -408,7 +391,7 @@ final class PaneView: NSView {
     /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
     /// 输入敲进去（此时 cwd 取 agent 自报目录——会话按项目目录归档，换目录找不到）；
     /// 任务文件还在就重新绑定；名字原样回填。恢复依赖缺失时保留意图但不启动 Agent。
-    static func restored(from snapshot: PaneSnapshot,
+    static func restored(from snapshot: PaneSnapshot, sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary,
                          locateExecutable: (String) -> String? = HookInstaller.locateExecutable) -> PaneView {
         var configuration = TerminalSurfaceConfiguration()
         let association = PaneSessionAssociation(snapshot: snapshot, home: FileManager.default.homeDirectoryForCurrentUser)
@@ -423,12 +406,12 @@ final class PaneView: NSView {
             configuration.command = .resume(plan)
             restoredAssociation = association
         }
-        let pane = PaneView(surfaceConfiguration: configuration)
-        if let restoredAssociation { pane.associateSession(restoredAssociation) }
-        else if let association { pane.sessionAttachment = .unavailable(association) }
-        pane.terminalName = snapshot.name
+        let pane = PaneView(surfaceConfiguration: configuration, sessionLibrary: sessionLibrary)
+        if let restoredAssociation { sessionLibrary.associate(.restoring(restoredAssociation), with: pane.dragIdentifier) }
+        else if let association { sessionLibrary.associate(.unavailable(association), with: pane.dragIdentifier) }
+        sessionLibrary.renamePane(pane.dragIdentifier, to: snapshot.name)
         pane.needsWindowNumber = false
-        pane.refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
+        pane.applySessionState()
         if let path = snapshot.taskFile {
             let url = URL(fileURLWithPath: path)
             if let task = try? AppState.shared?.taskStore.load(at: url) {
@@ -647,6 +630,7 @@ final class PaneView: NSView {
             taskName: header.titleOfBoundTask,
             dot: header.dot.color,
             agent: header.sessionAgent)
+        panel.applyStatusDot(header.activityDotColor)
     }
 
 
@@ -655,15 +639,13 @@ final class PaneView: NSView {
 
     func rename(to name: String) {
         needsWindowNumber = false
-        terminalName = name
-        refreshSessionTitle(records: AppState.shared?.sessionLibrary.records ?? [])
-        onMetadataChange?(self)
-        // 标签页列的 pane 行显示 pane 名，改名后需要活地图刷新
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        sessionLibrary.renamePane(dragIdentifier, to: name)
+        applySessionState()
+        WorkspaceStore.shared.scheduleSave()
     }
 
     func focusTerminal() {
-        window?.makeFirstResponder(terminal)
+        terminal.focus()
     }
 
     // MARK: - 跳转落点提示

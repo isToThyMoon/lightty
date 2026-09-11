@@ -148,7 +148,8 @@ else
     codesign --force --sign - "$APP/Contents/MacOS/lightty-hook"
     codesign --force --sign - "$APP"
 fi
-codesign --verify --strict "$APP" && echo "  signature OK"
+codesign --verify --strict "$APP"
+echo "  signature OK"
 
 # ── DMG（可选）─────────────────────────────────────────────────────────────
 if [ "${MAKE_DMG:-0}" = "1" ]; then

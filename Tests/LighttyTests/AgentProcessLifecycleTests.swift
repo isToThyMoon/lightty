@@ -16,7 +16,8 @@ extension SessionAssociationTests {
         let store = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lt-\(UUID().uuidString).sock"))
         #expect(store.start())
         defer { store.stop() }
-        let pane = PaneView(statusStore: store)
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"), providers: [], statusStore: store)
+        let pane = PaneView(sessionLibrary: library)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sleep")
         process.arguments = ["30"]

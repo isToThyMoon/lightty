@@ -47,16 +47,17 @@ extension SessionAssociationTests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let previous = AppState.shared
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-    AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
+    let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
+        providers: [FocusCatalog(source: .init(agent: .claude, root: root, executable: "/bin/false"))])
+    AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false, sessionLibrary: library)
     if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
     let controller = TerminalWindowController()
     AppState.shared.windowControllers = [controller]
     defer { controller.window?.close() }
-    let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
-        providers: [FocusCatalog(source: .init(agent: .claude, root: root, executable: "/bin/false"))])
     let content = SessionsSidebarContent(library: library)
     controller.window?.contentView?.addSubview(content)
     content.frame = NSRect(x: 0, y: 0, width: 280, height: 600)
+    library.start()
     content.activate()
     let deadline = Date().addingTimeInterval(2)
     while (!library.loaded || library.loading) && Date() < deadline {
@@ -68,6 +69,11 @@ extension SessionAssociationTests {
     try await Task.sleep(for: .milliseconds(50))
     func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
     let table = try #require(descendants(content).compactMap { $0 as? NSTableView }.first)
+    func expectSelection(_ row: Int) async throws {
+        let deadline = Date().addingTimeInterval(1)
+        while table.selectedRow != row, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(table.selectedRow == row)
+    }
     let record = try #require(library.records.first)
     let pane = try #require(controller.activePane)
     pane.associateSession(.init(key: record.key, configuration: .custom(root.path), workingDirectory: root.path))
@@ -75,9 +81,9 @@ extension SessionAssociationTests {
     // Simulate the old click-owned selection, then switch to an unrelated shell.
     table.selectRowIndexes([table.numberOfRows - 1], byExtendingSelection: false)
     controller.addTab(initialPane: PaneView(), installPane: false)
-    #expect(table.selectedRow == -1)
+    try await expectSelection(-1)
     controller.selectTab(at: 0)
-    #expect(table.selectedRow == table.numberOfRows - 1)
+    try await expectSelection(table.numberOfRows - 1)
     controller.selectTab(at: 1)
     var showedModal = false
     let watchdog = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
@@ -93,27 +99,27 @@ extension SessionAssociationTests {
     #expect(descendants(openCell).compactMap { $0 as? NSTextField }
         .contains { $0.stringValue.contains(L("Open in lightty")) })
     pane.terminal.commandFinished(at: Date())
-    #expect(table.selectedRow == -1)
+    try await expectSelection(-1)
     #expect(pane.displayedSessionKey == nil)
     #expect(!pane.snapshot().agentAlive)
     pane.associateSession(.init(key: record.key, configuration: .custom(root.path), workingDirectory: root.path))
-    #expect(table.selectedRow == table.numberOfRows - 1)
+    try await expectSelection(table.numberOfRows - 1)
     // Same Agent and native ID in a different source must not match.
     pane.associateSession(.init(key: .init(agent: .claude, sourceRoot: root.appendingPathComponent("other").path,
         nativeID: record.key.nativeID), configuration: .custom(root.appendingPathComponent("other").path), workingDirectory: root.path))
-    #expect(table.selectedRow == -1)
+    try await expectSelection(-1)
     pane.associateSession(.init(key: record.key, configuration: .custom(root.path), workingDirectory: root.path))
-    #expect(table.selectedRow == table.numberOfRows - 1)
+    try await expectSelection(table.numberOfRows - 1)
     // Split focus also clears selection when the focused pane is an ordinary shell.
     let split = PaneView()
     controller.addPaneToActiveTab(split)
     split.terminal.onFocusChange?(true)
-    #expect(table.selectedRow == -1)
+    try await expectSelection(-1)
     controller.reveal(pane: pane)
     pane.terminal.onFocusChange?(true)
-    #expect(table.selectedRow == table.numberOfRows - 1)
+    try await expectSelection(table.numberOfRows - 1)
     controller.closeTab(at: 0)
-    #expect(table.selectedRow == -1)
+    try await expectSelection(-1)
     let closedCell = try #require(content.tableView(table, viewFor: table.tableColumns.first, row: table.numberOfRows - 1))
     #expect(!descendants(closedCell).compactMap { $0 as? NSTextField }
         .contains { $0.stringValue.contains(L("Open in lightty")) })

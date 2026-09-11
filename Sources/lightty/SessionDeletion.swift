@@ -11,9 +11,7 @@ enum SessionDeletion {
               library.organizationReady, library.storageError == nil,
               let source = library.source(for: session.key.agent) else { return }
         for entry in AppState.shared.runningPanes() { entry.pane.reconcileSessionProcess() }
-        guard !AppState.shared.runningPanes().contains(where: {
-            $0.pane.displayedSessionKey == session.key
-        }), !SessionResumeFlow.isStarting(session.key) else {
+        guard library.openPaneIDs(for: session.key).isEmpty, !SessionResumeFlow.isStarting(session.key) else {
             show(Failure.occupied.localizedDescription, window: window)
             return
         }
@@ -36,7 +34,7 @@ enum SessionDeletion {
                                 acceptingUnknownOccupancy: Bool = false) {
             // Recheck after either confirmation; consent never overrides a known active session.
             for entry in AppState.shared.runningPanes() { entry.pane.reconcileSessionProcess() }
-            guard !AppState.shared.runningPanes().contains(where: { $0.pane.displayedSessionKey == session.key }),
+            guard library.openPaneIDs(for: session.key).isEmpty,
                   !SessionResumeFlow.isStarting(session.key) else {
                 busyAgents.remove(session.key.agent)
                 show(Failure.occupied.localizedDescription, window: window)

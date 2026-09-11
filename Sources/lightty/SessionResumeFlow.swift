@@ -20,8 +20,9 @@ enum SessionResumeFlow {
                      in controller: TerminalWindowController, destination: TerminalLaunchDestination = .tab) {
         guard !SessionDeletion.busyAgents.contains(session.key.agent) else { return }
         for entry in AppState.shared.runningPanes() { entry.pane.reconcileSessionProcess() }
+        let paneIDs = controller.sessionLibrary.openPaneIDs(for: session.key)
         if let existing = AppState.shared.runningPanes().first(where: {
-            $0.pane.displayedSessionKey == session.key
+            paneIDs.contains($0.pane.dragIdentifier)
         }) {
             // Internal navigation does not require a hook-confirmed resume or another Agent process.
             NSApp.activate(ignoringOtherApps: true)
@@ -65,7 +66,7 @@ enum SessionResumeFlow {
                     var configuration = TerminalSurfaceConfiguration()
                     configuration.workingDirectory = plan.workingDirectory
                     configuration.command = .resume(plan)
-                    let pane = PaneView(surfaceConfiguration: configuration)
+                    let pane = PaneView(surfaceConfiguration: configuration, sessionLibrary: controller.sessionLibrary)
                     pane.associateSession(.init(key: session.key, configuration: source.configuration,
                                                 workingDirectory: plan.workingDirectory))
                     switch destination {

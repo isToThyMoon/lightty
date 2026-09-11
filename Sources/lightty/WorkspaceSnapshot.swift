@@ -201,7 +201,7 @@ enum WorkspaceRestorer {
         for window in snapshot.windows where !window.tabs.isEmpty {
             let controller = TerminalWindowController(restoring: window)
             AppState.shared.windowControllers.append(controller)
-            NotificationCenter.default.post(name: .lighttyTerminalSelectionDidChange, object: controller)
+            controller.syncSessionWindow()
             controller.window?.makeKeyAndOrderFront(nil)
             controllers.append(controller)
         }

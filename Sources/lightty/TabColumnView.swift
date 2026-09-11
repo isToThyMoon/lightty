@@ -117,7 +117,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         ])
 
-        // pane 绑定/改名/解绑经 lighttyTasksDidChange 广播；标签页结构变化
+        // Handoff 任务绑定/改名/解绑经 lighttyTasksDidChange 广播；标签页结构变化
         // 由 TerminalWindowController.refreshTabStrip 直接调 reload。
         NotificationCenter.default.addObserver(
             self, selector: #selector(scheduleReload),
@@ -162,23 +162,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: .lighttySessionLibraryDidChange, object: nil)
         if window != nil {
             reload()
-            // 向 presenter 报到而不是自己订阅通知：一次广播要分发到 header、
-            // 灵动岛、侧栏三处，合流在 presenter 里做才只做一次防抖。
-            PaneStatusPresenter.shared.register(column: self)
+            if let library = controller?.sessionLibrary {
+                NotificationCenter.default.addObserver(self, selector: #selector(sessionsDidChange(_:)),
+                    name: .lighttySessionLibraryDidChange, object: library)
+            }
         }
     }
 
-    /// 单 pane 原地更新：通知带着变化的 pane，整列扫一遍是白做的
-    func applyStatus(for paneID: UUID) {
-        paneRows.object(forKey: paneID as NSUUID)?.applyStatus(PaneStatusStore.shared.status(for: paneID))
-    }
-
-    /// 状态原地更新：只改圆点颜色与行底，不动视图树。
-    func applyStatuses() {
-        for case let row as PaneRowView in paneRows.objectEnumerator() ?? NSEnumerator() {
-            row.applyStatus(PaneStatusStore.shared.status(for: row.paneID))
+    @objc private func sessionsDidChange(_ notification: Notification) {
+        guard let change = SessionChange.from(notification), let controller else { return }
+        for id in change.panes.keys {
+            guard let state = controller.sessionLibrary.paneState(for: id) else { continue }
+            paneRows.object(forKey: id as NSUUID)?.applySession(state)
+        }
+        if change.windows.contains(controller.sessionWindowID) {
+            applyActivePane(controller.sessionLibrary.selectedPane(in: controller.sessionWindowID))
         }
     }
 
@@ -187,11 +188,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         for case let row as PaneRowView in paneRows.objectEnumerator() ?? NSEnumerator() {
             row.setActive(row.paneID == paneID)
         }
-    }
-
-    /// shell 的 OSC PWD 更新只改对应 pane 第二行，不重建标签页树。
-    func applyWorkingDirectory(_ directory: String?, for paneID: UUID) {
-        paneRows.object(forKey: paneID as NSUUID)?.applyWorkingDirectory(directory)
     }
 
     private lazy var reloads = Coalescer(.nextTick) { [weak self] in self?.reload() }
@@ -328,20 +324,21 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         isActive: Bool,
         reusing existing: PaneRowView? = nil
     ) -> PaneRowView {
+        let state = pane.sessionState
         if let existing, paneRows.object(forKey: existing.paneID as NSUUID) === existing {
             paneRows.removeObject(forKey: existing.paneID as NSUUID)
         }
         let paneRow = existing ?? PaneRowView(
             paneID: pane.dragIdentifier,
-            name: pane.header.title,
+            name: state.title,
             taskName: pane.header.titleOfBoundTask,
             bound: pane.header.titleOfBoundTask != nil,
             indented: indented,
             isActive: isActive,
-            workingDirectory: pane.terminal.currentWorkingDirectory)
-        paneRow.configure(paneID: pane.dragIdentifier, name: pane.header.title,
+            workingDirectory: state.workingDirectory)
+        paneRow.configure(paneID: pane.dragIdentifier, name: state.title,
             taskName: pane.header.titleOfBoundTask, isActive: isActive,
-            workingDirectory: pane.terminal.currentWorkingDirectory, sessionAgent: pane.header.sessionAgent)
+            workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent)
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
@@ -360,7 +357,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard let self, let paneRow, let pane else { return }
             self.beginPaneRowDrag(source: paneRow, paneID: pane.dragIdentifier, event: event)
         }
-        paneRow.applyStatus(PaneStatusStore.shared.status(for: pane.dragIdentifier))
+        paneRow.applySession(state)
         paneRows.setObject(paneRow, forKey: pane.dragIdentifier as NSUUID)
         return paneRow
     }
@@ -801,12 +798,14 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private var taskName: String?
     private let nameLabel = NSTextField(labelWithString: "")
     private let agentIcon = NSImageView()
+    private var displayedAgent: SessionAgent?
     private var agentIconWidth: NSLayoutConstraint!
     private var agentIconGap: NSLayoutConstraint!
     private let taskLabel = NSTextField(labelWithString: "")
     private let directoryLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "")
+    private let statusLabel = PaneStatusLabel()
     private var status: PaneStatus?
+    private var isUnread = false
     private var terminalWorkingDirectory: String?
     private var activity: PaneActivity? { status?.state }
     private var isActive: Bool
@@ -877,7 +876,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         secondaryStack.spacing = 4
 
         statusLabel.isHidden = true
-        statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         statusLabel.textColor = ShellStyle.secondaryText
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -956,7 +954,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         self.isActive = isActive
         terminalWorkingDirectory = workingDirectory
         status = nil
+        isUnread = false
         nameLabel.stringValue = name
+        displayedAgent = sessionAgent
         agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
         agentIconWidth.constant = sessionAgent == nil ? 0 : 12
         agentIconGap.constant = sessionAgent == nil ? 0 : 5
@@ -970,6 +970,23 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         guard terminalWorkingDirectory != directory else { return }
         terminalWorkingDirectory = directory
         applyMetadataLine()
+    }
+
+    /// Update visible fields in place; metadata changes must not reset hover or activity.
+    func applySession(_ state: PaneSessionState) {
+        if nameLabel.stringValue != state.title {
+            nameLabel.stringValue = state.title
+            applyToolTips()
+        }
+        let agent = state.sessionKey?.agent
+        if displayedAgent != agent {
+            displayedAgent = agent
+            agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
+            agentIconWidth.constant = agent == nil ? 0 : 12
+            agentIconGap.constant = agent == nil ? 0 : 5
+        }
+        applyWorkingDirectory(state.workingDirectory)
+        applyStatus(state.status, isUnread: state.isUnread)
     }
 
     /// 原地更新：这个插槽没有竞争（✕ 在行尾，不抢圆点位），改个颜色就完事。
@@ -989,27 +1006,30 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         var activity: PaneActivity?
         var text: String?
         var cwd: String?
+        var isUnread: Bool
         /// 纯函数，**不另存一份缓存**：缓存要在视图复用时记得清掉，那是一个新的失败
         /// 模式；前后各算一次就没有可失效的东西。
-        init(of status: PaneStatus?) {
+        init(of status: PaneStatus?, isUnread: Bool) {
             activity = status?.state
             text = TabPaneStatusPresentation.text(for: status)
             cwd = status?.cwd
+            self.isUnread = isUnread
         }
     }
 
-    func applyStatus(_ status: PaneStatus?) {
-        let previous = Rendered(of: self.status)
-        let next = Rendered(of: status)
+    func applyStatus(_ status: PaneStatus?, isUnread: Bool) {
+        let previous = Rendered(of: self.status, isUnread: self.isUnread)
+        let next = Rendered(of: status, isUnread: isUnread)
         // 原始状态照存：下面几个 apply 都从 `self.status` 读。
         self.status = status
+        self.isUnread = isUnread
         guard previous != next else { return }
         // 圆点跟真实 activity 走；文字比的是展示值，thinking ↔ tool 不重复写 label。
         if previous.activity != next.activity {
             applyDotColor()
             applyFill()
         }
-        if previous.text != next.text { applyStatusLabel() }
+        if previous.text != next.text || previous.isUnread != next.isUnread { applyStatusLabel() }
         if previous.cwd != next.cwd { applyMetadataLine() }
     }
 
@@ -1019,15 +1039,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// 圆点负责快速扫色，次级文字负责解释语义；不再铺 badge 底色与当前行
     /// 高亮争抢视觉重心。任务名是稳定信息，固定保留在第二行。
     private func applyStatusLabel() {
-        if let text = TabPaneStatusPresentation.text(for: status) {
-            statusLabel.isHidden = false
-            statusLabel.stringValue = text
-        } else {
-            statusLabel.isHidden = true
-            // hidden 不会自动退出 Auto Layout；清空 intrinsic width，
-            // 空闲时把空间还给 pane 名。
-            statusLabel.stringValue = ""
-        }
+        statusLabel.apply(status, isUnread: isUnread)
         applyToolTips()
     }
 
@@ -1066,19 +1078,13 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     private func applyFill() {
-        // 当前 pane 的强调色淡底是全侧栏唯一的填充高亮，压过 hover 与状态底。
-        // `done` 给一层极淡的同色底——侧栏是"哪个 pane 完事了"的扫读面，
-        // 一个 6pt 的点在满屏行里不够抓眼，整行透一点色才扫得出来。
+        // Fill means selection/hover only. Completion is conveyed by the dot and text.
         if isActive {
             layer?.backgroundColor = ShellStyle.navigationTint(0.14)
                 .shellResolvedCGColor(for: effectiveAppearance)
         } else if hovered {
             layer?.backgroundColor = ShellStyle.controlFill
                 .shellResolvedCGColor(for: effectiveAppearance)
-        } else if activity == .done {
-            layer?.backgroundColor = ShellStyle.statusDone
-                .shellResolvedCGColor(for: effectiveAppearance)
-                .copy(alpha: 0.12)
         } else {
             layer?.backgroundColor = NSColor.clear
                 .shellResolvedCGColor(for: effectiveAppearance)

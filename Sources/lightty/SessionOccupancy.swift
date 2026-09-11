@@ -141,35 +141,37 @@ enum SessionOccupancy {
         return found.map { Result.inUse(pid: $0) } ?? .unknown
     }
 
-    /// 一次问出**哪些会话正开着**，而不是逐条问。
+    /// 一次问出**每个会话的具体进程**，保留同一会话多进程的证据，而不是逐条问。
     ///
     /// 列表要在用户点下去之前就标出「在别处开着」，逐条问 N 次不现实；
     /// 一次 `lsof -c <agent>` 实测 0.01 秒、4KB 输出，挂在刷新上不算负担。
     ///
     /// 命令失败返回 nil（「问不出来」），绝不返回空集——空集会被读成「一个都没开」。
-    static func openSessionIDs(agent: SessionAgent, root: String) -> Set<String>? {
+    static func openSessionProcesses(agent: SessionAgent, root: String) -> [String: Set<AgentProcessIdentity>]? {
         guard let data = try? SessionHelperProcess.readPage(
             executable: URL(fileURLWithPath: "/usr/sbin/lsof"),
             arguments: ["-n", "-P", "-b", "-a", "-u", String(getuid()), "-c", agent.rawValue, "-F0pcfan"],
             directory: URL(fileURLWithPath: "/"), environment: ["PATH": "/usr/bin:/bin"],
             cancelled: { false }, timeout: 4, maximumBytes: 4 * 1024 * 1024) else { return nil }
-        return decodeOpenSessionIDs(data, agent: agent, root: root)
+        return decodeOpenSessionPIDs(data, agent: agent, root: root).mapValues { pids in
+            Set(pids.compactMap(AgentProcessIdentity.read))
+        }
     }
 
     /// 单独拆出来是为了能用固定样本测。文件名里的会话 id 是最后 36 个字符，
     /// codex 那边前面还带着时间戳（`rollout-<时间>-<id>.jsonl`）。
-    static func decodeOpenSessionIDs(_ data: Data, agent: SessionAgent, root: String) -> Set<String> {
-        var ids: Set<String> = []
-        forEachWritableSessionFile(data, agent: agent, root: root) { _, name in
+    static func decodeOpenSessionPIDs(_ data: Data, agent: SessionAgent, root: String) -> [String: Set<Int32>] {
+        var processes: [String: Set<Int32>] = [:]
+        forEachWritableSessionFile(data, agent: agent, root: root) { pid, name in
             guard name.hasSuffix(".jsonl") else { return }
             if agent == .codex, !name.hasPrefix("rollout-") { return }
             let stem = String(name.dropLast(".jsonl".count))
             guard stem.count >= 36 else { return }
             let id = String(stem.suffix(36))
             guard UUID(uuidString: id) != nil else { return }
-            ids.insert(id)
+            processes[id, default: []].insert(pid)
         }
-        return ids
+        return processes
     }
 
 }

@@ -63,10 +63,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 每次重建行时问一次。刻意不缓存：这个判断只读内存里的绑定与活动状态，很便宜，
     /// 存一份没有收益。
     ///
-    /// **但"不缓存"并不等于这一行跟得上。** 重建只由 `applyFilter`（打开列表、每敲
-    /// 一个字）触发，面板不监听 `.lighttyPaneStatusDidChange`；面板开着时 agent 转忙，
-    /// 这一行仍然写着可点。真正的守卫在发送前（`PaneView.updateHandoff` 会重新验一遍），
-    /// 送不出去时 `onUpdateHandoff` 返回 false，那一支会当场重建让它变灰。
+    /// PaneView 在统一会话状态变化时推送状态色，触发此行更新；发送前仍重新检查，
+    /// 避免一次点击与后台状态变化之间的竞态。
     var handoffActionProvider: (() -> HandoffAction?)?
 
     /// 岛体背景层：frame 由 PaneView 驱动；第一行身份内容与背景 frame 解耦，
@@ -449,15 +447,13 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         applyColors()
     }
 
-    /// 由 `PaneHeaderView` 在状态变化时直接推入（面板挂在窗口 contentView 上，
-    /// 不在 pane 子树里，header 用「胶囊隐身」这个标记定位到展开中的面板）。
+    /// PaneView renders the same model snapshot into the header and the expanded panel.
     /// `nil` = 回到绑定态静态配色。
     func applyStatusDot(_ color: NSColor?) {
         guard statusDotColor != color else { return }
         statusDotColor = color
         // 状态色变了，「能不能让 Agent 总结」多半也变了（thinking / tool 时不能）。
-        // 重建走 `applyColors` 收口。这条推送是 header 在状态变化时直接打进来的，
-        // 所以第一层这一行跟得上——它原先待的那个列表没有这条通路，只能等下次重建。
+        // 重建走 applyColors 收口，不依赖面板是否在某个窗口子树中。
         applyColors()
     }
 

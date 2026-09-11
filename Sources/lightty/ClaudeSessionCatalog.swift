@@ -58,15 +58,17 @@ struct ClaudeSessionCatalog: SessionCatalogProvider {
     /// 1. **缺失的工作目录**。官方开发包偶尔给不出（实测：34 条里有 2 条 `cwd` 是 null，
     ///    都是当时正在跑的会话）。绝不从项目目录名反解——那个编码不可逆
     ///    （路径里本来就有连字符时还原不回去），猜出来的路径比留空更糟。
-    /// 2. **「正在跑」这件事本身**。有了它，列表能在用户点下去之前就说明这段会话
-    ///    已经在别的终端里开着，而不是点完弹一个框。
+    /// 2. **进程身份**。保留 PID 与启动时间，由统一模型判断所属和退出，
+    ///    不在来源或视图里把“正在跑”直接解释成“在其他终端中打开”。
     ///
     /// 问不出来（命令不在、版本旧、输出改格式）就整段跳过：这两样都是锦上添花，
     /// 不能因为它失败而让列表读不出来。
     private func applyLiveSessions(_ page: SessionCatalogPage) -> SessionCatalogPage {
         guard let live = SessionOccupancy.liveClaudeSessionRows(
             executable: source.executable, root: source.root.path) else { return page }
-        let running = Set(live.map(\.sessionID))
+        let processes = Dictionary(grouping: live, by: \.sessionID).mapValues { rows in
+            Set(rows.compactMap { AgentProcessIdentity.read($0.pid) })
+        }
         let directories = Dictionary(live.compactMap { row in
             row.cwd.map { (row.sessionID, $0) }
         }, uniquingKeysWith: { first, _ in first })
@@ -74,12 +76,12 @@ struct ClaudeSessionCatalog: SessionCatalogProvider {
             sessions: page.sessions.map { session in
                 let id = session.key.nativeID
                 let directory = session.workingDirectory ?? directories[id]
-                let isRunning = running.contains(id)
-                guard directory != session.workingDirectory || isRunning else { return session }
+                let observed = processes[id] ?? []
+                guard directory != session.workingDirectory || !observed.isEmpty else { return session }
                 return AgentSession(key: session.key, title: session.title,
                                     workingDirectory: directory, updatedAt: session.updatedAt,
                                     sourceArchived: session.sourceArchived,
-                                    sourceRunning: isRunning)
+                                    sourceProcesses: observed)
             },
             nextCursor: page.nextCursor)
     }

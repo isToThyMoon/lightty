@@ -13,7 +13,8 @@ function run(command, args) {
   if (result.error || result.status !== 0) throw new Error(`Build command failed: ${command}`);
 }
 run('npm', ['ci', '--prefix', source, '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund']);
-await cp(join(source, 'node_modules'), join(output, 'node_modules'), { recursive: true });
+// Keep npm's relative bin links inside the relocatable helper/app bundle.
+await cp(join(source, 'node_modules'), join(output, 'node_modules'), { recursive: true, verbatimSymlinks: true });
 await cp(join(source, 'list-sessions.mjs'), join(output, 'list-sessions.mjs'));
 await cp(join(source, 'delete-session.mjs'), join(output, 'delete-session.mjs'));
 await cp(join(source, 'rename-session.mjs'), join(output, 'rename-session.mjs'));

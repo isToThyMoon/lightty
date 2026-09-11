@@ -103,7 +103,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // 这一句被调用时面板刚挂上窗口（PaneView 的展开顺序：refresh → addSubview →
         // setCapsuleHidden），正好是把状态色补给灵动岛的时机——PaneView 的
         // refresh(panel:) 传的是静态绑定色，不知道状态。
-        if hidden { syncIdentityPanelDot() }
     }
 
     var dot: Dot = .unnamed {
@@ -266,7 +265,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // 新建 pane / 跨窗口拖动落地：presenter 不知道这一刻，自己向 store 取
-        if window != nil { pullStatus() }
         updateAmbientAnimations()
     }
 
@@ -420,13 +418,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private static let dotPulseKey = "statusPulse"
 
     private var status: PaneStatus?
+    private var isUnread = false
     /// `.done` 落地时如果 pane 不可见，闪烁就白放了——记下来，等可见了补上。
     private var pendingDonePulse = false
 
-    /// 由 `PaneStatusPresenter` 推入。
+    /// PaneView renders the application session model's activity snapshot.
     ///
-    /// pane 自己不订阅通知：状态源是全局的一发广播，每个 pane 挂一个观察者
-    /// 只是把同一次广播摊成 N 次派发，还得在 PaneView 里加订阅代码。
     /// 终端头**真正显示出来**的三样东西：圆点跟状态走，tooltip 用 tool 与 detail。
     ///
     /// 比较它，而不是比较原始状态里的字段：以后往这里加显示项，就必须加进这个值，
@@ -445,11 +442,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         }
     }
 
-    func apply(_ status: PaneStatus?) {
+    func apply(_ status: PaneStatus?, isUnread: Bool = true) {
         // 高频入口：PreToolUse/PostToolUse 一次工具调用就来两发，先挡住无变化的。
-        guard Rendered(of: self.status) != Rendered(of: status) else { return }
+        guard Rendered(of: self.status) != Rendered(of: status) || self.isUnread != isUnread else { return }
         let enteredDone = status?.state == .done && self.status?.state != .done
         self.status = status
+        self.isUnread = isUnread
 
         applyDotColor()
         applyCloseButtonTint()
@@ -457,7 +455,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         // `.attention` 直接复用现成的呼吸环（唯一一处「非人不可」的状态，
         // 值得动用胶囊级的提示；其余状态一律只在圆点里表达）
-        if status?.state == .attention {
+        if status?.state == .attention && isUnread {
             beginCapsuleAttention()
         } else {
             endCapsuleAttention()
@@ -467,17 +465,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // 否则它会晚一步落在一个已经不是 done 的圆点上
         pendingDonePulse = enteredDone || (pendingDonePulse && status?.state == .done)
         updateAmbientAnimations()
-        syncIdentityPanelDot()
-    }
-
-    /// pane 是新建的、或从别的窗口拖过来的：主动向 store 拉一次当前值。
-    /// 这是拉不是订阅——presenter 不知道 pane 什么时候诞生，而 store 一直知道。
-    private func pullStatus() {
-        guard let dragIdentifier else { return }
-        apply(PaneStatusStore.shared.status(for: dragIdentifier))
     }
 
     private var activity: PaneActivity? { status?.state }
+    var activityDotColor: NSColor? {
+        (activity == nil || activity == .idle) ? nil : effectiveDotColor
+    }
 
     private var effectiveDotColor: NSColor {
         ShellStyle.dotColor(bound: dot == .active, activity: activity)
@@ -578,20 +571,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         pulse.duration = ShellStyle.statusDonePulseDuration
         pulse.timingFunction = ShellStyle.easeInOutCubic
         dotView.layer?.add(pulse, forKey: Self.dotPulseKey)
-    }
-
-    /// 灵动岛第一行的圆点与胶囊逐像素同构，颜色也得跟着状态走。
-    ///
-    /// 面板挂在窗口 contentView 上（不在 pane 子树里），header 拿不到直接引用；
-    /// 但「胶囊隐身」正好是「本 header 的面板正开着」的标记，而同一窗口任意时刻
-    /// 至多一个面板展开（面板的 dismiss monitor 会在点到别处时收起），据此定位即可，
-    /// 不必为这一条信息再从 PaneView 牵一根线过来。
-    private func syncIdentityPanelDot() {
-        guard capsuleIsHidden, let host = window?.contentView else { return }
-        for case let panel as PaneIdentityPanel in host.subviews {
-            panel.applyStatusDot(
-                (activity == nil || activity == .idle) ? nil : effectiveDotColor)
-        }
     }
 
     // MARK: - 点击 / 拖拽

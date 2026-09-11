@@ -126,7 +126,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 2))
@@ -177,7 +177,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
                                      providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 3))
@@ -219,7 +219,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Project")] }
         spin { !library.saving }
@@ -254,7 +254,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Empty project")] }
         spin { !library.saving }
@@ -282,7 +282,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Project")
@@ -361,7 +361,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertTrue(descendants(header).compactMap { $0 as? NSProgressIndicator }.isEmpty,
                       "标题行不再放转圈：刷新按钮已经表达了在读")
 
-        content.activate()
+        library.start(); content.activate()
         // 会话库通知合流到下一拍再重算（见 `Coalescer`），所以按钮晚一拍翻。
         // 顺序是确定的：`refresh()` 先把重算排进主队列，provider 的完成回调排在它后面。
         // 真实 app 里主 runloop 一直在转，这一拍是几微秒，看不出来。
@@ -371,7 +371,7 @@ final class PrimarySidebarTests: XCTestCase {
         // 图标不许换：换成 ✕ 会让按钮在光标底下变身。读取时靠它自己旋转来表达。
         XCTAssertTrue(refresh.image === iconAtRest, "读取时不该换图标")
         if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            XCTAssertNotNil(refresh.layer?.animation(forKey: "refresh.spin"), "读取时图标要转起来")
+            XCTAssertNotNil(refreshRotationLayer(in: refresh.layer), "读取时图标要转起来")
         }
         XCTAssertEqual(list.frame, before, "读取不该让列表位移")
         XCTAssertFalse(descendants(content).compactMap { $0 as? NSTextField }
@@ -382,7 +382,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertEqual(refresh.toolTip, L("Refresh"))
         XCTAssertTrue(refresh.image === iconAtRest)
         // 收尾会等当前这一圈走完再摘，所以最少转满一圈；这里等它自己停。
-        spin { refresh.layer?.animation(forKey: "refresh.spin") == nil }
+        spin { refreshRotationLayer(in: refresh.layer) == nil }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, before)
     }
@@ -393,16 +393,25 @@ final class PrimarySidebarTests: XCTestCase {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-elsewhere-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
+        let catalog = SessionModelCatalog(root: root, agent: .claude)
+        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [catalog])
         let content = SessionsSidebarContent(library: library)
         spin { library.organizationReady }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
 
+        let parent = try XCTUnwrap(AgentProcessIdentity.parent(of: ProcessInfo.processInfo.processIdentifier))
+        let external = try XCTUnwrap(AgentProcessIdentity.read(parent))
         let elsewhere = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "a"),
                                      title: "在别处跑着", workingDirectory: root.path,
-                                     updatedAt: Date(), sourceRunning: true)
+                                     updatedAt: Date(), sourceProcesses: [external])
         let idle = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "b"),
                                 title: "没在跑", workingDirectory: root.path, updatedAt: Date())
+        catalog.records = [elsewhere, idle]
+        library.start()
+        spin { !library.loading }
+        XCTAssertEqual(library.records.count, 2)
+        XCTAssertTrue(external.liveness == .running)
+        XCTAssertEqual(library.presence(for: elsewhere.key), .elsewhere)
         XCTAssertTrue(content.detailTextForTesting(elsewhere).contains(L("Open in another terminal")))
         XCTAssertFalse(content.detailTextForTesting(idle).contains(L("Open in another terminal")))
         XCTAssertFalse(content.detailTextForTesting(idle).contains(L("Open in lightty")))
@@ -421,7 +430,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 400),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.loaded && !library.loading }
         spin { content.makeState().rows.count > 10 }
         content.layoutSubtreeIfNeeded()
@@ -449,8 +458,8 @@ final class PrimarySidebarTests: XCTestCase {
                        "刷新不该把列表弹回顶部")
 
         // 开一个终端会广播这几条：它们会把已建单元格整批重配一遍。
-        for name: Notification.Name in [.lighttyTerminalSelectionDidChange,
-                                        .lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+        library.updateWindow(UUID(), panes: [], selected: nil)
+        for name: Notification.Name in [.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
             NotificationCenter.default.post(name: name, object: nil)
         }
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -498,7 +507,8 @@ final class PrimarySidebarTests: XCTestCase {
                       moreHidden: more.isHidden, constraint: moreHeight.isActive,
                       status: status.stringValue)
         for _ in 0..<5 {
-            NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: library)
+            NotificationCenter.default.post(name: .lighttySessionLibraryDidChange, object: library,
+                userInfo: ["change": SessionChange(catalog: true)])
             content.layoutSubtreeIfNeeded()
         }
         XCTAssertTrue(refresh.image === before.image, "状态没变就不该重设图标")
@@ -551,7 +561,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
                                      providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library, searchMode: true)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         content.layoutSubtreeIfNeeded()
         XCTAssertFalse(descendants(content).contains { $0 is NSButton
@@ -567,7 +577,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.loaded && !library.loading }
         for _ in 0..<3 {
             NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
@@ -582,7 +592,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"),
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let sidebar = SessionsSidebarContent(library: library)
-        sidebar.activate()
+        library.start(); sidebar.activate()
         spin { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Mixed")
@@ -640,7 +650,7 @@ final class PrimarySidebarTests: XCTestCase {
         }
     }
 
-    func testRefreshKeepsListTopStableAndOnlyPresentationReloadsCatalog() throws {
+    func testRefreshKeepsListTopStableAndPresentationDoesNotReloadCatalog() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-layout-refresh-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -650,14 +660,14 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        content.activate()
+        library.start(); content.activate()
         spin { library.loaded && !library.loading }
         content.layoutSubtreeIfNeeded()
         let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
         let frame = list.frame
         let records = library.records
         let search = SessionsSidebarContent(library: library, searchMode: true)
-        search.activate()
+        library.start(); search.activate()
         XCTAssertFalse(library.loading, "Search should reuse the already loaded catalog")
         library.refresh()
         XCTAssertTrue(library.loading)
@@ -669,8 +679,8 @@ final class PrimarySidebarTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, frame)
         let reopened = SessionsSidebarContent(library: library)
-        reopened.activate()
-        XCTAssertTrue(library.loading, "Reopening the sidebar should refresh an already loaded catalog")
+        library.start(); reopened.activate()
+        XCTAssertFalse(library.loading, "Reopening a view must not drive the model's synchronization")
         spin { !library.loading }
     }
 
@@ -746,7 +756,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"),
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         var project = SessionProject(name: "Mixed project")
         project.collapsed = true
@@ -777,7 +787,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: file,
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         let project = SessionProject(name: "Mixed project")
         library.updateOrganization { $0.projects = [project] }
@@ -856,7 +866,7 @@ final class PrimarySidebarTests: XCTestCase {
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
         content.frame = NSRect(x: 0, y: 0, width: 280, height: 720)
-        content.activate()
+        library.start(); content.activate()
         spin { library.organizationReady && !library.loading }
         let project = SessionProject(name: "Mixed archive")
         library.updateOrganization { state in
@@ -895,6 +905,7 @@ final class PrimarySidebarTests: XCTestCase {
         library.updateOrganization { $0.projects.append(SessionProject(name: "lightty")) }
         spin { !library.saving }
         let panel = PrimarySidebar(headerCenterY: 20, mode: .sessions, library: library)
+        library.start()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 270, height: 720),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = panel

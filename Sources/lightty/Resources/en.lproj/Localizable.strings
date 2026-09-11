@@ -245,7 +245,7 @@
 
 "Handoff tasks" = "Handoff tasks";
 "Sessions" = "Sessions";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "Start an agent with a task. Try saying: “Summarize the task.”";
+"Start an agent with a task. Try saying: “Summarize the task.”" = "Include the task when starting an agent\nTry saying: “Summarize the handoff”";
 "Click to resume your last session." = "Click to resume your last session.";
 "Primary sidebar" = "Primary sidebar";
 "Manage handoff tasks" = "Manage handoff tasks";

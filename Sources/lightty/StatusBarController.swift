@@ -258,7 +258,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let markAll = NSMenuItem(
             title: L("Mark All as Read"), action: #selector(markAllRead), keyEquivalent: "")
         markAll.target = self
-        markAll.isEnabled = PaneStatusStore.shared.unreadCount > 0
+        markAll.isEnabled = PaneStatusStore.shared.hasUnreadReminders
         menu.addItem(markAll)
 
         let toggle = NSMenuItem(
