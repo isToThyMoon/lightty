@@ -24,8 +24,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      ZIG_VERSION: 0.16.0
       GHOSTTY_REPO: isToThyMoon/ghostty
       GHOSTTY_REF: lightty-patches
       HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
@@ -34,6 +36,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 打包脚本用 rev-list --count 生成 build number
+
+      - name: Verify release toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version)
+          XCODE_BUILD=$(xcodebuild -version | awk '/Build version/ {print $3}')
+          test "$XCODE_BUILD" = "17F113"
+          test "$SDK_VERSION" = "26.5"
+          echo "sdk=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "xcode=$XCODE_BUILD" >> "$GITHUB_OUTPUT"
 
       - name: Checkout ghostty kernel (lightty-patches)
         uses: actions/checkout@v4
@@ -57,13 +71,14 @@ jobs:
             vendor/ghostty/zig-out/share/ghostty
             vendor/ghostty/zig-out/share/terminfo
             vendor/ghostty/zig-out/share/locale
-          key: ghosttykit-v2-${{ steps.kernel.outputs.sha }}
+          # v3 隔离旧 runner 产物；工具链升级自动失效，不能回退到旧 key。
+          key: ghosttykit-v3-macos26-${{ runner.arch }}-xcode${{ steps.toolchain.outputs.xcode }}-sdk${{ steps.toolchain.outputs.sdk }}-zig${{ env.ZIG_VERSION }}-${{ steps.kernel.outputs.sha }}
 
       - name: Install zig
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: ${{ env.ZIG_VERSION }}
 
       - name: Build kernel
         if: steps.kernel-cache.outputs.cache-hit != 'true'
@@ -98,6 +113,9 @@ jobs:
           [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
           MAKE_DMG=1 scripts/package-app.sh "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Verify packaged SDK and deployment target
+        run: bash scripts/verify-release-sdk.sh dist/lightty.app/Contents/MacOS/lightty
 
       - name: Sign update + generate appcast
         if: github.ref_type == 'tag'
