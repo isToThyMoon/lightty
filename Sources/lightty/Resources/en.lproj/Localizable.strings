@@ -30,6 +30,9 @@
 "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier.";
 "Quit lightty" = "Quit lightty";
 "Check for Updates…" = "Check for Updates…";
+"Services" = "Services";
+"No folder to open." = "No folder to open.";
+"Lightty is still starting up. Try again in a moment." = "Lightty is still starting up. Try again in a moment.";
 "Tasks" = "Tasks";
 "New Task (New Window)" = "New Task (New Window)";
 "New Window" = "New Window";

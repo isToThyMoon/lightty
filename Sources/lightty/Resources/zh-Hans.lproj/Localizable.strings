@@ -30,6 +30,9 @@
 "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "这是我的第一个 Swift App。\n它将始终免费、开源。\n愿它能为你的日常使用，带来一点点帮助。";
 "Quit lightty" = "退出 lightty";
 "Check for Updates…" = "检查更新…";
+"Services" = "服务";
+"No folder to open." = "没有可打开的文件夹。";
+"Lightty is still starting up. Try again in a moment." = "Lightty 还在启动中，请稍后再试。";
 "Tasks" = "任务";
 "New Task (New Window)" = "新任务（新窗口）";
 "New Window" = "新建窗口";

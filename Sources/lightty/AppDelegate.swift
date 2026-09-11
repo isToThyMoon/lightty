@@ -37,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         }
         buildMenu()
+        // Finder 右键 Services（New Lightty Tab/Window Here）。菜单项由打包脚本写进
+        // Info.plist 的 NSServices；这里只挂接收方。必须在 AppState 就绪之后。
+        NSApp.servicesProvider = FinderServiceProvider()
         // 重链 shim + 重新生成插件源目录。
         // hook 注册的是 ~/.lightty/bin/lightty-hook 这个固定路径，真实 helper 在
         // app bundle 里，用户把 app 挪个位置绝对路径就断了。而两家都在安装时**拷贝**
@@ -201,6 +204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "")
         statusBarToggle.target = StatusBarController.shared
         appMenu.addItem(statusBarToggle)
+        appMenu.addItem(.separator())
+        // 标准 Services 子菜单：内容由系统按当前选区填充（其它 app 提供的服务），
+        // 与 Ghostty 一样挂上，让 app 菜单符合 macOS 惯例。
+        let servicesItem = NSMenuItem(title: L("Services"), action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: L("Services"))
+        servicesItem.submenu = servicesMenu
+        appMenu.addItem(servicesItem)
+        NSApp.servicesMenu = servicesMenu
         appMenu.addItem(.separator())
         // 菜单只提供鼠标入口。包括退出在内的键盘动作都必须先进
         // surface，再由 libghostty 按全局 config keybind 决定是否回调壳层。
