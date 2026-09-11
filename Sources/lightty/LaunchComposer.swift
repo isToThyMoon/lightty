@@ -30,6 +30,7 @@ enum LaunchComposer {
         let content = LaunchComposerController(subject: resolved(subject), controller: controller)
         let pop = NSPopover()
         pop.contentViewController = content
+        pop.delegate = content
         pop.behavior = .transient
         content.onDone = { [weak pop] in pop?.close() }
         content.directory.onPickerVisibilityChange = { [weak pop] choosing in
@@ -37,7 +38,6 @@ enum LaunchComposer {
         }
         popover = pop
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: preferredEdge)
-        content.focusFirstField()
     }
 
     /// 打开时重读磁盘：调用方传来的 task 是列表缓存的快照，agent 直接写文件不触发
@@ -109,7 +109,7 @@ enum LaunchComposer {
 
 /// 启动浮层的内容。四段固定顺序：主体 → Agent → 工作目录 → 去处 → 启动。
 /// 哪几段出现由 `subject` 决定，摆法与间距三种情况完全一致。
-final class LaunchComposerController: NSViewController, NSTextFieldDelegate {
+final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSPopoverDelegate {
     var onDone: (() -> Void)?
 
     let subject: LaunchSubject
@@ -387,8 +387,10 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate {
         return group
     }
 
-    func focusFirstField() {
-        guard case .newTask = subject else { return }
+    func popoverDidShow(_ notification: Notification) {
+        guard !embedded, case .newTask = subject else { return }
+        // Wait for AppKit's presentation lifecycle, not an arbitrary timer.
+        // Embedded previews retain the surrounding search field's focus.
         view.window?.makeFirstResponder(nameField)
     }
 
@@ -803,7 +805,7 @@ private final class RestoreRowButton: NSButton {
     }
 
     private func applyFill() {
-        let fill = hovered ? ShellStyle.selectionFill : ShellStyle.controlFill
+        let fill = hovered ? ShellStyle.inputHoverFill : ShellStyle.inputFill
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
     }
 }

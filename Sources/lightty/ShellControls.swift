@@ -127,7 +127,7 @@ final class ShellDropdown: NSView {
     }
 
     private func applyLook() {
-        let fill: NSColor = hovered ? ShellStyle.pressedFill : ShellStyle.controlFill
+        let fill: NSColor = hovered ? ShellStyle.inputHoverFill : ShellStyle.inputFill
         layer?.backgroundColor = fill.shellResolvedCGColor(for: effectiveAppearance)
         label.textColor = ShellStyle.primaryText
         chevron.contentTintColor = ShellStyle.secondaryText
@@ -294,7 +294,7 @@ final class ShellTextArea: NSView {
     }
 
     private func applyLook() {
-        layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
+        layer?.backgroundColor = ShellStyle.inputFill.shellResolvedCGColor(for: effectiveAppearance)
         textView.textColor = ShellStyle.primaryText
         // 光标颜色**不要设**：AppKit 默认跟随系统强调色，应用里其他输入框（都是
         // NSTextField 的 field editor）用的就是这个默认。这里一旦写死，同一个浮层
@@ -432,7 +432,7 @@ final class ShellFieldBox: NSView {
     }
 
     private func applyLook() {
-        layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
+        layer?.backgroundColor = ShellStyle.inputFill.shellResolvedCGColor(for: effectiveAppearance)
         field.textColor = ShellStyle.primaryText
     }
 }

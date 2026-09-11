@@ -57,6 +57,9 @@ enum ShellStyle {
     /// 侧栏底色；抽屉覆盖 terminal，必须完全不透明。
     static let sidebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
     static let controlFill = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x323037)
+    /// 输入区域需与旧版灰色 popover 和新版玻璃材质都保持明暗差，不依赖描边。
+    static let inputFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x424047)
+    static let inputHoverFill = NSColor.shellDynamic(light: 0xD8D2CE, dark: 0x4C4952)
     /// 抬升面：浮在 chrome 之上的卡片（搜索浮层预览等），浅色纯白、深色亮一档
     static let raisedSurface = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x2E2C33)
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
