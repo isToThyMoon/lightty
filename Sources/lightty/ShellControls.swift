@@ -366,57 +366,6 @@ extension ShellTextArea: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) { refreshPlaceholder() }
 }
 
-/// 让 cell 画的文字和 field editor 画的文字落在同一列上。
-///
-/// 没聚焦时文字由 cell 画在 `titleRect` 原点；聚焦后由接管的 field editor 画在
-/// `editorFrame` 原点再加一段 `lineFragmentPadding`。`isBezeled = false` 时这两个
-/// 矩形相同（实测都等于 bounds），差的正好就是这段 padding，于是点进输入框的
-/// 那一刻文字会整体横移 2pt。占位文字最显眼，真实文字一样跳。
-///
-/// **对齐要改 cell 这一侧，不能去抹平 field editor 的 padding。** 抹平了确实也
-/// 对齐，但空框时光标正好落在文本容器的最左边，会被边缘切掉一半——2pt 的光标
-/// 变成 1pt，和别处的输入框对不上（实测：敲一个字、光标离开行首就恢复成 2pt）。
-/// 只覆写 `titleRect` 不动 `drawingRect` / `editWithFrame`，field editor 的位置
-/// 一如原样。
-final class ShellTextFieldCell: NSTextFieldCell {
-    /// AppKit 给 field editor 的 `lineFragmentPadding` 默认值。
-    /// `ShellFieldFocusTests` 会拿真的 field editor 来对，变了就挂。
-    static let editorPadding: CGFloat = 2
-
-    override func titleRect(forBounds rect: NSRect) -> NSRect {
-        var title = super.titleRect(forBounds: rect)
-        title.origin.x += Self.editorPadding
-        title.size.width = max(0, title.width - Self.editorPadding)
-        return title
-    }
-}
-
-/// `ShellFieldBox` 里那支输入框：只多做一件事——把**真的拿到焦点**报出去。
-///
-/// `NSControl` 那两条编辑通知不能当焦点用（begin 那条要等第一次敲键才发），
-/// `becomeFirstResponder` 才是。收尾用 `textDidEndEditing`：实测一个字都没敲、
-/// 直接把焦点移走时它也会调到。
-final class ShellTextField: NSTextField {
-    override class var cellClass: AnyClass? {
-        get { ShellTextFieldCell.self }
-        set { _ = newValue }
-    }
-
-    /// true = 刚拿到焦点，false = 刚失去焦点。
-    var onFocusChange: ((Bool) -> Void)?
-
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted { onFocusChange?(true) }
-        return accepted
-    }
-
-    override func textDidEndEditing(_ notification: Notification) {
-        super.textDidEndEditing(notification)
-        onFocusChange?(false)
-    }
-}
-
 /// 壳层的单行输入框：与 `ShellDropdown`、`ShellTextArea` 同一块底色和圆角。
 ///
 /// 原来这些框用的是系统 bezel——深色下是一圈浅边加近黑底，跟旁边自绘的胶囊、
@@ -425,17 +374,15 @@ final class ShellTextField: NSTextField {
 /// 内边距交给容器而不是换一个 `NSTextFieldCell`：换 cell 得自己算 `drawingRect`
 /// 和 `editWithFrame`，编辑时的 field editor 很容易错位半个像素。
 final class ShellFieldBox: NSView {
-    let field: ShellTextField
-    private var editing = false { didSet { applyFocusRing() } }
+    let field: NSTextField
 
     static let height: CGFloat = 28
 
-    init(_ field: ShellTextField) {
+    init(_ field: NSTextField) {
         self.field = field
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
-        layer?.borderWidth = 1
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -447,26 +394,10 @@ final class ShellFieldBox: NSView {
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: Self.height),
         ])
-        // 没有系统焦点环了，聚焦得自己说一声。
-        //
-        // 原来听的是 `NSControl.textDidBeginEditingNotification`——**那不是焦点信号**，
-        // 它要等第一次敲键才发。实测：点进输入框时边框仍然透明，敲下第一个字才变成
-        // 强调色。于是「拿到焦点」这一刻界面上没有任何东西说明发生了什么，只有文字
-        // 自己横跳了一下（见 focusChanged 里那段 padding）。
-        field.onFocusChange = { [weak self] focused in self?.focusChanged(focused) }
         applyLook()
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    private func focusChanged(_ focused: Bool) {
-        editing = focused
-        guard focused, let editor = field.currentEditor() as? NSTextView else { return }
-        // 光标钉在我们自己的字色上。AppKit 的默认值眼下正好也跟着 textColor 走
-        // （量过别处没设这一行的输入框，颜色一致），这里写明是不指望那个默认。
-        editor.insertionPointColor = ShellStyle.primaryText
-        // 文字对齐不在这里做，在 `ShellTextFieldCell` 那一侧——原因见它的注释。
-    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -476,15 +407,5 @@ final class ShellFieldBox: NSView {
     private func applyLook() {
         layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
         field.textColor = ShellStyle.primaryText
-        applyFocusRing()
-    }
-
-    /// 聚焦只改边框这一件事。**不要把 textColor / 底色也捎带重写一遍**：这两个值
-    /// 只跟明暗外观有关，焦点变化时写进去的是同一个值，什么都不会变——但写
-    /// `textColor` 会让刚接管过来的 field editor 重排一次，而这一下恰好落在焦点
-    /// 切换那一帧上，看着就是文字抖了一下。
-    private func applyFocusRing() {
-        layer?.borderColor = (editing ? ShellStyle.accent : NSColor.clear)
-            .shellResolvedCGColor(for: effectiveAppearance)
     }
 }

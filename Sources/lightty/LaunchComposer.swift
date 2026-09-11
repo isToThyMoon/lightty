@@ -129,7 +129,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate {
     private static let horizontalInset: CGFloat = 16
 
     /// 仅新建任务时出现。
-    let nameField = ShellTextField()
+    let nameField = NSTextField()
     let bodyEditor = ShellTextArea()
     private let nameError = NSTextField(wrappingLabelWithString: "")
 

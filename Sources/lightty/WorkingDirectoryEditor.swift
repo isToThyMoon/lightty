@@ -23,7 +23,7 @@ final class WorkingDirectoryEditor: NSStackView, NSTextFieldDelegate {
     }
 
     init(path: String) {
-        box = ShellFieldBox(ShellTextField())
+        box = ShellFieldBox(NSTextField())
         super.init(frame: .zero)
         orientation = .horizontal
         spacing = 6
