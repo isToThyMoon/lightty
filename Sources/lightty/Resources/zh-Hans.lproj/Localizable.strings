@@ -148,13 +148,13 @@
 "Pane" = "Pane";
 "Menu bar status hidden" = "菜单栏状态项已隐藏";
 "You can show it again from the lightty menu." = "可以从 lightty 菜单里重新打开。";
-"Agent finished" = "Agent 跑完了";
-"Needs your attention" = "需要你处理";
-"%d agents finished" = "%d 个 agent 跑完了";
-"%d panes need your attention" = "%d 个 pane 需要你处理";
+"Agent finished" = "Agent 已完成";
+"Needs your attention" = "等待你处理";
+"%d agents finished" = "%d 个 Agent 已完成";
+"%d panes need your attention" = "%d 个 pane 等待你处理";
 "Move Split" = "移动分屏";
-"%d running" = "%d 个在跑";
-"%d needs you" = "%d 个需要你";
+"%d running" = "%d 个运行中";
+"%d needs you" = "%d 个待处理";
 "%d finished" = "%d 个已完成";
 
 /* agent 状态：hook 安装器 */
@@ -177,10 +177,10 @@
 "Agent is thinking" = "Agent 思考中";
 "Running %@" = "正在执行 %@";
 "Agent is working" = "Agent 工作中";
-"Agent needs your input" = "Agent 需要你输入";
+"Agent needs your input" = "Agent 等待你的输入";
 
 /* agent 状态：安装引导蒙层 */
-"Know when your agents finish" = "Agent 跑完了告诉你";
+"Know when your agents finish" = "Agent 完成时收到通知";
 "You can reopen this any time from Settings > General." = "随时可以从「设置 > 通用」里重新打开。";
 "Manage…" = "管理…";
 "Not now" = "暂不";
@@ -203,7 +203,7 @@
 "Installed. Restart claude/codex in your panes to pick it up." = "已安装。请在 pane 里重开 claude/codex 才会生效。";
 "Updated. Restart claude/codex in your panes to pick it up." = "已更新。请在 pane 里重开 claude/codex 才会生效。";
 "The %@ command was not found on this Mac." = "这台 Mac 上找不到 %@ 命令。";
-"“%@” did not finish within %ds. You can run it yourself to see why." = "「%@」在 %d 秒内没跑完。可以自己跑一遍看看原因。";
+"“%@” did not finish within %ds. You can run it yourself to see why." = "「%@」在 %d 秒内未完成。可以手动运行一次查看原因。";
 "“%@” failed. Nothing was changed." = "「%@」失败了，什么都没改。";
 "“%@” failed: %@" = "「%@」失败：%@";
 "Could not read %@ to check the current state (%@)." = "读不了 %@，无法判断当前状态（%@）。";
@@ -218,7 +218,7 @@
 /* agent 状态：侧栏行的状态文字 */
 "Thinking" = "思考中";
 "Working" = "工作中";
-"Needs you" = "需要你";
+"Needs you" = "待处理";
 "Finished" = "已完成";
 
 /* 设置页 */
