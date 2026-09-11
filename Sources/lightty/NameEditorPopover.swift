@@ -56,7 +56,6 @@ private final class NameEditorController: NSViewController, NSTextFieldDelegate 
         field.stringValue = initial
         field.font = .systemFont(ofSize: 12)
         field.delegate = self
-        (field.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         // 原来这里是 ShellFieldBox 的一份手抄件，还抄歪了：圆角 8（别处 7）、
         // 高 26（别处 28），底色也是一次性刷上去的，明暗切换不跟。换成本尊。

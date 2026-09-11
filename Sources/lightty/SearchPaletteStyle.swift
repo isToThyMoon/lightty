@@ -3,12 +3,8 @@ import AppKit
 /// Shared chrome for both search modes; only their result data and actions differ.
 enum SearchPaletteStyle {
     static func configure(_ field: NSTextField) {
-        field.font = .systemFont(ofSize: 15)
-        field.isBezeled = false
-        field.drawsBackground = false
-        field.focusRingType = .none
+        ShellTextFieldStyle.configure(field, font: .systemFont(ofSize: 15))
         field.textColor = ShellStyle.primaryText
-        (field.cell as? NSTextFieldCell)?.usesSingleLineMode = true
     }
 
     static func icon() -> NSImageView {

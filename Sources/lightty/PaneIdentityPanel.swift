@@ -193,10 +193,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         // 还要 wraps=false + isScrollable=true——否则长文本（尤其 CJK）在 20pt
         // 行高里折成两行，每行都被竖向裁一半，两行都看不清。
         for field in [nameField, taskEditor, searchField] {
-            guard let cell = field.cell as? NSTextFieldCell else { continue }
-            cell.usesSingleLineMode = true
-            cell.wraps = false
-            cell.isScrollable = true
+            ShellTextFieldStyle.configure(field)
         }
 
         nameField.font = .systemFont(ofSize: 11, weight: .medium)

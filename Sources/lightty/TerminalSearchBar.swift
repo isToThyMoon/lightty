@@ -21,10 +21,9 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
         super.init(frame: .zero)
         let persisted = NSPasteboard(name: .find).string(forType: .string)
         searchField.stringValue = needle?.isEmpty == false ? needle! : (persisted ?? "")
-        searchField.placeholderString = "Search"
+        ShellTextFieldStyle.configure(
+            searchField, font: .systemFont(ofSize: 13), placeholder: "Search")
         searchField.delegate = self
-        searchField.focusRingType = .none
-        searchField.font = .systemFont(ofSize: 13)
 
         resultLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         resultLabel.textColor = ShellStyle.secondaryText

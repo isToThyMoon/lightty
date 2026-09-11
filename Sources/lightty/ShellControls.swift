@@ -371,119 +371,60 @@ extension ShellTextArea: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) { refreshPlaceholder() }
 }
 
+/// Shared configuration for every editable single-line AppKit text field.
+///
+/// The field remains an `NSTextField`: its cell owns placeholder rendering and
+/// AppKit owns the shared field editor and input-method lifecycle. This module
+/// only centralizes the invariant single-line configuration.
+enum ShellTextFieldStyle {
+    static func configure(
+        _ field: NSTextField,
+        font: NSFont? = nil,
+        placeholder: String? = nil
+    ) {
+        if let font { field.font = font }
+        if let placeholder { field.placeholderString = placeholder }
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        if let cell = field.cell as? NSTextFieldCell {
+            cell.usesSingleLineMode = true
+            cell.wraps = false
+            cell.isScrollable = true
+        }
+    }
+}
+
 /// 壳层的单行输入框：与 `ShellDropdown`、`ShellTextArea` 同一块底色和圆角。
 ///
 /// 原来这些框用的是系统 bezel——深色下是一圈浅边加近黑底，跟旁边自绘的胶囊、
 /// 文本域完全是两种语言，一个卡片里三种框长得都不一样。
 ///
-/// 内边距交给容器而不是换一个 `NSTextFieldCell`：换 cell 得自己算 `drawingRect`
-/// 和 `editWithFrame`，编辑时的 field editor 很容易错位半个像素。
+/// 容器只负责外观与布局；placeholder、文字、光标和 field editor 全部由 NSTextField
+/// 与 AppKit 自己处理。
 final class ShellFieldBox: NSView {
     let field: NSTextField
-    private let placeholderLabel: NSTextField?
-    private var textStorageObserver: NSObjectProtocol?
 
     static let height: CGFloat = 28
 
-    init(_ field: NSTextField, placeholder: String? = nil) {
+    init(_ field: NSTextField) {
         self.field = field
-        if let placeholder, !placeholder.isEmpty {
-            let label = NSTextField(labelWithString: placeholder)
-            label.font = field.font
-            label.textColor = ShellStyle.tertiaryText
-            label.lineBreakMode = .byTruncatingTail
-            label.isSelectable = false
-            label.setAccessibilityElement(false)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            placeholderLabel = label
-        } else {
-            placeholderLabel = nil
-        }
+        ShellTextFieldStyle.configure(field)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
-        if placeholderLabel != nil { field.placeholderString = nil }
-        field.isBezeled = false
-        field.drawsBackground = false
-        field.focusRingType = .none
         field.translatesAutoresizingMaskIntoConstraints = false
-        if let placeholderLabel { addSubview(placeholderLabel) }
         addSubview(field)
-        var constraints = [NSLayoutConstraint]()
-        if let placeholderLabel {
-            // The field editor keeps its default 2pt line-fragment padding. Keep the
-            // custom placeholder on that same text origin so it never jumps on focus.
-            constraints += [
-                placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-                placeholderLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-                placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            ]
-        }
-        constraints += [
+        NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: Self.height),
-        ]
-        NSLayoutConstraint.activate(constraints)
-        if placeholderLabel != nil {
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(fieldTextDidChange(_:)),
-                name: NSControl.textDidChangeNotification, object: field)
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(fieldDidBeginEditing(_:)),
-                name: NSControl.textDidBeginEditingNotification, object: field)
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(fieldDidEndEditing(_:)),
-                name: NSControl.textDidEndEditingNotification, object: field)
-            updatePlaceholder()
-        }
+        ])
         applyLook()
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-        if let textStorageObserver { NotificationCenter.default.removeObserver(textStorageObserver) }
-    }
-
-    @objc private func fieldTextDidChange(_ notification: Notification) {
-        updatePlaceholder()
-    }
-
-    private func updatePlaceholder() {
-        guard let placeholderLabel else { return }
-        let editor = field.currentEditor() as? NSTextView
-        placeholderLabel.isHidden = !field.stringValue.isEmpty || editor?.hasMarkedText() == true
-    }
-
-    @objc private func fieldDidBeginEditing(_ notification: Notification) {
-        if let textStorageObserver {
-            NotificationCenter.default.removeObserver(textStorageObserver)
-            self.textStorageObserver = nil
-        }
-        guard let textStorage = (field.currentEditor() as? NSTextView)?.textStorage else {
-            updatePlaceholder()
-            return
-        }
-        textStorageObserver = NotificationCenter.default.addObserver(
-            forName: NSTextStorage.didProcessEditingNotification,
-            object: textStorage,
-            queue: .main
-        ) { [weak self] _ in
-            self?.updatePlaceholder()
-        }
-        updatePlaceholder()
-    }
-
-    @objc private func fieldDidEndEditing(_ notification: Notification) {
-        if let textStorageObserver {
-            NotificationCenter.default.removeObserver(textStorageObserver)
-            self.textStorageObserver = nil
-        }
-        updatePlaceholder()
-    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -493,6 +434,5 @@ final class ShellFieldBox: NSView {
     private func applyLook() {
         layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
         field.textColor = ShellStyle.primaryText
-        placeholderLabel?.textColor = ShellStyle.tertiaryText
     }
 }

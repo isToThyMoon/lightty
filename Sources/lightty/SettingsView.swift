@@ -86,10 +86,9 @@ final class SettingsView: NSView, NSTextFieldDelegate {
 
         backRow.onClick = { [weak self] in self?.onDismiss?() }
 
-        searchField.placeholderString = L("Search settings…")
-        searchField.font = .systemFont(ofSize: 12.5)
+        ShellTextFieldStyle.configure(
+            searchField, font: .systemFont(ofSize: 12.5), placeholder: L("Search settings…"))
         searchField.controlSize = .regular
-        searchField.focusRingType = .none
         searchField.target = self
         searchField.action = #selector(searchChanged)
         (searchField.cell as? NSSearchFieldCell)?.sendsSearchStringImmediately = true
@@ -334,8 +333,6 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             let field = NSTextField(string: AgentLaunchPreference.customArguments(for: agent))
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             field.placeholderString = L("None")
-            field.cell?.isScrollable = true
-            field.cell?.wraps = false
             field.delegate = self
             field.setAccessibilityLabel(L("%@ extra arguments", agent.title))
             // 套进 ShellFieldBox：这两个框原来是彻底原生的——系统凹槽加系统焦点环，

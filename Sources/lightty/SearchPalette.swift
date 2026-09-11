@@ -49,7 +49,6 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         searchField.placeholderString = L("Search task names and handoff content")
         SearchPaletteStyle.configure(searchField)
         searchField.delegate = self
-        (searchField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
 
         rowsStack.orientation = .vertical
         rowsStack.alignment = .leading

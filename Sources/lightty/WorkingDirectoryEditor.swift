@@ -30,13 +30,7 @@ final class WorkingDirectoryEditor: NSStackView, NSTextFieldDelegate {
         field.stringValue = path
         field.delegate = self
         field.font = .systemFont(ofSize: 11)
-        field.focusRingType = .none
-        if let cell = field.cell as? NSTextFieldCell {
-            cell.usesSingleLineMode = true
-            cell.wraps = false
-            cell.isScrollable = true
-            cell.lineBreakMode = .byTruncatingHead
-        }
+        field.cell?.lineBreakMode = .byTruncatingHead
         field.setAccessibilityLabel(L("Working directory"))
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let choose = ShellIconButton(symbol: "folder", accessibilityLabel: L("Choose folder…"), target: self, action: #selector(chooseFolder))

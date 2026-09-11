@@ -58,9 +58,7 @@ extension SessionAssociationTests {
         _ = NSApplication.shared
         let controller = LaunchComposerController(subject: .newTask, controller: nil)
         _ = controller.view
-        #expect(controller.nameField.placeholderString == nil)
-        #expect(descendants(controller.view).compactMap { $0 as? NSTextField }
-            .contains { $0.stringValue == L("Task name") })
+        #expect(controller.nameField.placeholderString == L("Task name"))
         for field in [controller.nameField, controller.directory.field] {
             field.stringValue = "/Users/example/projects/a-very-long-project-name/apps/mobile"
             let cell = try #require(field.cell as? NSTextFieldCell)
@@ -81,29 +79,6 @@ extension SessionAssociationTests {
             .first { $0.label == L("Create only") })
         #expect(abs(only.frame.width - button.frame.width) < 1)
         #expect(abs(only.frame.minX - button.frame.minX) < 1)
-    }
-
-    @MainActor @Test func taskNamePlaceholderHidesDuringMarkedText() throws {
-        _ = NSApplication.shared
-        let controller = LaunchComposerController(subject: .newTask, controller: nil)
-        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 700),
-                            styleMask: [.titled], backing: .buffered, defer: false)
-        host.contentView?.addSubview(controller.view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 340, height: 600)
-        host.makeKeyAndOrderFront(nil)
-        defer { host.orderOut(nil) }
-
-        #expect(host.makeFirstResponder(controller.nameField))
-        let editor = try #require(controller.nameField.currentEditor() as? NSTextView)
-        let inputClient: NSTextInputClient = editor
-        inputClient.setMarkedText(
-            "sdf", selectedRange: NSRange(location: 3, length: 0),
-            replacementRange: NSRange(location: 0, length: 0))
-        host.contentView?.layoutSubtreeIfNeeded()
-
-        let placeholder = try #require(descendants(controller.view).compactMap { $0 as? NSTextField }
-            .first { $0.stringValue == L("Task name") })
-        #expect(placeholder.isHidden)
     }
 
     /// 中文输入法拼字期间是「未确定文本」，它不发 `textDidChange`。只听那一条的话，
