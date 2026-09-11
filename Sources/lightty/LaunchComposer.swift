@@ -358,7 +358,6 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate {
 
     /// 新建任务的名字与初始正文。正文可留空——它只是 Agent 启动时读到的第一段交接内容。
     private func newTaskFields() -> NSView {
-        nameField.placeholderString = L("Task name")
         nameField.setAccessibilityLabel(L("Task name"))
         nameField.delegate = self
         nameField.font = .systemFont(ofSize: 12.5)
@@ -375,7 +374,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate {
         bodyEditor.placeholder = L("Goal, background, next steps. The Agent reads this on launch.")
         bodyEditor.textView.setAccessibilityLabel(L("Initial handoff notes"))
 
-        let nameBox = ShellFieldBox(nameField)
+        let nameBox = ShellFieldBox(nameField, placeholder: L("Task name"))
         let group = NSStackView(views: [
             nameBox, nameError,
             Self.sectionLabel(L("Initial handoff notes")), bodyEditor,

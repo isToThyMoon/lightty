@@ -380,29 +380,73 @@ extension ShellTextArea: NSTextViewDelegate {
 /// 和 `editWithFrame`，编辑时的 field editor 很容易错位半个像素。
 final class ShellFieldBox: NSView {
     let field: NSTextField
+    private let placeholderLabel: NSTextField?
 
     static let height: CGFloat = 28
 
-    init(_ field: NSTextField) {
+    init(_ field: NSTextField, placeholder: String? = nil) {
         self.field = field
+        if let placeholder, !placeholder.isEmpty {
+            let label = NSTextField(labelWithString: placeholder)
+            label.font = field.font
+            label.textColor = ShellStyle.tertiaryText
+            label.lineBreakMode = .byTruncatingTail
+            label.isSelectable = false
+            label.setAccessibilityElement(false)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            placeholderLabel = label
+        } else {
+            placeholderLabel = nil
+        }
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
+        if placeholderLabel != nil { field.placeholderString = nil }
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.translatesAutoresizingMaskIntoConstraints = false
+        if let placeholderLabel { addSubview(placeholderLabel) }
         addSubview(field)
-        NSLayoutConstraint.activate([
+        var constraints = [NSLayoutConstraint]()
+        if let placeholderLabel {
+            // The field editor keeps its default 2pt line-fragment padding. Keep the
+            // custom placeholder on that same text origin so it never jumps on focus.
+            constraints += [
+                placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+                placeholderLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+                placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ]
+        }
+        constraints += [
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: Self.height),
-        ])
+        ]
+        NSLayoutConstraint.activate(constraints)
+        if placeholderLabel != nil {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(fieldTextDidChange(_:)),
+                name: NSControl.textDidChangeNotification, object: field)
+            updatePlaceholder()
+        }
         applyLook()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func fieldTextDidChange(_ notification: Notification) {
+        updatePlaceholder()
+    }
+
+    private func updatePlaceholder() {
+        guard let placeholderLabel else { return }
+        let editor = field.currentEditor() as? NSTextView
+        placeholderLabel.isHidden = !field.stringValue.isEmpty || editor?.hasMarkedText() == true
+    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -412,5 +456,6 @@ final class ShellFieldBox: NSView {
     private func applyLook() {
         layer?.backgroundColor = ShellStyle.controlFill.shellResolvedCGColor(for: effectiveAppearance)
         field.textColor = ShellStyle.primaryText
+        placeholderLabel?.textColor = ShellStyle.tertiaryText
     }
 }

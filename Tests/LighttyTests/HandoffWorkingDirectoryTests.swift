@@ -58,6 +58,9 @@ extension SessionAssociationTests {
         _ = NSApplication.shared
         let controller = LaunchComposerController(subject: .newTask, controller: nil)
         _ = controller.view
+        #expect(controller.nameField.placeholderString == nil)
+        #expect(descendants(controller.view).compactMap { $0 as? NSTextField }
+            .contains { $0.stringValue == L("Task name") })
         for field in [controller.nameField, controller.directory.field] {
             field.stringValue = "/Users/example/projects/a-very-long-project-name/apps/mobile"
             let cell = try #require(field.cell as? NSTextFieldCell)
