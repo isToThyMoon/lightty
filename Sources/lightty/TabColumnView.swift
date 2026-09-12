@@ -540,7 +540,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.layoutSubtreeIfNeeded()
         row.displayIfNeeded()
         guard let image = ReorderDrag.snapshot(of: row) else { return nil }
-        let card = ReorderDrag.makeSnapshot(image, frame: frame)
+        // 起手就对齐到像素：位图压在半个物理像素上会被重采样成毛边。
+        let scale = window?.backingScaleFactor ?? 2
+        var aligned = frame
+        aligned.origin.x = (frame.origin.x * scale).rounded() / scale
+        aligned.origin.y = (frame.origin.y * scale).rounded() / scale
+        let card = ReorderDrag.makeSnapshot(image, frame: aligned)
         card.layer?.cornerRadius = 7
         card.layer?.backgroundColor = ShellStyle.raisedSurface
             .withAlphaComponent(0.72).shellResolvedCGColor(for: effectiveAppearance)
@@ -571,17 +576,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         applySnapshotLook(merging: target != nil)
     }
 
-    /// 合并态下浮层让出视线：目标行的落点框线正好压在浮层底下，浮层既不透也不缩
-    /// 就完全看不见，用户只能靠猜自己要并进谁。半透明 + 缩进一圈之后框线从四边露出来，
-    /// 顺带把"现在是合并不是排序"再说一遍——模态差异只靠一条框线交代太单薄。
+    /// 合并态下浮层让出视线：目标行的落点框线正好压在浮层底下，浮层不再淡一档
+    /// 就完全看不见，用户只能靠猜自己要并进谁。顺带把"现在是合并不是排序"再说一遍，
+    /// 模态差异只靠一条框线交代太单薄。
+    /// 只调透明度，不缩放：浮层是位图，缩放等于把文字重采样，虚实一变就像卡了一帧。
     private func applySnapshotLook(merging: Bool) {
         guard let snapshot = dragSnapshot else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
-            snapshot.animator().alphaValue = merging ? 0.55 : 1
+            snapshot.animator().alphaValue = merging ? 0.5 : 1
         }
-        let scale: CGFloat = merging ? 0.9 : 1.03
-        snapshot.layer?.transform = CATransform3DMakeScale(scale, scale, 1)
     }
 
     private func dropRow(at index: Int) -> (any SidebarPaneDropRow)? {
