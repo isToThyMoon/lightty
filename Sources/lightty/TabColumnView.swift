@@ -20,6 +20,15 @@ import LighttyCore
 /// 落点 = 移入该标签页，⋯ / 双击 = 重命名标签页。
 /// 用户给标签页起了名字，它就有了自己的身份，恢复容器行 + pane 行呈现，名字始终可见；
 /// 开出第二个分屏同样展开成两级树，关回一个（且仍是默认名）再收回。
+/// 侧栏一行的身份。每一项都记住所属标签页：拖拽落点要分辨"落在某个标签页的
+/// pane 块里"还是"落在两个标签页之间"，没有归属就分辨不了。
+/// `leaf` = 单 pane 标签页的合并行：它既是可拖走的 pane，本身又是一个标签页。
+enum TabRowKind: Equatable {
+    case tab(Int)
+    case pane(tab: Int, pane: UUID)
+    case leaf(tab: Int, pane: UUID)
+}
+
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
@@ -36,10 +45,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let scroll = SidebarListScrollView()
     private let table = NSTableView()
     private struct RowItem {
-        /// `leaf` = 单 pane 标签页的合并行：拖拽算法里它既是 pane（可拖走），
-        /// 又是标签页边界（落在它下面 = 移入它的标签页）。
-        enum Kind { case tab(Int), pane(UUID), leaf(tab: Int, pane: UUID) }
-        let kind: Kind
+        let kind: TabRowKind
         let makeView: (NSView?) -> NSView
     }
     private var rowItems: [RowItem] = []
@@ -275,7 +281,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
             guard !isCollapsed else { continue }
             for pane in entry.panes {
-                rowItems.append(RowItem(kind: .pane(pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
+                rowItems.append(RowItem(kind: .pane(tab: entry.index, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
                     guard let self, let pane else { return NSView() }
                     return self.makePaneRow(for: pane, leading: .nested,
                         isActive: pane.dragIdentifier == self.controller?.activePane?.dragIdentifier,
@@ -422,35 +428,56 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return paneRow
     }
 
-    // MARK: - pane 行拖拽（手动跟手循环，与任务列表同一套机件）
+    // MARK: - 行拖拽（手动跟手循环，与任务列表同一套机件）
 
-    /// 接管一条 pane 行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，不被
-    /// scroll 裁剪），逐帧命中兄弟行（pane 行 / 标签页行）并高亮落点；释放时
-    /// 走既有的移动通路（落在 pane 行 = 移到其右侧分屏，落在标签页行 = 移入该
-    /// 标签页）。与任务列表的重排共用 ReorderDrag，手感一致。
+    /// 拖拽落点只有两种语义，因为列表只有两级：
+    /// - `insideTab`：落在某个标签页的 pane 块里 → 并进那棵分屏树。
+    /// - `betweenTabs`：落在两个标签页之间 → 顶层重排。源行是整条标签页（叶子行）
+    ///   就换标签页的位次；源行是某个标签页里的分屏 pane，就把它拆出来独立成新标签页。
+    ///
+    /// 判定只看紧邻：下方紧邻是缩进 pane 行，说明落点在那个标签页块内；否则看上方。
+    /// 两边都不是缩进 pane 行，落点就在标签页之间。折叠的标签页在列表里只有一行，
+    /// 对它而言"块内"不存在——要并进去得把行拖到它身上（见 MergeTarget）。
+    enum DropSlot: Equatable {
+        case insideTab(next: UUID?, previous: UUID?)
+        case betweenTabs(Int)
+    }
+
+    /// 合并落点：光标压在某一行的中央带上时，意图是"并进这一行"而不是"插到它前后"。
+    /// 这是拖动排序与拖动合并的分界——中央带合并，上下两端排序，与 iOS 主屏建文件夹、
+    /// 浏览器标签页成组是同一套肌肉记忆。合并期间停止让位，目标行不会在脚下移动。
+    private struct MergeTarget {
+        let row: Int
+        let kind: TabRowKind
+    }
+
+    /// 行高的这个比例之内算中央带（上下各留 25% 给排序）。
+    private static let mergeBand: CGFloat = 0.25
+
+    private var mergeTarget: MergeTarget?
+
+    /// 接管一条 pane 行 / 叶子行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，
+    /// 不被 scroll 裁剪），逐帧判定是排序还是合并；释放时翻译成一次真实移动。
     private func beginPaneRowDrag(source: PaneRowView, paneID: UUID, event: NSEvent) {
         guard let image = ReorderDrag.snapshot(of: source) else { return }
         let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
         let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
         addSubview(snap)
-        // 与任务列表同款：源行原地隐身但保留占位 = 随光标流动的空档，其余 pane
-        // 行让位。alpha 0（不是 isHidden）才会保住这条槽位当空档。
+        // 与任务列表同款：源行原地隐身但保留占位 = 随光标流动的空档，其余行让位。
+        // alpha 0（不是 isHidden）才会保住这条槽位当空档。
         source.alphaValue = 0
 
         let cursorInSelf = convert(event.locationInWindow, from: nil)
         let grabOffsetY = cursorInSelf.y - startFrame.minY
 
-        // 源行在 arranged 序列中的插入位（以“排除源行后的其余行”为基准）。
-        func others() -> [Int] {
-            let source = sourceIndex(paneID)
-            return rowItems.indices.filter { $0 != source }
+        // 源行是整条标签页（叶子行）还是标签页里的一个分屏 pane，决定顶层落点的动作。
+        let sourceTab: Int? = sourceIndex(paneID).flatMap {
+            if case .leaf(let tab, _) = rowItems[$0].kind { return tab }
+            return nil
         }
-        func applied() -> Int {  // 源行当前落在 others 里的哪个插入位
-            sourceIndex(paneID) ?? 0
-        }
-        // 起手时的邻居快照，用于结束时判空动（没真动就不折腾 split 树）。
-        let (origPrev, origNext) = neighborPaneIDs(of: source)
-        var lastIdx = applied()
+        // 起手时的落点，用于结束时判空动（没真动就不折腾树）。
+        let origin = dropSlot(for: paneID)
+        var lastIndex = sourceIndex(paneID) ?? 0
 
         ReorderDrag.run(
             host: self,
@@ -459,88 +486,136 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             grabOffsetY: grabOffsetY,
             onMove: { [weak self] c in
                 guard let self else { return }
+                if self.updateMergeTarget(at: c, sourceID: paneID) { return }  // 合并态不让位
                 // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 目标插入位
-                let peers = others()
-                var idx = 0
-                for index in peers {
-                    if self.convert(self.table.rect(ofRow: index), from: self.table).midY > c.y { idx += 1 } else { break }
+                let from = self.sourceIndex(paneID)
+                let peers = self.rowItems.indices.filter { $0 != from }
+                var index = 0
+                for peer in peers {
+                    guard self.convert(self.table.rect(ofRow: peer), from: self.table).midY > c.y
+                    else { break }
+                    index += 1
                 }
-                idx = min(max(idx, 1), peers.count)  // 不越过第一条标签页标题
-                guard idx != lastIdx else { return }
-                lastIdx = idx
-                guard let from = self.sourceIndex(paneID) else { return }
+                index = min(max(index, 0), peers.count)
+                guard index != lastIndex, let from else { return }
+                lastIndex = index
                 let item = self.rowItems.remove(at: from)
-                self.rowItems.insert(item, at: idx)
+                self.rowItems.insert(item, at: index)
                 self.table.beginUpdates()
-                self.table.moveRow(at: from, to: idx)
+                self.table.moveRow(at: from, to: index)
                 self.table.endUpdates()
             },
             dropFrame: { [weak self] in
-                guard let self, let index = self.sourceIndex(paneID) else { return nil }
-                return self.convert(self.table.rect(ofRow: index), from: self.table)
+                guard let self else { return nil }
+                // 合并时浮层飞进目标行，落点看得见。
+                let row = self.mergeTarget?.row ?? self.sourceIndex(paneID)
+                guard let row else { return nil }
+                return self.convert(self.table.rect(ofRow: row), from: self.table)
             },
-            onCommit: { [weak self, weak source] in
-                guard let self, let source else { return }
-                self.commitPaneRowDrop(
-                    source: source, paneID: paneID, origPrev: origPrev, origNext: origNext)
+            onCommit: { [weak self] in
+                self?.commitRowDrop(paneID: paneID, sourceTab: sourceTab, origin: origin)
             },
             onEnd: { [weak self, weak source] in
                 source?.alphaValue = 1
+                self?.setMergeTarget(nil)
                 self?.reload()
             }
         )
     }
 
-    /// 源行在 arranged 序列里的同区上下相邻 pane（跨标签页标题即断，视为无邻居）。
-    private func neighborPaneIDs(of source: PaneRowView) -> (prev: UUID?, next: UUID?) {
-        guard let si = sourceIndex(source.paneID) else { return (nil, nil) }
-        var prev: UUID?
-        if si > 0, case .pane(let id) = rowItems[si - 1].kind {
-            prev = id
+    /// 光标是否压在某一行的中央带上。是则进入合并态（高亮目标行）并返回 true。
+    private func updateMergeTarget(at cursor: NSPoint, sourceID: UUID) -> Bool {
+        let source = sourceIndex(sourceID)
+        for row in rowItems.indices where row != source {
+            let rect = convert(table.rect(ofRow: row), from: table)
+            guard rect.contains(NSPoint(x: rect.midX, y: cursor.y)) else { continue }
+            guard abs(cursor.y - rect.midY) <= rect.height * Self.mergeBand else { break }
+            setMergeTarget(MergeTarget(row: row, kind: rowItems[row].kind))
+            return true
         }
-        var next: UUID?
-        if si + 1 < rowItems.count, case .pane(let id) = rowItems[si + 1].kind {
-            next = id
-        }
-        return (prev, next)
+        setMergeTarget(nil)
+        return false
     }
 
-    /// 把源行拖后的最终位置翻译成一次 split 树移动：优先落到“下方同区 pane 的左侧”，
-    /// 否则“上方同区 pane 的右侧”，都没有则整体移进上方那个标签页。没真动则跳过。
-    private func commitPaneRowDrop(
-        source: PaneRowView, paneID: UUID, origPrev: UUID?, origNext: UUID?
-    ) {
-        let (prev, next) = neighborPaneIDs(of: source)
-        guard prev != origPrev || next != origNext else { return }  // 没动，别折腾树
-        func pane(_ id: UUID?) -> PaneView? {
-            guard let id else { return nil }
-            return controller?.panes().first { $0.dragIdentifier == id }
-        }
-        if let dest = pane(next) {
-            _ = controller?.movePane(withID: paneID, to: dest, zone: .left)
-        } else if let dest = pane(prev) {
-            _ = controller?.movePane(withID: paneID, to: dest, zone: .right)
-        } else if let wsIndex = tabIndexAbove(source) {
-            _ = controller?.movePane(withID: paneID, toTabAt: wsIndex)
-        }
+    private func setMergeTarget(_ target: MergeTarget?) {
+        guard mergeTarget?.row != target?.row else { return }
+        if let previous = mergeTarget?.row { dropRow(at: previous)?.setDropHighlighted(false) }
+        mergeTarget = target
+        if let row = target?.row { dropRow(at: row)?.setDropHighlighted(true) }
     }
 
-    /// 源行上方最近的标签页（容器行或叶子行）的 index（落进空/首位时用）。
-    private func tabIndexAbove(_ source: PaneRowView) -> Int? {
-        guard let si = sourceIndex(source.paneID) else { return nil }
-        for item in rowItems[..<si].reversed() {
-            switch item.kind {
-            case .tab(let index), .leaf(let index, _): return index
+    private func dropRow(at index: Int) -> (any SidebarPaneDropRow)? {
+        guard rowItems.indices.contains(index) else { return nil }
+        let container = table.view(atColumn: 0, row: index, makeIfNecessary: false)
+        return (container as? TabRowContainer)?.content as? any SidebarPaneDropRow
+    }
+
+    /// 源行落定后的位置翻译成落点语义。
+    private func dropSlot(for paneID: UUID) -> DropSlot? {
+        guard let si = sourceIndex(paneID) else { return nil }
+        return Self.dropSlot(in: rowItems.map(\.kind), sourceIndex: si)
+    }
+
+    /// 纯函数：只看落定后的行序与源行位置。拖拽循环没法在单测里跑，判定逻辑
+    /// 单独摘出来才测得动。
+    static func dropSlot(in rows: [TabRowKind], sourceIndex si: Int) -> DropSlot? {
+        guard rows.indices.contains(si) else { return nil }
+        if si + 1 < rows.count, case .pane(_, let id) = rows[si + 1] {
+            return .insideTab(next: id, previous: nil)
+        }
+        if si > 0, case .pane(_, let id) = rows[si - 1] {
+            return .insideTab(next: nil, previous: id)
+        }
+        // 顶层位次 = 上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
+        var index = 0
+        for row in rows[..<si] {
+            switch row {
+            case .tab, .leaf: index += 1
             case .pane: continue
             }
         }
-        return nil
+        return .betweenTabs(index)
+    }
+
+    /// 把落点翻译成一次真实移动。合并优先：它是用户明确压在某一行上的意图。
+    private func commitRowDrop(paneID: UUID, sourceTab: Int?, origin: DropSlot?) {
+        guard let controller else { return }
+        if let merge = mergeTarget {
+            switch merge.kind {
+            case .tab(let index):
+                controller.movePane(withID: paneID, toTabAt: index)
+            case .pane(_, let id), .leaf(_, let id):
+                guard let destination = pane(id) else { return }
+                controller.movePane(withID: paneID, to: destination, zone: .right)
+            }
+            return
+        }
+        guard let slot = dropSlot(for: paneID), slot != origin else { return }
+        switch slot {
+        case .insideTab(let next, let previous):
+            if let destination = pane(next) {
+                controller.movePane(withID: paneID, to: destination, zone: .left)
+            } else if let destination = pane(previous) {
+                controller.movePane(withID: paneID, to: destination, zone: .right)
+            }
+        case .betweenTabs(let index):
+            if let sourceTab {
+                controller.moveTab(from: sourceTab, to: index)
+            } else {
+                controller.detachPane(withID: paneID, toNewTabAt: index)
+            }
+        }
+    }
+
+    private func pane(_ id: UUID?) -> PaneView? {
+        guard let id else { return nil }
+        return controller?.panes().first { $0.dragIdentifier == id }
     }
 
     private func sourceIndex(_ paneID: UUID) -> Int? {
         rowItems.firstIndex {
             switch $0.kind {
-            case .pane(let id), .leaf(_, let id): return id == paneID
+            case .pane(_, let id), .leaf(_, let id): return id == paneID
             case .tab: return false
             }
         }
