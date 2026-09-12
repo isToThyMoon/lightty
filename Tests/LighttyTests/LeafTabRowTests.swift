@@ -43,13 +43,21 @@ final class LeafTabRowTests: XCTestCase {
         XCTAssertFalse(labels().contains("1"), "计数 1 是空信息，不该出现")
     }
 
-    func testRenamedTabUsesItsOwnNameOnTheLeafRow() throws {
+    func testRenamedTabGetsItsContainerRowBack() throws {
         let pane = try XCTUnwrap(controller.activePane)
         controller.renameTab(at: 0, to: "深夜改稿")
         layout()
-        XCTAssertEqual(table.numberOfRows, 1)
+        // 用户起了名字的标签页有自己的身份：容器行 + pane 行，名字一直看得见。
+        XCTAssertEqual(table.numberOfRows, 2)
         XCTAssertTrue(labels().contains("深夜改稿"), "\(labels())")
-        XCTAssertFalse(labels().contains(pane.sessionState.title), "pane 名让位给用户起的标签页名")
+        XCTAssertTrue(labels().contains(pane.sessionState.title), "\(labels())")
+    }
+
+    func testLeafRowCarriesTheTabGlyphInTheContainerColumn() throws {
+        let glyphs = descendants(table).compactMap { $0 as? NSImageView }
+            .filter { $0.image?.accessibilityDescription == L("Tab") }
+        XCTAssertEqual(glyphs.count, 1, "叶子行前面要有标签页图标")
+        XCTAssertNil(descendants(table).compactMap { $0 as? NSButton }.first { $0.toolTip == L("Collapse tab") })
     }
 
     func testSplittingExpandsIntoContainerAndPaneRows() throws {
