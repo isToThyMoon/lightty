@@ -1,6 +1,16 @@
 import AppKit
 import LighttyCore
 
+/// 侧栏一行的身份。每一项都记住所属标签页：拖拽落点要分辨"落在某个标签页的
+/// pane 块里"还是"落在两个标签页之间"，没有归属就分辨不了。
+/// 容器行同时带着标签页的身份：拖拽途中列表随时可能刷新，下标会变，身份不会。
+/// `leaf` = 单 pane 标签页的合并行：它既是可拖走的 pane，本身又是一个标签页。
+enum TabRowKind: Equatable {
+    case tab(index: Int, id: UUID)
+    case pane(tab: Int, pane: UUID)
+    case leaf(tab: Int, pane: UUID)
+}
+
 /// 双栏侧栏的左栏：标签页 › pane 两级树（cmux 形态的窗口活地图）。
 /// spec: docs/specs/double-sidebar.md。标签页可折叠，折叠状态仅当前侧栏会话内保留。
 ///
@@ -20,15 +30,6 @@ import LighttyCore
 /// 落点 = 移入该标签页，⋯ / 双击 = 重命名标签页。
 /// 用户给标签页起了名字，它就有了自己的身份，恢复容器行 + pane 行呈现，名字始终可见；
 /// 开出第二个分屏同样展开成两级树，关回一个（且仍是默认名）再收回。
-/// 侧栏一行的身份。每一项都记住所属标签页：拖拽落点要分辨"落在某个标签页的
-/// pane 块里"还是"落在两个标签页之间"，没有归属就分辨不了。
-/// `leaf` = 单 pane 标签页的合并行：它既是可拖走的 pane，本身又是一个标签页。
-enum TabRowKind: Equatable {
-    case tab(Int)
-    case pane(tab: Int, pane: UUID)
-    case leaf(tab: Int, pane: UUID)
-}
-
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
@@ -48,6 +49,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let kind: TabRowKind
         let makeView: (NSView?) -> NSView
     }
+    /// 控制器模型的如实投影，拖拽从不改写它。
+    private var modelRows: [RowItem] = []
+    /// 实际显示的行序：模型行加上拖拽会话推导出来（见 `RowDrag`）。
     private var rowItems: [RowItem] = []
     /// pane 行按 pane id 索引，供状态原地更新用。
     /// 不能走 `reload()`：它拆掉重建每一行，而状态是高频的
@@ -167,6 +171,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let container = tableView.makeView(withIdentifier: identifier, owner: nil) as? TabRowContainer ?? TabRowContainer()
         container.identifier = identifier
         container.bind(rowItems[row].makeView(container.content))
+        decorate(container, row: row)
         return container
     }
 
@@ -256,7 +261,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func reload(overview: [OverviewEntry]) {
-        rowItems.removeAll(keepingCapacity: true)
+        var rowItems: [RowItem] = []
         paneRows.removeAllObjects()
         collapsedTabIDs.formIntersection(overview.map(\.id))
         for entry in overview {
@@ -272,10 +277,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                     }))
                 continue
             }
-            let isCollapsed = collapsedTabIDs.contains(entry.id)
+            // 拖容器行时它临时折叠：只影响这次显示，不写进用户的折叠状态。
+            let isCollapsed = collapsedTabIDs.contains(entry.id) || drag?.collapsedForDrag == entry.id
             let presentation = TabPresentation(id: entry.id, index: entry.index, title: entry.title,
                 isActive: entry.isActive, count: entry.panes.count)
-            rowItems.append(RowItem(kind: .tab(entry.index), makeView: { [weak self] existing in
+            rowItems.append(RowItem(kind: .tab(index: entry.index, id: entry.id), makeView: { [weak self] existing in
                 self?.makeTabRow(presentation, isCollapsed: isCollapsed, reusing: existing as? TabRowView) ?? NSView()
             }))
 
@@ -289,6 +295,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 }))
             }
         }
+        modelRows = rowItems
+        self.rowItems = arrange(rowItems)
         table.reloadData()
         window?.invalidateCursorRects(for: self)
     }
@@ -342,7 +350,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
         row.onBeginDrag = { [weak self, weak row] event in
             guard let self, let row else { return }
-            self.beginTabRowDrag(tabID: tabID, tabIndex: index, source: row, event: event)
+            self.beginRowDrag(source: .tab(tabID), from: row, event: event)
         }
         return row
     }
@@ -425,14 +433,30 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         paneRow.onBeginDrag = { [weak self, weak paneRow, weak pane] event in
             guard let self, let paneRow, let pane else { return }
-            self.beginPaneRowDrag(source: paneRow, paneID: pane.dragIdentifier, event: event)
+            self.beginRowDrag(source: .pane(pane.dragIdentifier), from: paneRow, event: event)
         }
         paneRow.applySession(state)
         paneRows.setObject(paneRow, forKey: pane.dragIdentifier as NSUUID)
         return paneRow
     }
 
-    // MARK: - 行拖拽（手动跟手循环，与任务列表同一套机件）
+    // MARK: - 行拖拽
+
+    /// 拖的是什么：按身份记，不按下标。
+    enum RowDragSource: Equatable {
+        /// 缩进 pane 行或叶子行。
+        case pane(UUID)
+        /// 标签页容器行。
+        case tab(UUID)
+    }
+
+    /// 松手后交给控制器执行的命令。
+    enum RowDropCommand: Equatable {
+        case moveTab(from: Int, to: Int)
+        case detachPane(UUID, toNewTabAt: Int)
+        case movePaneBeside(UUID, target: UUID, zone: PaneDropZone)
+        case movePaneIntoTab(UUID, tabIndex: Int)
+    }
 
     /// 拖拽落点只有两种语义，因为列表只有两级：
     /// - `insideTab`：落在某个标签页的 pane 块里 → 并进那棵分屏树。
@@ -441,92 +465,262 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     ///
     /// 判定只看紧邻：下方紧邻是缩进 pane 行，说明落点在那个标签页块内；否则看上方。
     /// 两边都不是缩进 pane 行，落点就在标签页之间。折叠的标签页在列表里只有一行，
-    /// 对它而言"块内"不存在——要并进去得把行拖到它身上（见 MergeTarget）。
+    /// 对它而言"块内"不存在——要并进去得把行压到它的中央带上（合并）。
     enum DropSlot: Equatable {
         case insideTab(next: UUID?, previous: UUID?)
         case betweenTabs(Int)
     }
 
-    /// 合并落点：光标压在某一行的中央带上时，意图是"并进这一行"而不是"插到它前后"。
-    /// 这是拖动排序与拖动合并的分界——中央带合并，上下两端排序，与 iOS 主屏建文件夹、
-    /// 浏览器标签页成组是同一套肌肉记忆。合并期间停止让位，目标行不会在脚下移动。
-    private struct MergeTarget {
-        let row: Int
-        let kind: TabRowKind
+    /// 一次行拖拽的全部状态。
+    ///
+    /// 列表数据源从不被拖拽改写：`modelRows` 始终是控制器模型的如实投影，显示用的
+    /// `rowItems` 由"模型行 + 这份状态"推导出来——源行挪到提议的位置、拖动的容器行
+    /// 临时折叠。以前拖拽直接改数据源，途中来一次刷新（agent 状态、任务通知）就把源行
+    /// 弹回原处、把拖拽记下的下标全部作废，松手什么都不发生；现在刷新只是重新推导一遍。
+    ///
+    /// 手势与改树也彻底分开：松手时只定下命令、冻结显示，命令放到下一拍交给控制器。
+    private struct RowDrag {
+        let source: RowDragSource
+        /// 拖容器行时临时折叠的标签页：只影响显示，不碰用户自己的折叠状态。
+        let collapsedForDrag: UUID?
+        /// 源行在"其余各行"里的插入位；nil = 还没离开原位。
+        var insertion: Int? = nil
+        /// 压着中央带的那一行（按行身份记）。
+        var merge: TabRowKind? = nil
+        /// 松手之后、命令执行完之前：显示冻结在松手那一刻，不再响应指针。
+        var committing = false
+        let card: NSView
     }
 
     /// 行高的这个比例之内算中央带（上下各留 25% 给排序）。
     private static let mergeBand: CGFloat = 0.25
 
-    private var mergeTarget: MergeTarget?
-    /// 当前拖拽的浮层，合并态要让它让出视线（见 setMergeTarget）。
-    private weak var dragSnapshot: NSView?
+    private var drag: RowDrag?
 
-    /// 接管一条 pane 行 / 叶子行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，
-    /// 不被 scroll 裁剪），逐帧判定是排序还是合并；释放时翻译成一次真实移动。
-    private func beginPaneRowDrag(source: PaneRowView, paneID: UUID, event: NSEvent) {
-        let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
-        guard let snap = makeDragCard(of: source, frame: startFrame) else { return }
-        addSubview(snap)
-        dragSnapshot = snap
-        // 与任务列表同款：源行原地隐身但保留占位 = 随光标流动的空档，其余行让位。
-        // alpha 0（不是 isHidden）才会保住这条槽位当空档。
-        source.alphaValue = 0
+    /// 当前显示出来的行序（测试与诊断用）。
+    var displayedRows: [TabRowKind] { rowItems.map(\.kind) }
 
-        let cursorInSelf = convert(event.locationInWindow, from: nil)
-        let grabOffsetY = cursorInSelf.y - startFrame.minY
-
-        // 源行是整条标签页（叶子行）还是标签页里的一个分屏 pane，决定顶层落点的动作。
-        let sourceTab: Int? = sourceIndex(paneID).flatMap {
-            if case .leaf(let tab, _) = rowItems[$0].kind { return tab }
-            return nil
+    static func matches(_ row: TabRowKind, _ source: RowDragSource) -> Bool {
+        switch (row, source) {
+        case (.pane(_, let id), .pane(let pane)), (.leaf(_, let id), .pane(let pane)): return id == pane
+        case (.tab(_, let id), .tab(let tab)): return id == tab
+        default: return false
         }
-        // 起手时的落点，用于结束时判空动（没真动就不折腾树）。
-        let origin = dropSlot(for: paneID)
-        var lastIndex = sourceIndex(paneID) ?? 0
+    }
 
+    /// 显示行序：把源行挪到提议的插入位。纯函数，返回模型行下标的排列。
+    static func arrangement(of rows: [TabRowKind], source: RowDragSource, insertion: Int?) -> [Int] {
+        let order = Array(rows.indices)
+        guard let insertion, let from = rows.firstIndex(where: { matches($0, source) }) else { return order }
+        var others = order
+        others.remove(at: from)
+        others.insert(from, at: min(max(insertion, 0), others.count))
+        return others
+    }
+
+    private func arrange(_ rows: [RowItem]) -> [RowItem] {
+        guard let drag else { return rows }
+        return Self.arrangement(of: rows.map(\.kind), source: drag.source, insertion: drag.insertion)
+            .map { rows[$0] }
+    }
+
+    /// 松手时的命令。`rows` 是显示行序，`sourceIndex` 是源行在其中的位置。
+    /// 合并优先：它是用户明确压在某一行上的意图。容器行只参与排序——把一整棵分屏树
+    /// 并进另一个标签页是另一种操作。
+    static func dropCommand(rows: [TabRowKind], sourceIndex si: Int, merge: TabRowKind?) -> RowDropCommand? {
+        guard rows.indices.contains(si) else { return nil }
+        switch rows[si] {
+        case .tab(let index, _):
+            return .moveTab(from: index, to: topLevelIndex(in: rows, before: si))
+        case .pane(_, let pane), .leaf(_, let pane):
+            switch merge {
+            case .tab(let index, _)?:
+                return .movePaneIntoTab(pane, tabIndex: index)
+            case .pane(_, let target)?, .leaf(_, let target)?:
+                return .movePaneBeside(pane, target: target, zone: .right)
+            case nil:
+                break
+            }
+            switch dropSlot(in: rows, sourceIndex: si) {
+            case .insideTab(let next?, _)?:
+                return .movePaneBeside(pane, target: next, zone: .left)
+            case .insideTab(nil, let previous?)?:
+                return .movePaneBeside(pane, target: previous, zone: .right)
+            case .betweenTabs(let index)?:
+                if case .leaf(let tab, _) = rows[si] { return .moveTab(from: tab, to: index) }
+                return .detachPane(pane, toNewTabAt: index)
+            case .insideTab(nil, nil)?, nil:
+                return nil
+            }
+        }
+    }
+
+    /// 纯函数：只看落定后的行序与源行位置。拖拽循环没法在单测里跑，判定逻辑
+    /// 单独摘出来才测得动。
+    static func dropSlot(in rows: [TabRowKind], sourceIndex si: Int) -> DropSlot? {
+        guard rows.indices.contains(si) else { return nil }
+        if si + 1 < rows.count, case .pane(_, let id) = rows[si + 1] {
+            return .insideTab(next: id, previous: nil)
+        }
+        if si > 0, case .pane(_, let id) = rows[si - 1] {
+            return .insideTab(next: nil, previous: id)
+        }
+        return .betweenTabs(topLevelIndex(in: rows, before: si))
+    }
+
+    /// 顶层位次 = 该行上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
+    static func topLevelIndex(in rows: [TabRowKind], before row: Int) -> Int {
+        var index = 0
+        for item in rows[..<min(row, rows.count)] {
+            switch item {
+            case .tab, .leaf: index += 1
+            case .pane: continue
+            }
+        }
+        return index
+    }
+
+    /// 接管一行的拖拽。跟手循环只是薄适配层：开始、移动、松手落在下面三个方法上，
+    /// 与鼠标事件无关，测试可以直接驱动。
+    private func beginRowDrag(source: RowDragSource, from row: NSView, event: NSEvent) {
+        let startFrame = convert(row.bounds, from: row)  // self（非翻转）坐标
+        guard let card = makeDragCard(of: row, frame: startFrame),
+              startDrag(source: source, card: card) else { return }
+        addSubview(card)
+        let grabOffsetY = convert(event.locationInWindow, from: nil).y - startFrame.minY
+        var landing: NSRect?
         ReorderDrag.run(
             host: self,
-            snapshotView: snap,
+            snapshotView: card,
             startEvent: event,
             grabOffsetY: grabOffsetY,
-            onMove: { [weak self] c in
-                guard let self else { return }
-                if self.updateMergeTarget(at: c, sourceID: paneID) { return }  // 合并态不让位
-                // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 目标插入位
-                let from = self.sourceIndex(paneID)
-                let peers = self.rowItems.indices.filter { $0 != from }
-                var index = 0
-                for peer in peers {
-                    guard self.convert(self.table.rect(ofRow: peer), from: self.table).midY > c.y
-                    else { break }
-                    index += 1
-                }
-                index = min(max(index, 0), peers.count)
-                guard index != lastIndex, let from else { return }
-                lastIndex = index
-                let item = self.rowItems.remove(at: from)
-                self.rowItems.insert(item, at: index)
-                self.table.beginUpdates()
-                self.table.moveRow(at: from, to: index)
-                self.table.endUpdates()
-            },
-            dropFrame: { [weak self] in
-                guard let self else { return nil }
-                // 合并时浮层飞进目标行，落点看得见。
-                let row = self.mergeTarget?.row ?? self.sourceIndex(paneID)
-                guard let row else { return nil }
-                return self.convert(self.table.rect(ofRow: row), from: self.table)
-            },
-            onCommit: { [weak self] in
-                self?.commitRowDrop(paneID: paneID, sourceTab: sourceTab, origin: origin)
-            },
-            onEnd: { [weak self, weak source] in
-                source?.alphaValue = 1
-                self?.setMergeTarget(nil)
-                self?.reload()
-            }
-        )
+            onMove: { [weak self] cursor in self?.moveDrag(to: cursor) },
+            dropFrame: { landing },
+            onCommit: { [weak self] in landing = self?.finishDrag() },
+            onEnd: {})
+    }
+
+    /// 开始一次拖拽。源行不在列表里、或上一次拖拽还没收尾时返回 false。
+    @discardableResult
+    func startDrag(source: RowDragSource, card: NSView) -> Bool {
+        guard drag == nil, modelRows.contains(where: { Self.matches($0.kind, source) }) else { return false }
+        var collapse: UUID?
+        if case .tab(let id) = source, !collapsedTabIDs.contains(id) { collapse = id }
+        drag = RowDrag(source: source, collapsedForDrag: collapse, card: card)
+        // 只有临时折叠要重新投影；拖 pane 行时显示还没变，不必整表刷新。
+        if collapse != nil { reload() }
+        return true
+    }
+
+    /// 指针移动（self 坐标）：压在中央带就进入合并态并停止让位，否则算插入位让列表让位。
+    func moveDrag(to cursor: NSPoint) {
+        guard var current = drag, !current.committing else { return }
+        var target: TabRowKind?
+        if case .pane = current.source { target = mergeTarget(at: cursor, source: current.source) }
+        if target != current.merge {
+            current.merge = target
+            drag = current
+            applyDragDecorations()
+            applySnapshotLook(merging: target != nil)
+        }
+        guard target == nil,
+              let from = rowItems.firstIndex(where: { Self.matches($0.kind, current.source) }) else { return }
+        // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 插入位
+        var insertion = 0
+        for row in rowItems.indices where row != from {
+            guard convert(table.rect(ofRow: row), from: table).midY > cursor.y else { break }
+            insertion += 1
+        }
+        guard insertion != (current.insertion ?? from) else { return }
+        current.insertion = insertion
+        drag = current
+        rowItems = arrange(modelRows)
+        guard let to = rowItems.firstIndex(where: { Self.matches($0.kind, current.source) }), to != from else { return }
+        table.beginUpdates()
+        table.moveRow(at: from, to: to)
+        table.endUpdates()
+    }
+
+    /// 松手：定下命令、冻结显示，返回卡片的落点；命令在下一拍交给控制器。
+    ///
+    /// 命令不在跟踪循环里执行，落地动画也不等它：卡片的去留与改树的成败互不牵连，
+    /// 改树就算失败，卡片也照样落地消失。
+    @discardableResult
+    func finishDrag() -> NSRect? {
+        guard var current = drag, !current.committing else { return nil }
+        current.committing = true
+        drag = current
+        let rows = rowItems.map(\.kind)
+        let sourceIndex = rows.firstIndex { Self.matches($0, current.source) }
+        let original = modelRows.firstIndex { Self.matches($0.kind, current.source) }
+        var command: RowDropCommand?
+        if let sourceIndex, current.merge != nil || sourceIndex != original {
+            command = Self.dropCommand(rows: rows, sourceIndex: sourceIndex, merge: current.merge)
+        }
+        let landingRow = current.merge.flatMap { rows.firstIndex(of: $0) } ?? sourceIndex
+        let landing = landingRow.map { convert(table.rect(ofRow: $0), from: table) }
+        DispatchQueue.main.async { [weak self] in self?.completeDrag(command) }
+        return landing
+    }
+
+    private func completeDrag(_ command: RowDropCommand?) {
+        if let command { perform(command) }
+        drag = nil
+        reload()  // 无论命令改没改动模型，都按最终模型重新投影一次
+    }
+
+    @discardableResult
+    private func perform(_ command: RowDropCommand) -> Bool {
+        guard let controller else { return false }
+        switch command {
+        case .moveTab(let from, let to):
+            return controller.moveTab(from: from, to: to)
+        case .detachPane(let pane, let index):
+            return controller.detachPane(withID: pane, toNewTabAt: index)
+        case .movePaneBeside(let pane, let target, let zone):
+            guard let destination = controller.panes().first(where: { $0.dragIdentifier == target }) else { return false }
+            return controller.movePane(withID: pane, to: destination, zone: zone)
+        case .movePaneIntoTab(let pane, let index):
+            return controller.movePane(withID: pane, toTabAt: index)
+        }
+    }
+
+    private func mergeTarget(at cursor: NSPoint, source: RowDragSource) -> TabRowKind? {
+        for row in rowItems.indices where !Self.matches(rowItems[row].kind, source) {
+            let rect = convert(table.rect(ofRow: row), from: table)
+            guard cursor.y >= rect.minY, cursor.y <= rect.maxY else { continue }
+            return abs(cursor.y - rect.midY) <= rect.height * Self.mergeBand ? rowItems[row].kind : nil
+        }
+        return nil
+    }
+
+    /// 拖拽派生出来的行外观：源行留空位（容器透明）、合并目标描边。行每次绑定、
+    /// 合并目标每次变化都按当前状态重算，刷新再多也不会留下残影。
+    private func applyDragDecorations() {
+        let visible = table.rows(in: table.visibleRect)
+        for row in visible.location..<(visible.location + visible.length) {
+            guard let container = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? TabRowContainer
+            else { continue }
+            decorate(container, row: row)
+        }
+    }
+
+    private func decorate(_ container: TabRowContainer, row: Int) {
+        guard rowItems.indices.contains(row) else { return }
+        let kind = rowItems[row].kind
+        container.alphaValue = drag.map { Self.matches(kind, $0.source) } == true ? 0 : 1
+        (container.content as? any SidebarPaneDropRow)?.setDropHighlighted(drag?.merge == kind)
+    }
+
+    /// 合并态下浮层让出视线：目标行的落点框线正好压在浮层底下，浮层不淡一档就完全
+    /// 看不见，用户只能靠猜自己要并进谁。只调透明度，不缩放：浮层是位图，缩放等于
+    /// 把文字重采样，虚实一变就像卡了一帧。
+    private func applySnapshotLook(merging: Bool) {
+        guard let card = drag?.card else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            card.animator().alphaValue = merging ? 0.5 : 1
+        }
     }
 
     /// 拖起来的卡片。两件事在这里统一：
@@ -556,204 +750,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return card
     }
 
-    /// 光标是否压在某一行的中央带上。是则进入合并态（高亮目标行）并返回 true。
-    private func updateMergeTarget(at cursor: NSPoint, sourceID: UUID) -> Bool {
-        let source = sourceIndex(sourceID)
-        for row in rowItems.indices where row != source {
-            let rect = convert(table.rect(ofRow: row), from: table)
-            guard rect.contains(NSPoint(x: rect.midX, y: cursor.y)) else { continue }
-            guard abs(cursor.y - rect.midY) <= rect.height * Self.mergeBand else { break }
-            setMergeTarget(MergeTarget(row: row, kind: rowItems[row].kind))
-            return true
-        }
-        setMergeTarget(nil)
-        return false
-    }
-
-    private func setMergeTarget(_ target: MergeTarget?) {
-        guard mergeTarget?.row != target?.row else { return }
-        if let previous = mergeTarget?.row { dropRow(at: previous)?.setDropHighlighted(false) }
-        let wasMerging = mergeTarget != nil
-        mergeTarget = target
-        if let row = target?.row { dropRow(at: row)?.setDropHighlighted(true) }
-        guard wasMerging != (target != nil) else { return }
-        applySnapshotLook(merging: target != nil)
-    }
-
-    /// 合并态下浮层让出视线：目标行的落点框线正好压在浮层底下，浮层不再淡一档
-    /// 就完全看不见，用户只能靠猜自己要并进谁。顺带把"现在是合并不是排序"再说一遍，
-    /// 模态差异只靠一条框线交代太单薄。
-    /// 只调透明度，不缩放：浮层是位图，缩放等于把文字重采样，虚实一变就像卡了一帧。
-    private func applySnapshotLook(merging: Bool) {
-        guard let snapshot = dragSnapshot else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            snapshot.animator().alphaValue = merging ? 0.5 : 1
-        }
-    }
-
-    private func dropRow(at index: Int) -> (any SidebarPaneDropRow)? {
-        guard rowItems.indices.contains(index) else { return nil }
-        let container = table.view(atColumn: 0, row: index, makeIfNecessary: false)
-        return (container as? TabRowContainer)?.content as? any SidebarPaneDropRow
-    }
-
-    /// 源行落定后的位置翻译成落点语义。
-    private func dropSlot(for paneID: UUID) -> DropSlot? {
-        guard let si = sourceIndex(paneID) else { return nil }
-        return Self.dropSlot(in: rowItems.map(\.kind), sourceIndex: si)
-    }
-
-    /// 纯函数：只看落定后的行序与源行位置。拖拽循环没法在单测里跑，判定逻辑
-    /// 单独摘出来才测得动。
-    static func dropSlot(in rows: [TabRowKind], sourceIndex si: Int) -> DropSlot? {
-        guard rows.indices.contains(si) else { return nil }
-        if si + 1 < rows.count, case .pane(_, let id) = rows[si + 1] {
-            return .insideTab(next: id, previous: nil)
-        }
-        if si > 0, case .pane(_, let id) = rows[si - 1] {
-            return .insideTab(next: nil, previous: id)
-        }
-        return .betweenTabs(topLevelIndex(in: rows, before: si))
-    }
-
-    /// 顶层位次 = 该行上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
-    static func topLevelIndex(in rows: [TabRowKind], before row: Int) -> Int {
-        var index = 0
-        for item in rows[..<min(row, rows.count)] {
-            switch item {
-            case .tab, .leaf: index += 1
-            case .pane: continue
-            }
-        }
-        return index
-    }
-
-    /// 把落点翻译成一次真实移动。合并优先：它是用户明确压在某一行上的意图。
-    private func commitRowDrop(paneID: UUID, sourceTab: Int?, origin: DropSlot?) {
-        guard let controller else { return }
-        if let merge = mergeTarget {
-            switch merge.kind {
-            case .tab(let index):
-                controller.movePane(withID: paneID, toTabAt: index)
-            case .pane(_, let id), .leaf(_, let id):
-                guard let destination = pane(id) else { return }
-                controller.movePane(withID: paneID, to: destination, zone: .right)
-            }
-            return
-        }
-        guard let slot = dropSlot(for: paneID), slot != origin else { return }
-        switch slot {
-        case .insideTab(let next, let previous):
-            if let destination = pane(next) {
-                controller.movePane(withID: paneID, to: destination, zone: .left)
-            } else if let destination = pane(previous) {
-                controller.movePane(withID: paneID, to: destination, zone: .right)
-            }
-        case .betweenTabs(let index):
-            if let sourceTab {
-                controller.moveTab(from: sourceTab, to: index)
-            } else {
-                controller.detachPane(withID: paneID, toNewTabAt: index)
-            }
-        }
-    }
-
-    /// 接管一条标签页容器行的拖拽：整条标签页换位次，不参与合并——把一整棵分屏树
-    /// 并进另一个标签页是另一种操作，现在的通路一次只搬一个 pane。
-    /// 多 pane 展开着的标签页先临时折叠成一行再拖：拖一个会在脚下抻开收拢的
-    /// 多行块，落点根本对不准。松手后恢复原来的展开状态。
-    private func beginTabRowDrag(tabID: UUID, tabIndex: Int, source: TabRowView, event: NSEvent) {
-        let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
-        guard let card = makeDragCard(of: source, frame: startFrame) else { return }
-        let wasExpanded = collapseForDrag(tabID: tabID)
-        guard var current = rowIndex(ofTab: tabIndex) else {
-            restoreAfterDrag(tabID: tabID, wasExpanded: wasExpanded)
-            return
-        }
-
-        addSubview(card)
-        dropRow(at: current)?.alphaValue = 0
-        let cursorInSelf = convert(event.locationInWindow, from: nil)
-        let grabOffsetY = cursorInSelf.y - startFrame.minY
-        let origin = current
-
-        ReorderDrag.run(
-            host: self,
-            snapshotView: card,
-            startEvent: event,
-            grabOffsetY: grabOffsetY,
-            onMove: { [weak self] c in
-                guard let self else { return }
-                let peers = self.rowItems.indices.filter { $0 != current }
-                var index = 0
-                for peer in peers {
-                    guard self.convert(self.table.rect(ofRow: peer), from: self.table).midY > c.y
-                    else { break }
-                    index += 1
-                }
-                index = min(max(index, 0), peers.count)
-                guard index != current else { return }
-                let item = self.rowItems.remove(at: current)
-                self.rowItems.insert(item, at: index)
-                self.table.beginUpdates()
-                self.table.moveRow(at: current, to: index)
-                self.table.endUpdates()
-                current = index
-            },
-            dropFrame: { [weak self] in
-                guard let self, self.rowItems.indices.contains(current) else { return nil }
-                return self.convert(self.table.rect(ofRow: current), from: self.table)
-            },
-            onCommit: { [weak self] in
-                guard let self, current != origin else { return }
-                let destination = Self.topLevelIndex(in: self.rowItems.map(\.kind), before: current)
-                self.controller?.moveTab(from: tabIndex, to: destination)
-            },
-            onEnd: { [weak self] in
-                self?.dropRow(at: current)?.alphaValue = 1
-                self?.restoreAfterDrag(tabID: tabID, wasExpanded: wasExpanded)
-            }
-        )
-    }
-
-    /// 拖动容器行前把展开着的标签页临时折叠成一行；返回它本来是否展开着。
-    /// 折叠只摘掉本行下方的 pane 行，本行自己的 frame 不动，所以快照与抓取偏移仍然有效。
-    @discardableResult
-    func collapseForDrag(tabID: UUID) -> Bool {
-        let wasExpanded = !collapsedTabIDs.contains(tabID)
-        guard wasExpanded else { return false }
-        collapsedTabIDs.insert(tabID)
-        reload()
-        return true
-    }
-
-    /// 松手后恢复原来的展开状态：折叠只是拖动期间的取景，不是用户的选择。
-    func restoreAfterDrag(tabID: UUID, wasExpanded: Bool) {
-        if wasExpanded { collapsedTabIDs.remove(tabID) }
-        reload()
-    }
-
-    private func rowIndex(ofTab index: Int) -> Int? {
-        rowItems.firstIndex {
-            if case .tab(let i) = $0.kind { return i == index }
-            return false
-        }
-    }
-
-    private func pane(_ id: UUID?) -> PaneView? {
-        guard let id else { return nil }
-        return controller?.panes().first { $0.dragIdentifier == id }
-    }
-
-    private func sourceIndex(_ paneID: UUID) -> Int? {
-        rowItems.firstIndex {
-            switch $0.kind {
-            case .pane(_, let id), .leaf(_, let id): return id == paneID
-            case .tab: return false
-            }
-        }
-    }
 }
 
 /// 标签页行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
