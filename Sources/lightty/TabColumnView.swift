@@ -12,6 +12,12 @@ import LighttyCore
 /// 标签页行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
 /// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
+///
+/// 叶子标签页（Arc 侧栏形态）：标签页只有一个 pane 时，容器行和 pane 行合并成
+/// 一条不缩进的 pane 行——「标签页 N · 1」两样都是空信息，独占一行只会让列表变重。
+/// 行本身仍是 pane 行（状态原地更新、拖拽源），标签页语义叠在上面：落点 = 移入该
+/// 标签页，⋯ / 双击 = 重命名标签页；用户改过名的标签页以自己的名字出场，pane 名
+/// 进 tooltip。开出第二个分屏就自动展开成两级树，关回一个再收回。
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
@@ -28,7 +34,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let scroll = SidebarListScrollView()
     private let table = NSTableView()
     private struct RowItem {
-        enum Kind { case tab(Int), pane(UUID) }
+        /// `leaf` = 单 pane 标签页的合并行：拖拽算法里它既是 pane（可拖走），
+        /// 又是标签页边界（落在它下面 = 移入它的标签页）。
+        enum Kind { case tab(Int), pane(UUID), leaf(tab: Int, pane: UUID) }
         let kind: Kind
         let makeView: (NSView?) -> NSView
     }
@@ -134,6 +142,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         switch rowItems[row].kind {
         case .tab: return row == 0 ? 30 : 36
         case .pane: return 42
+        // 叶子行之间比同标签页内的 pane 行多留一点气口（它们是不同的标签页），
+        // 但比容器行的组间距小一档，列表不至于散。
+        case .leaf: return row == 0 ? 42 : 46
         }
     }
 
@@ -142,6 +153,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         switch rowItems[row].kind {
         case .tab: identifier = .init("tab-row")
         case .pane: identifier = .init("pane-row")
+        // 缩进在 PaneRowView 初始化时定死，叶子行与缩进 pane 行不共用复用池。
+        case .leaf: identifier = .init("leaf-row")
         }
         let container = tableView.makeView(withIdentifier: identifier, owner: nil) as? TabRowContainer ?? TabRowContainer()
         container.identifier = identifier
@@ -224,7 +237,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         reload(overview: controller.tabOverview())
     }
 
-    typealias OverviewEntry = (id: UUID, index: Int, title: String, isActive: Bool, panes: [PaneView])
+    typealias OverviewEntry = (
+        id: UUID, index: Int, title: String, hasCustomTitle: Bool, isActive: Bool, panes: [PaneView])
     private struct TabPresentation {
         let id: UUID
         let index: Int
@@ -238,6 +252,19 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         paneRows.removeAllObjects()
         collapsedTabIDs.formIntersection(overview.map(\.id))
         for entry in overview {
+            if entry.panes.count == 1, let pane = entry.panes.first {
+                // 叶子标签页：折叠对它无意义，折叠集合里的残留不影响它。
+                let index = entry.index
+                let title = entry.title
+                let hasCustomTitle = entry.hasCustomTitle
+                rowItems.append(RowItem(kind: .leaf(tab: index, pane: pane.dragIdentifier),
+                    makeView: { [weak self, weak pane] existing in
+                        guard let self, let pane else { return NSView() }
+                        return self.makeLeafRow(for: pane, tabIndex: index, tabTitle: title,
+                            hasCustomTitle: hasCustomTitle, reusing: existing as? PaneRowView)
+                    }))
+                continue
+            }
             let isCollapsed = collapsedTabIDs.contains(entry.id)
             let presentation = TabPresentation(id: entry.id, index: entry.index, title: entry.title,
                 isActive: entry.isActive, count: entry.panes.count)
@@ -318,10 +345,42 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         reload()
     }
 
+    /// 单 pane 标签页的合并行：pane 行的皮、标签页的骨。
+    private func makeLeafRow(
+        for pane: PaneView,
+        tabIndex: Int,
+        tabTitle: String,
+        hasCustomTitle: Bool,
+        reusing existing: PaneRowView?
+    ) -> PaneRowView {
+        let row = makePaneRow(for: pane, indented: false,
+            isActive: pane.dragIdentifier == controller?.activePane?.dragIdentifier,
+            titleOverride: hasCustomTitle ? tabTitle : nil,
+            reusing: existing)
+        // 落点语义换成标签页的：拖进来 = 移入该标签页（内核会把它排到这个 pane 旁边）。
+        row.onPaneDrop = { [weak self] sourceID in
+            self?.controller?.movePane(withID: sourceID, toTabAt: tabIndex) ?? false
+        }
+        let rename: () -> Void = { [weak self, weak row] in
+            guard let self, let anchor = row, let controller = self.controller else { return }
+            NameEditorPopover.present(
+                from: anchor, title: L("Rename tab"),
+                initial: tabTitle, confirmLabel: L("Rename")
+            ) { name in controller.renameTab(at: tabIndex, to: name) }
+        }
+        row.onRename = rename
+        row.onMenu = { [weak row] in
+            guard let anchor = row else { return }
+            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), handler: rename)])
+        }
+        return row
+    }
+
     private func makePaneRow(
         for pane: PaneView,
         indented: Bool,
         isActive: Bool,
+        titleOverride: String? = nil,
         reusing existing: PaneRowView? = nil
     ) -> PaneRowView {
         let state = pane.sessionState
@@ -338,7 +397,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             workingDirectory: state.workingDirectory)
         paneRow.configure(paneID: pane.dragIdentifier, name: state.title,
             taskName: pane.header.titleOfBoundTask, isActive: isActive,
-            workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent)
+            workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent,
+            titleOverride: titleOverride)
+        // 标签页语义的回调只有叶子行会装；普通 pane 行复用时必须清掉。
+        paneRow.onMenu = nil
+        paneRow.onRename = nil
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
             self.controller?.reveal(pane: pane)
@@ -465,19 +528,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    /// 源行上方最近的标签页标题的 index（落进空/首位时用）。
+    /// 源行上方最近的标签页（容器行或叶子行）的 index（落进空/首位时用）。
     private func tabIndexAbove(_ source: PaneRowView) -> Int? {
         guard let si = sourceIndex(source.paneID) else { return nil }
         for item in rowItems[..<si].reversed() {
-            if case .tab(let index) = item.kind { return index }
+            switch item.kind {
+            case .tab(let index), .leaf(let index, _): return index
+            case .pane: continue
+            }
         }
         return nil
     }
 
     private func sourceIndex(_ paneID: UUID) -> Int? {
         rowItems.firstIndex {
-            if case .pane(let id) = $0.kind { return id == paneID }
-            return false
+            switch $0.kind {
+            case .pane(let id), .leaf(_, let id): return id == paneID
+            case .tab: return false
+            }
         }
     }
 }
@@ -785,6 +853,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     var onPaneDrop: ((UUID) -> Bool)?
     /// 起手拖拽本行（由所属 TabColumnView 接管跟手循环，与任务列表同款）。
     var onBeginDrag: ((NSEvent) -> Void)?
+    /// 叶子标签页行才装：hover 出 ⋯ 菜单、双击改名。普通 pane 行为 nil，行尾不留槽位。
+    var onMenu: (() -> Void)? { didSet { applyMenuSlot() } }
+    var onRename: (() -> Void)?
 
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
     /// 存 id 而不是 pane 引用：行只需要向 store 取状态，不需要够到 pane 本体，
@@ -793,8 +864,13 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
     private let dotView = NSView()
     private let closeButton = NSButton()
+    private let menuButton = NSButton()
+    private var menuButtonWidth: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
     private var bound: Bool
+    /// 叶子标签页行用用户起的标签页名顶替 pane 名；pane 名退到 tooltip。
+    private var titleOverride: String?
+    private var paneName: String
     private var taskName: String?
     private let nameLabel = NSTextField(labelWithString: "")
     private let agentIcon = NSImageView()
@@ -814,6 +890,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             guard oldValue != hovered else { return }
             applyFill()
             closeButton.isHidden = !hovered
+            menuButton.isHidden = !hovered || onMenu == nil
             applyToolTips()
         }
     }
@@ -831,6 +908,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         self.bound = bound
         self.taskName = taskName
         self.isActive = isActive
+        paneName = name
         terminalWorkingDirectory = workingDirectory
         super.init(frame: .zero)
         wantsLayer = true
@@ -850,6 +928,16 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         closeButton.isHidden = true
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
+
+        menuButton.image = SymbolImages.image(
+            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
+        menuButton.isBordered = false
+        menuButton.imagePosition = .imageOnly
+        menuButton.focusRingType = .none
+        menuButton.contentTintColor = ShellStyle.secondaryText
+        menuButton.isHidden = true
+        menuButton.target = self
+        menuButton.action = #selector(menuTapped)
 
         nameLabel.stringValue = name
         nameLabel.font = .systemFont(ofSize: 12)
@@ -884,7 +972,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         agentIcon.contentTintColor = ShellStyle.primaryText
         agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
         agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
-        for v in [dotView, closeButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
+        menuButtonWidth = menuButton.widthAnchor.constraint(equalToConstant: 0)
+        for v in [dotView, closeButton, menuButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -902,6 +991,11 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 18),
             closeButton.heightAnchor.constraint(equalToConstant: 18),
+            // ⋯ 槽位只在装了菜单（叶子行）时占宽，普通 pane 行不为它让出标题空间。
+            menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor),
+            menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            menuButtonWidth,
+            menuButton.heightAnchor.constraint(equalToConstant: 18),
 
             agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
             agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
@@ -915,14 +1009,14 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
             statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
             statusLabel.trailingAnchor.constraint(
-                equalTo: closeButton.leadingAnchor, constant: -4),
+                equalTo: menuButton.leadingAnchor, constant: -4),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
             // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
             // 路径也能多拿到 13pt 的有效宽度。
             secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
+                lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
             secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
             secondaryStack.bottomAnchor.constraint(
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
@@ -936,6 +1030,12 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func closeTapped() { onClose?() }
+    @objc private func menuTapped() { onMenu?() }
+
+    private func applyMenuSlot() {
+        menuButtonWidth.constant = onMenu == nil ? 0 : 20
+        menuButton.isHidden = !hovered || onMenu == nil
+    }
 
     func setActive(_ active: Bool) {
         guard isActive != active else { return }
@@ -943,7 +1043,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyFill()
     }
 
-    func configure(paneID: UUID, name: String, taskName: String?, isActive: Bool, workingDirectory: String?, sessionAgent: SessionAgent? = nil) {
+    func configure(
+        paneID: UUID, name: String, taskName: String?, isActive: Bool, workingDirectory: String?,
+        sessionAgent: SessionAgent? = nil, titleOverride: String? = nil
+    ) {
         sidebarHoverExited()
         hovered = false
         alphaValue = 1
@@ -955,7 +1058,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         terminalWorkingDirectory = workingDirectory
         status = nil
         isUnread = false
-        nameLabel.stringValue = name
+        paneName = name
+        self.titleOverride = titleOverride
+        nameLabel.stringValue = titleOverride ?? name
         displayedAgent = sessionAgent
         agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
         agentIconWidth.constant = sessionAgent == nil ? 0 : 12
@@ -974,8 +1079,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
     /// Update visible fields in place; metadata changes must not reset hover or activity.
     func applySession(_ state: PaneSessionState) {
-        if nameLabel.stringValue != state.title {
-            nameLabel.stringValue = state.title
+        if paneName != state.title {
+            paneName = state.title
+            nameLabel.stringValue = titleOverride ?? state.title
             applyToolTips()
         }
         let agent = state.sessionKey?.agent
@@ -1064,8 +1170,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// tooltip 本来也只在指针停在行上时才会出现，行为不变。
     private func applyToolTips() {
         let on = hovered
-        closeButton.toolTip = on ? L("Close pane") : nil
-        nameLabel.toolTip = on ? nameLabel.stringValue : nil
+        // 叶子行关的是整个标签页（最后一个 pane 关掉 = 标签页关掉），提示照实说。
+        closeButton.toolTip = on ? (onRename != nil ? L("Close tab") : L("Close pane")) : nil
+        nameLabel.toolTip = on ? paneName : nil
         taskLabel.toolTip = on ? taskName : nil
         statusLabel.toolTip = on && !statusLabel.isHidden ? statusLabel.stringValue : nil
         directoryLabel.toolTip = on ? (terminalWorkingDirectory ?? status?.cwd) : nil
@@ -1126,6 +1233,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
     /// 与 PaneHeaderView 同款 click/drag 分流：3pt 内是点击，超出启动 pane 拖拽。
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2, let onRename { onRename(); return }
         let origin = event.locationInWindow
         let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
         while let next = NSApp.nextEvent(
