@@ -59,6 +59,18 @@ final class TabDragSemanticsTests: XCTestCase {
         XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 1), .betweenTabs(1))
     }
 
+    func testTopLevelIndexCountsTabsNotRows() {
+        // [容器0] [pane] [pane] [叶子1] [容器2]
+        let rows: [TabRowKind] = [
+            .tab(0), .pane(tab: 0, pane: a), .pane(tab: 0, pane: b), .leaf(tab: 1, pane: c), .tab(2),
+        ]
+        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 0), 0)
+        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 2), 1, "块内的 pane 行不计位次")
+        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 3), 1)
+        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 4), 2)
+        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: rows.count), 3)
+    }
+
     // MARK: - 落点对应的真实移动
 
     func testMovingATabKeepsTheSelectionOnTheSameTab() throws {
@@ -104,6 +116,57 @@ final class TabDragSemanticsTests: XCTestCase {
         XCTAssertFalse(controller.detachPane(withID: only.dragIdentifier, toNewTabAt: 0),
                        "单 pane 标签页拆不出东西，这种落点该走 moveTab")
         XCTAssertEqual(controller.tabOverview().count, 1)
+    }
+
+    // MARK: - 容器行拖拽（合成事件跑完整循环）
+
+    // MARK: - 容器行拖拽
+
+    func testAnExpandedTabCollapsesToOneRowForTheDragAndComesBackAfter() throws {
+        let controller = TerminalWindowController()
+        defer { controller.window?.close() }
+        let window = try XCTUnwrap(controller.window)
+        let first = try XCTUnwrap(controller.activePane)
+        controller.split(first, direction: .right)   // 标签页 0：两个 pane，展开着
+        controller.addTab(initialPane: PaneView())   // 标签页 1：叶子行
+
+        let column = TabColumnView()
+        try XCTUnwrap(window.contentView).addSubview(column)
+        column.frame = NSRect(x: 0, y: 0, width: 260, height: 600)
+        column.reload()
+        let table = try XCTUnwrap(descendants(column).compactMap { $0 as? NSTableView }.first)
+        XCTAssertEqual(table.numberOfRows, 4, "容器行 + 两条 pane 行 + 一条叶子行")
+
+        let tabID = try XCTUnwrap(controller.tabOverview().first?.id)
+        XCTAssertTrue(column.collapseForDrag(tabID: tabID))
+        XCTAssertEqual(table.numberOfRows, 2, "拖动期间多 pane 标签页收成一行")
+
+        column.restoreAfterDrag(tabID: tabID, wasExpanded: true)
+        XCTAssertEqual(table.numberOfRows, 4, "松手后恢复原来的展开状态")
+    }
+
+    func testATabTheUserAlreadyCollapsedStaysCollapsedAfterTheDrag() throws {
+        let controller = TerminalWindowController()
+        defer { controller.window?.close() }
+        let window = try XCTUnwrap(controller.window)
+        let first = try XCTUnwrap(controller.activePane)
+        controller.split(first, direction: .right)
+
+        let column = TabColumnView()
+        try XCTUnwrap(window.contentView).addSubview(column)
+        column.frame = NSRect(x: 0, y: 0, width: 260, height: 600)
+        column.reload()
+        let table = try XCTUnwrap(descendants(column).compactMap { $0 as? NSTableView }.first)
+        let tabID = try XCTUnwrap(controller.tabOverview().first?.id)
+
+        XCTAssertTrue(column.collapseForDrag(tabID: tabID))
+        XCTAssertFalse(column.collapseForDrag(tabID: tabID), "本来就折叠着，没什么可折的")
+        column.restoreAfterDrag(tabID: tabID, wasExpanded: false)
+        XCTAssertEqual(table.numberOfRows, 1, "用户自己折叠的标签页不该被拖拽顺手展开")
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
     }
 
     func testMergingTwoSinglePaneTabsLeavesOneTabWithBothPanes() throws {
