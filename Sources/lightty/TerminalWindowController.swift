@@ -12,6 +12,16 @@ final class TerminalTab {
     fileprivate(set) var rootView: NSView?
     /// 标签页名：会话态，双击 tab 标签改，不从 pane/任务派生、不落盘。
     var title = L("Tab")
+    /// 用户亲手改过名（不是「标签页 N」）。快照只存字符串，所以按默认名格式反推；
+    /// 侧栏据此决定单 pane 标签页的叶子行用谁的名字。
+    var hasCustomTitle: Bool { TerminalTab.defaultTitleNumber(title) == nil }
+
+    /// 「标签页 N」→ N；不是默认名返回 nil。
+    static func defaultTitleNumber(_ title: String) -> Int? {
+        let prefix = L("Tab %d").replacingOccurrences(of: "%d", with: "")
+        guard title.hasPrefix(prefix) else { return nil }
+        return Int(title.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
+    }
 
     init() {
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -387,11 +397,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// 同 PaneView.seedDefaultNameCounter：恢复后新标签页不与「标签页 2」重名。
     private func seedTabCounter(from titles: [String]) {
-        let prefix = L("Tab %d").replacingOccurrences(of: "%d", with: "")
-        let numbers = titles.compactMap { title -> Int? in
-            guard title.hasPrefix(prefix) else { return nil }
-            return Int(title.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
-        }
+        let numbers = titles.compactMap(TerminalTab.defaultTitleNumber)
         if let top = numbers.max() { tabCounter = max(tabCounter, top) }
     }
 
@@ -576,11 +582,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         id: UUID,
         index: Int,
         title: String,
+        hasCustomTitle: Bool,
         isActive: Bool,
         panes: [PaneView]
     )] {
         tabs.enumerated().map { index, tab in
-            (tab.id, index, tab.title, index == activeTabIndex, panes(in: tab))
+            (tab.id, index, tab.title, tab.hasCustomTitle, index == activeTabIndex, panes(in: tab))
         }
     }
 

@@ -727,7 +727,7 @@ final class PrimarySidebarTests: XCTestCase {
         let scroll = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? SidebarListScrollView }.first)
         let document = try XCTUnwrap(scroll.documentView)
         let column = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? TabColumnView }.first)
-        column.reload(overview: (0..<100).map { (UUID(), $0, "Tab \($0)", false, []) })
+        column.reload(overview: (0..<100).map { (UUID(), $0, "Tab \($0)", false, false, []) })
         scroll.autohidesScrollers = false
         for style in [NSScroller.Style.legacy, .overlay] {
             scroll.scrollerStyle = style

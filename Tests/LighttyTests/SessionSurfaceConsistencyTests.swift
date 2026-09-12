@@ -45,7 +45,8 @@ extension SessionAssociationTests {
         try await f.wait { sessionTable.selectedRow >= 0 }
         try await f.wait { text(search).contains(record.title) }
         searchTable.selectRowIndexes([0], byExtendingSelection: false)
-        let row = try #require(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: true))
+        // 单 pane 标签页是一条叶子行，pane 行就在第 0 行（没有容器行在前）。
+        let row = try #require(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: true))
         let tabTitles = controller.snapshot()?.tabs.map(\.title)
 
         let process = try #require(AgentProcessIdentity.read(ProcessInfo.processInfo.processIdentifier))
@@ -54,7 +55,7 @@ extension SessionAssociationTests {
         try await f.wait { pane.header.title == changed.title && text(list).contains(changed.title)
             && text(tabs).contains(changed.title) && text(search).contains(changed.title) }
         #expect(searchTable.selectedRow == 0)
-        #expect(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: false) === row,
+        #expect(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: false) === row,
                 "A session metadata update must not rebuild the Tabs list")
         #expect(controller.snapshot()?.tabs.map(\.title) == tabTitles)
         #expect(pane.sessionState.session == changed)
@@ -64,7 +65,7 @@ extension SessionAssociationTests {
         try await f.status(.tool, event: "PreToolUse", pane: pane.dragIdentifier, record: changed)
         #expect(!pane.acceptsInjectedCommand)
         #expect(text(tabs).contains(L("Thinking")))
-        #expect(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: false) === row)
+        #expect(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: false) === row)
         #expect(f.library.openedSessionKeys == [record.key])
 
         // A background pane's completion must not resemble another selected row.
@@ -72,7 +73,7 @@ extension SessionAssociationTests {
         other.terminal.removeFromSuperview()
         controller.addTab(initialPane: other)
         try await f.status(.done, event: "Stop", pane: pane.dragIdentifier, record: changed)
-        let completedRow = try #require(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: true))
+        let completedRow = try #require(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: true))
         let completedLabel = try #require(descendants(completedRow).compactMap { $0 as? NSTextField }
             .first { $0.stringValue == "✓ \(L("Finished"))" })
         #expect(completedLabel.superview?.layer?.backgroundColor?.alpha == 0)
@@ -82,7 +83,7 @@ extension SessionAssociationTests {
         f.library.markRead(pane.dragIdentifier)
         try await f.wait { completedLabel.isHidden && completedLabel.stringValue.isEmpty }
         #expect((completedLabel as? PaneStatusLabel)?.breath == nil)
-        #expect(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: false) === completedRow)
+        #expect(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: false) === completedRow)
         controller.selectTab(at: 0)
 
         try await f.status(.idle, event: "SessionEnd", pane: pane.dragIdentifier, record: changed)
@@ -92,6 +93,6 @@ extension SessionAssociationTests {
         #expect(f.library.openedSessionKeys.isEmpty)
         #expect(searchTable.selectedRow == 0, "Search keeps its own keyboard selection when the terminal session ends")
         #expect(f.library.records == [changed], "Ending a process does not delete its saved conversation")
-        #expect(tabTable.view(atColumn: 0, row: 1, makeIfNecessary: false) === completedRow)
+        #expect(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: false) === completedRow)
     }
 }

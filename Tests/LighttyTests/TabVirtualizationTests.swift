@@ -22,17 +22,26 @@ final class TabVirtualizationTests: XCTestCase {
         let table = try XCTUnwrap(descendants(column).compactMap { $0 as? NSTableView }.first)
         column.layoutSubtreeIfNeeded()
         table.layoutSubtreeIfNeeded()
+        // 单 pane 标签页是一条叶子行：没有容器行，也没有折叠钮。
+        XCTAssertEqual(table.numberOfRows, 1)
+        XCTAssertNil(descendants(table).compactMap { $0 as? NSButton }.first { $0.toolTip == L("Collapse tab") })
+
+        // 分屏后展开成容器行 + 两条 pane 行，折叠只收起 pane 行。
+        let first = try XCTUnwrap(controller.activePane)
+        controller.split(first, direction: .right)
+        column.reload()
+        table.layoutSubtreeIfNeeded()
         let count = table.numberOfRows
-        XCTAssertGreaterThan(count, 1)
+        XCTAssertEqual(count, 3)
         let collapse = try XCTUnwrap(descendants(table).compactMap { $0 as? NSButton }.first { $0.toolTip == L("Collapse tab") })
         collapse.performClick(nil)
         table.layoutSubtreeIfNeeded()
-        XCTAssertEqual(table.numberOfRows, count - 1)
+        XCTAssertEqual(table.numberOfRows, count - 2)
         let expand = try XCTUnwrap(descendants(table).compactMap { $0 as? NSButton }.first { $0.toolTip == L("Expand tab") })
         expand.performClick(nil)
         table.layoutSubtreeIfNeeded()
         XCTAssertEqual(table.numberOfRows, count)
-        XCTAssertEqual(controller.panes().count, 1)
+        XCTAssertEqual(controller.panes().count, 2)
     }
 
     func testThousandTabsOnlyInstantiateViewportRows() throws {
@@ -45,7 +54,7 @@ final class TabVirtualizationTests: XCTestCase {
         let column = TabColumnView()
         window.contentView = column
         column.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
-        column.reload(overview: (0..<count).map { (UUID(), $0, "Tab \($0)", false, []) })
+        column.reload(overview: (0..<count).map { (UUID(), $0, "Tab \($0)", false, false, []) })
         column.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }

@@ -72,6 +72,8 @@ final class SidebarScrollHoverTests: XCTestCase {
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
+        // 单 pane 标签页是叶子行，没有容器行；分屏一次才有标签页行 + pane 行可测。
+        controller.split(try XCTUnwrap(controller.activePane), direction: .right)
         let column = TabColumnView()
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
@@ -110,6 +112,8 @@ final class SidebarScrollHoverTests: XCTestCase {
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
+        // 单 pane 标签页是叶子行，没有容器行；分屏一次才有标签页行 + pane 行可测。
+        controller.split(try XCTUnwrap(controller.activePane), direction: .right)
         let column = TabColumnView()
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
