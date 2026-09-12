@@ -111,40 +111,19 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
-          MAKE_DMG=1 scripts/package-app.sh "$VERSION"
+          # 三种口味共用同一次 swift build（增量），分别组包签名。
+          # universal 是给本次改动之前装好的那些 app 用的兼容口味：它们的更新源写死
+          # 在 Info.plist 里指向 appcast.xml，那条源必须继续提供两种机器都能跑的包。
+          for flavor in universal arm64 x64; do
+            FLAVOR=$flavor MAKE_DMG=1 scripts/package-app.sh "$VERSION"
+          done
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Verify packaged SDK and deployment target
         run: bash scripts/verify-release-sdk.sh dist/lightty.app/Contents/MacOS/lightty
 
-      - name: Sign update + generate appcast
-        if: github.ref_type == 'tag'
-        env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: |
-          SIGN_TOOL="$(find .build/artifacts -path '*Sparkle/bin/sign_update' | head -1)"
-          # --ed-key-file -：私钥经 stdin 传入，不落盘
-          SIGNATURE="$(echo "$SPARKLE_ED_PRIVATE_KEY" | "$SIGN_TOOL" --ed-key-file - "dist/lightty-$VERSION.dmg")"
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg"
-          cat > dist/appcast.xml <<EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-            <channel>
-              <title>lightty</title>
-              <item>
-                <title>v$VERSION</title>
-                <sparkle:version>$BUILD_NUMBER</sparkle:version>
-                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-                <link>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}</link>
-                <pubDate>$(date -u +"%a, %d %b %Y %H:%M:%S +0000")</pubDate>
-                <enclosure url="$DMG_URL" $SIGNATURE type="application/octet-stream"/>
-              </item>
-            </channel>
-          </rss>
-          EOF
-
+      # 公证要排在 appcast 之前：stapler 会把票据写进 DMG，改动文件内容，
+      # 先算好的 EdDSA 签名就对不上了，Sparkle 会拒绝安装。
       - name: Notarize + staple
         if: env.HAS_NOTARY == 'true'
         env:
@@ -152,10 +131,27 @@ jobs:
           TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           APP_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
-          DMG="dist/lightty-$VERSION.dmg"
-          xcrun notarytool submit "$DMG" --wait \
-            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
-          xcrun stapler staple "$DMG"
+          for flavor in universal arm64 x64; do
+            DMG="dist/lightty-$VERSION-$flavor.dmg"
+            xcrun notarytool submit "$DMG" --wait \
+              --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+            xcrun stapler staple "$DMG"
+          done
+
+      - name: Generate appcasts with delta updates
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
+          for flavor in universal arm64 x64; do
+            [ "$flavor" = universal ] && NAME=appcast.xml || NAME="appcast-$flavor.xml"
+            echo "$SPARKLE_ED_PRIVATE_KEY" | scripts/build-appcast.sh \
+              "$flavor" "dist/lightty-$VERSION-$flavor.dmg" "$NAME" "$PREFIX"
+          done
+          cat dist/feed-*/upload.txt > dist/upload.txt
+          cat dist/upload.txt
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
@@ -165,9 +161,14 @@ jobs:
           cat > notes.md <<EOF
           ## 下载 / Download
 
-          | 平台 | 下载 |
+          | 机器 | 下载 |
           |---|---|
-          | macOS 13+（Apple Silicon / Intel 通用） | [lightty-$VERSION.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION.dmg) |
+          | Apple Silicon（M 系列） | [lightty-$VERSION-arm64.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION-arm64.dmg) |
+          | Intel | [lightty-$VERSION-x64.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION-x64.dmg) |
+          | 通用（两种都能跑，体积更大） | [lightty-$VERSION-universal.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lightty-$VERSION-universal.dmg) |
+
+          已经装好的版本不用管这张表，应用内检查更新会自动取到对应的包，
+          而且从这个版本起走增量更新，每次只下一两 MB。
 
           ## 安装 / Install
 
@@ -179,8 +180,9 @@ jobs:
           launch: **System Settings → Privacy & Security → scroll down →
           "Open Anyway"**, or run \`xattr -cr /Applications/lightty.app\`.
           EOF
+          # 三份整包 + 各自的增量包 + 三条 feed，清单由 build-appcast.sh 汇总
           gh release create "$GITHUB_REF_NAME" \
             --title "v$VERSION" \
             --notes-file notes.md \
             --generate-notes \
-            "dist/lightty-$VERSION.dmg" "dist/appcast.xml"
+            $(tr '\n' ' ' < dist/upload.txt)
