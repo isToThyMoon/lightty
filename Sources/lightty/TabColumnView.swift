@@ -533,8 +533,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 1. 先摘掉 hover——hover 底色和 ⋯/✕ 是"指针停在这一行"的反馈，卡片上不该有。
     ///    不摘的话非活跃行会把不透明的 hover 底色烤进快照，活跃行却只有 14% 的强调
     ///    色淡底，同一个动作在两种行上一个看着实一个看着透。
-    /// 2. 给所有卡片同一层半透明衬底，这样"哪种行都长一个样"，而且压在目标行上时
-    ///    底下的落点框线透得出来。
+    /// 2. 衬底用侧栏底色且**不透明**：卡片要和真行长得一模一样，落地换回真行才没有
+    ///    可察觉的切换。半透明衬底会把文字的对比度压下去一档，落地一还原就是一次
+    ///    "虚变实"，看着像掉帧。要让底下的行透出来是合并态的事，那时再单独调透明度。
     private func makeDragCard(of row: NSView, frame: NSRect) -> NSView? {
         (row as? SidebarHoverRow)?.setSidebarHovered(false)
         row.layoutSubtreeIfNeeded()
@@ -547,8 +548,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         aligned.origin.y = (frame.origin.y * scale).rounded() / scale
         let card = ReorderDrag.makeSnapshot(image, frame: aligned)
         card.layer?.cornerRadius = 7
-        card.layer?.backgroundColor = ShellStyle.raisedSurface
-            .withAlphaComponent(0.72).shellResolvedCGColor(for: effectiveAppearance)
+        card.layer?.backgroundColor =
+            ShellStyle.sidebarBackground.shellResolvedCGColor(for: effectiveAppearance)
+        // 位图层若按 1x 栅格化，2x 屏上等于把文字放大一倍，同样是发虚。
+        card.layer?.contentsScale = scale
+        card.subviews.first?.layer?.contentsScale = scale
         return card
     }
 
