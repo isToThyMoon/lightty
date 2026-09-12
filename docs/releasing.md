@@ -21,6 +21,15 @@ universal 必须一直出：那些 app 的 `SUFeedURL` 写死在 Info.plist 里�
 Sparkle 的一条 feed 里一个版本只能有一条记录（generate_appcast 直接拒绝重复版本），
 所以三种口味必须是三条 feed，不能合并。
 
+### 通用包如何迁到单架构包
+
+[UpdateFeed](../Sources/lightty/UpdateFeed.swift) 在每次检查更新时按正在运行的那一片
+把 `appcast.xml` 改指到 `appcast-<架构>.xml`。老用户因此走两跳：先经通用源拿到带这段
+逻辑的版本（增量包，很小），下一次检查就走单架构源，换成单架构包，多出来的那份 Node
+运行时随之消失。跨口味没有增量，所以迁移那一次是整包。
+
+单架构包自己的 `SUFeedURL` 已经指向单架构源，改写算出来是同一个地址，等于没动。
+
 ## 增量更新
 
 版本之间变的只有主程序，Node 运行时和 node_modules 一个字节都不动。

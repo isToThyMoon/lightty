@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 应用内更新（Sparkle）。只在打包形态下启动：SUFeedURL 由打包脚本写进
     /// Info.plist，swift build 的裸可执行没有它，此时保持 nil、菜单项不出现。
     private var updaterController: SPUStandardUpdaterController?
+    /// Sparkle 只弱持有 delegate，这里得留一份强引用。
+    private let updateFeed = UpdateFeed()
     private var aboutWindowController: AboutWindowController?
 
     private var textEditingShortcuts: TextEditingShortcuts?
@@ -40,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .lighttyPreferencesDidChange, object: nil)
         if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
             updaterController = SPUStandardUpdaterController(
-                startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+                startingUpdater: true, updaterDelegate: updateFeed, userDriverDelegate: nil)
         }
         buildMenu()
         // Finder 右键 Services（New Lightty Tab/Window Here）。菜单项由打包脚本写进
