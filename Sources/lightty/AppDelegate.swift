@@ -23,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in self?.preferencesStorageFailed() }
         }
         AppearancePreference.apply()
+        // 用户登录 shell 的 PATH：agent 探测、会话目录、子进程 PATH 都靠它找到
+        // nvm/volta 等目录下 npm 装的 claude/codex。必须在任何 locateExecutable 之前。
+        LoginShellPath.prime()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(loginShellPathDidChange),
+            name: LoginShellPath.didChangeNotification, object: nil)
         AgentLaunchPreference.migrateLegacyCommands()
         GhosttyRuntime.shared = GhosttyRuntime()
         AppState.shared = AppState()
@@ -295,6 +301,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func rebuildMenuForPreferences() { buildMenu() }
+
+    /// 后台解析出的 PATH 与缓存不同：之前按旧 PATH 可能没找到某家 CLI，
+    /// 会话目录要按新 PATH 重扫一遍。
+    @objc private func loginShellPathDidChange() {
+        AppState.shared?.sessionLibrary.refresh()
+    }
 
     @objc private func toggleSidebar() { AppState.shared.keyWindowController?.toggleSidebar() }
     @objc private func toggleTabSidebar() {
