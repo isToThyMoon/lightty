@@ -4,7 +4,16 @@
 # 用法：
 #   scripts/package-app.sh [version]            # 默认版本取 git describe（无 tag 则 0.0.0-dev）
 #   SIGN_IDENTITY="Developer ID Application: …" scripts/package-app.sh 1.0.0
-#   MAKE_DMG=1 scripts/package-app.sh 1.0.0     # 附带产出 dist/lightty-<version>.dmg
+#   MAKE_DMG=1 scripts/package-app.sh 1.0.0     # 附带产出 dist/lightty-<version>-<口味>.dmg
+#   FLAVOR=arm64 MAKE_DMG=1 scripts/package-app.sh 1.0.0   # 单架构包
+#
+# 口味（FLAVOR）：universal（默认）/ arm64 / x64。
+# 通用包里两份 Node 运行时就占 218MB，用户只用得上一份；单架构包砍掉另一份，
+# 顺带把主程序也瘦成单架构，下载量从 150MB 降到 93MB（实测）。
+# 通用包仍然要出：本次改动之前装好的那些 app 指向 appcast.xml，那条源必须继续
+# 提供一个两种机器都能跑的包，否则 Intel 用户会卡在旧版本上收不到更新。
+# 每种口味有自己的更新源（SUFeedURL），Sparkle 的 appcast 一个版本只能有一条记录，
+# 三种口味塞不进同一个源。
 #
 # 签名策略：SIGN_IDENTITY 显式指定 > 钥匙串里的 Developer ID Application >
 # ad-hoc（"-"，仅本机可跑，分发会被 Gatekeeper 拦）。
@@ -15,8 +24,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-$(git -C "$ROOT" describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.0.0-dev)}"
 BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 BUNDLE_ID="${BUNDLE_ID:-com.istothymoon.lightty}"
+FLAVOR="${FLAVOR:-universal}"
+case "$FLAVOR" in
+    universal) SLICE=""; FEED="appcast.xml" ;;
+    arm64)     SLICE="arm64";  FEED="appcast-arm64.xml" ;;
+    x64)       SLICE="x86_64"; FEED="appcast-x64.xml" ;;
+    *) echo "unknown FLAVOR: $FLAVOR (universal|arm64|x64)"; exit 1 ;;
+esac
 DIST="$ROOT/dist"
-APP="$DIST/lightty.app"
+# 通用包留在 dist/lightty.app（发布流水线的 SDK 校验等步骤按这个路径找），
+# 单架构包各自进子目录，三种口味互不覆盖。
+[ "$FLAVOR" = universal ] && APP="$DIST/lightty.app" || APP="$DIST/$FLAVOR/lightty.app"
 GHOSTTY_SHARE="$ROOT/vendor/ghostty/zig-out/share/ghostty"
 
 # ── 前置检查 ────────────────────────────────────────────────────────────────
@@ -35,7 +53,7 @@ BIN="$ROOT/.build/apple/Products/Release/lightty"
 [ -x "$BIN" ] || { echo "build output not found"; exit 1; }
 
 # ── 组装 bundle ─────────────────────────────────────────────────────────────
-echo "▸ assemble $APP  (v$VERSION build $BUILD_NUMBER)"
+echo "▸ assemble $APP  (v$VERSION build $BUILD_NUMBER, $FLAVOR)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/lightty"
@@ -50,7 +68,13 @@ cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
 # The SDK only lists local metadata. Do not bundle its optional Claude CLI binary.
 CLAUDE_HELPER="$APP/Contents/Resources/claude-session-helper"
 mkdir -p "$CLAUDE_HELPER"
-for item in list-sessions.mjs delete-session.mjs rename-session.mjs node_modules runtime-arm64 runtime-x64; do
+# 运行时按口味只带用得上的那一份（各约 110MB）。
+case "$FLAVOR" in
+    universal) RUNTIMES="runtime-arm64 runtime-x64" ;;
+    arm64)     RUNTIMES="runtime-arm64" ;;
+    x64)       RUNTIMES="runtime-x64" ;;
+esac
+for item in list-sessions.mjs delete-session.mjs rename-session.mjs node_modules $RUNTIMES; do
     cp -R "$ROOT/.build/claude-session-helper/$item" "$CLAUDE_HELPER/"
 done
 # Sparkle 动态框架：开发态靠 @loader_path 同目录找到，bundle 里进 Frameworks/
@@ -73,6 +97,19 @@ if [ ! -f "$ROOT/assets/lightty.icns" ] || \
 fi
 cp "$ROOT/assets/lightty.icns" "$APP/Contents/Resources/lightty.icns"
 
+# 单架构包：把可执行文件瘦成一片。Sparkle.framework 保持通用——它只有 3MB，
+# 而里面还有 XPC 服务与 Autoupdate 几个 Mach-O，逐个瘦身的风险不值这点体积。
+# generate_appcast 按主可执行文件的架构片判定硬件要求，瘦主程序就够它认出来。
+if [ -n "$SLICE" ]; then
+    echo "▸ lipo -thin $SLICE"
+    for binary in lightty lightty-hook; do
+        target="$APP/Contents/MacOS/$binary"
+        lipo "$target" -verify_arch "$SLICE" || { echo "✗ $binary 里没有 $SLICE"; exit 1; }
+        lipo "$target" -thin "$SLICE" -output "$target.thin"
+        mv "$target.thin" "$target"
+    done
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -92,7 +129,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-    <key>SUFeedURL</key><string>https://github.com/isToThyMoon/lightty/releases/latest/download/appcast.xml</string>
+    <key>SUFeedURL</key><string>https://github.com/isToThyMoon/lightty/releases/latest/download/$FEED</string>
     <key>SUPublicEDKey</key><string>f072X9FONA/coPDuRgaSX9r/wPLjcSwxr6wFmTeWKy4=</string>
     <!-- Finder 右键 → Services。NSMessage 对应 FinderServiceProvider 里的 selector；
          只对 /Applications 或 ~/Applications 下的 .app 生效，改动后 pbs -update 或重新登录才刷新。 -->
@@ -128,7 +165,8 @@ for required in \
     "Contents/Resources/locale" \
     "Contents/Resources/lightty_lightty.bundle" \
     "Contents/Frameworks/Sparkle.framework" \
-    "Contents/MacOS/lightty-hook"; do
+    "Contents/MacOS/lightty-hook" \
+    "Contents/Resources/claude-session-helper/${RUNTIMES%% *}/node"; do
     [ -e "$APP/$required" ] || { echo "✗ bundle 缺内核契约路径: $required"; exit 1; }
 done
 echo "▸ kernel resource contract OK"
@@ -141,10 +179,10 @@ if [ -z "$IDENTITY" ]; then
 fi
 if [ -n "$IDENTITY" ]; then
     echo "▸ codesign: $IDENTITY (hardened runtime)"
-    for arch in arm64 x64; do
+    for runtime in $RUNTIMES; do
         codesign --force --sign "$IDENTITY" --options runtime --timestamp \
             --entitlements "$ROOT/scripts/claude-session-helper/entitlements.plist" \
-            "$CLAUDE_HELPER/runtime-$arch/node"
+            "$CLAUDE_HELPER/$runtime/node"
     done
     # 由内向外签：内嵌框架（--deep 覆盖 Sparkle 的 XPC/Autoupdate）→ hook helper
     # → app 本体。lightty-hook 是 Contents/MacOS 里的第二个 Mach-O，签 app bundle
@@ -156,10 +194,10 @@ if [ -n "$IDENTITY" ]; then
     codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP"
 else
     echo "▸ codesign: ad-hoc（未找到 Developer ID，仅本机可用）"
-    for arch in arm64 x64; do
+    for runtime in $RUNTIMES; do
         codesign --force --sign - --options runtime \
             --entitlements "$ROOT/scripts/claude-session-helper/entitlements.plist" \
-            "$CLAUDE_HELPER/runtime-$arch/node"
+            "$CLAUDE_HELPER/$runtime/node"
     done
     codesign --force --sign - --deep "$APP/Contents/Frameworks/Sparkle.framework"
     codesign --force --sign - "$APP/Contents/MacOS/lightty-hook"
@@ -170,7 +208,7 @@ echo "  signature OK"
 
 # ── DMG（可选）─────────────────────────────────────────────────────────────
 if [ "${MAKE_DMG:-0}" = "1" ]; then
-    DMG="$DIST/lightty-$VERSION.dmg"
+    DMG="$DIST/lightty-$VERSION-$FLAVOR.dmg"
     echo "▸ hdiutil → $DMG"
     STAGE="$(mktemp -d)"
     cp -R "$APP" "$STAGE/"
