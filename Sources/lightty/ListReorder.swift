@@ -8,7 +8,9 @@ import AppKit
 /// 直接把快照浮层的 frame 跟到光标，零延迟 1:1 跟手；空位由调用方用带动画的
 /// 行移动（moveRow / 排列变更）现场让出。
 enum ReorderDrag {
-    /// 抬起态的浮层快照。轻微放大 + 阴影 = “拿起来”的手感，不喧宾夺主。
+    /// 抬起态的浮层快照。靠阴影表达"拿起来"，**不缩放**：浮层是一张位图，
+    /// 放大 1.03 倍等于把文字重采样一遍，拖起来是糊的、落下去换回真行又是清的，
+    /// 那一下虚实切换看着就像卡了一帧。阴影单独就够说明它浮在列表之上。
     static func makeSnapshot(_ image: NSImage, frame: NSRect) -> NSView {
         let host = NSView(frame: frame)
         host.wantsLayer = true
@@ -24,7 +26,6 @@ enum ReorderDrag {
             s.shadowOffset = NSSize(width: 0, height: -2)
             return s
         }()
-        host.layer?.transform = CATransform3DMakeScale(1.03, 1.03, 1)
         return host
     }
 
@@ -59,12 +60,16 @@ enum ReorderDrag {
     ) {
         func cursor(_ e: NSEvent) -> NSPoint { host.convert(e.locationInWindow, from: nil) }
 
+        // 位图落在半个物理像素上会被重采样成毛边，跟手的每一帧都得对齐到像素。
+        let scale = host.window?.backingScaleFactor ?? 2
+
         func follow(_ e: NSEvent) {
             let c = cursor(e)
             var f = snapshotView.frame
             f.origin.y = c.y - grabOffsetY
             // 夹在 host 内，避免拖出可视区后浮层消失得莫名其妙
             f.origin.y = min(max(f.origin.y, host.bounds.minY), host.bounds.maxY - f.height)
+            f.origin.y = (f.origin.y * scale).rounded() / scale
             snapshotView.frame = f
             onMove(c)
         }
@@ -85,12 +90,15 @@ enum ReorderDrag {
             snapshotView.removeFromSuperview()
             onEnd()
         }
-        if let target = dropFrame() {
+        if var target = dropFrame() {
+            // 只飞位置，不改尺寸：行高按类型不同（容器行 / pane 行 / 叶子行），
+            // 让位图去凑目标行的高度就是把文字拉糊，而且它落地即撤，没人看得到差那几 pt。
+            target.size = snapshotView.frame.size
+            target.origin.y = (target.origin.y * scale).rounded() / scale
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.16
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 snapshotView.animator().frame = target
-                (snapshotView.animator() as? NSView)?.layer?.transform = CATransform3DIdentity
             }, completionHandler: finish)
         } else {
             NSAnimationContext.runAnimationGroup({ ctx in
