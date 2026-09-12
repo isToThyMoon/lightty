@@ -132,10 +132,23 @@ final class GhosttyRuntime {
         ) { [weak self] _, change in
             guard let self, let appearance = change.newValue else { return }
             let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ghostty_app_set_color_scheme(
-                self.app,
-                dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
+            self.setColorScheme(dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
         }
+    }
+
+    /// 上报 app 级明暗，并**同步**把 config 重新交给 core。
+    ///
+    /// core 收到新明暗后只是记下条件态、再发一个 `reload_config` 请求回来；壳层的
+    /// action 回调是 async 派发的。在这段空窗里 spawn 的 surface，core 会因为「app
+    /// 条件态 ≠ config 自带条件态」按 replay 重建一份 config，而 replay 只显式保留
+    /// working-directory——per-surface 注入的 env（`LIGHTTY_PANE_ID` / `LIGHTTY_SOCK`）
+    /// 整份丢掉，pane 的 hook 从此认不出自己。启动恢复正踩在这个空窗上：`.initial`
+    /// 观察在这里同步上报明暗，紧接着 `applicationDidFinishLaunching` 就恢复所有 pane。
+    /// 同步 update 一次让 app config 立刻带上新条件态，空窗归零；之后 async 那次
+    /// reload 再跑一遍也无害。
+    func setColorScheme(_ scheme: ghostty_color_scheme_e) {
+        ghostty_app_set_color_scheme(app, scheme)
+        ghostty_app_update_config(app, loadedConfig)
     }
 
     deinit {
