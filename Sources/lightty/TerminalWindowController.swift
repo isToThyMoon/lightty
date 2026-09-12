@@ -564,6 +564,47 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         refreshTabStrip()
     }
 
+    /// 侧栏拖拽重排标签页：把第 `from` 个标签页挪到第 `to` 位。
+    /// `to` 是**摘掉源标签页之后**的插入位（与列表拖拽算出来的落点同一坐标系）。
+    /// 选中项跟着标签页本体走，不跟着序号走——重排不该顺手换走当前上下文。
+    @discardableResult
+    func moveTab(from: Int, to: Int) -> Bool {
+        guard tabs.indices.contains(from), tabs.count > 1 else { return false }
+        let destination = min(max(to, 0), tabs.count - 1)
+        guard destination != from else { return false }
+        let active = tabs[activeTabIndex]
+        let tab = tabs.remove(at: from)
+        tabs.insert(tab, at: destination)
+        activeTabIndex = tabs.firstIndex { $0 === active } ?? destination
+        refreshTabStrip()
+        return true
+    }
+
+    /// 侧栏拖拽把一个分屏 pane 拆出来独立成新标签页，插在第 `index` 位。
+    /// 与 movePane 共用 detach/install 通路，PTY、cwd 与 scrollback 全保留；
+    /// 同样不跟随切换标签页（拖动是整理动作）。源标签页只剩这一个 pane 时
+    /// 没有可拆的东西，交给 moveTab。
+    @discardableResult
+    func detachPane(withID sourceID: UUID, toNewTabAt index: Int) -> Bool {
+        guard let source = panes().first(where: { $0.dragIdentifier == sourceID }),
+              let hostTab = tab(hosting: source),
+              panes(in: hostTab).count > 1 else { return false }
+        restoreSplitZoomIfNeeded()
+        let wasActive = activePane === source
+        let restore = moveRestore(for: source)
+        guard detach(pane: source) else { return false }
+        registerMoveUndo(restore, sourceID: sourceID)
+
+        install(pane: source)
+        appendTab(root: source, select: false)
+        moveTab(from: tabs.count - 1, to: index)
+        // 拆走的是当前焦点时，焦点留在原标签页剩下的 pane 上，视线不跳走。
+        if wasActive { panes(in: hostTab).first?.focusTerminal() }
+        refreshTabStrip()
+        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        return true
+    }
+
     /// 用户重命名标签页（tab 标签双击）。OSC set_tab_title 已忽略：标签页名归用户。
     func renameTab(at index: Int, to title: String) {
         guard tabs.indices.contains(index) else { return }
