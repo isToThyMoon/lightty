@@ -1,12 +1,6 @@
 import AppKit
 import GhosttyKit
 
-/// 分隔线颜色来自 config（split-divider-color，未设时官方公式推导），厚度 1pt。
-final class PaneSplitView: NSSplitView {
-    override var dividerColor: NSColor { GhosttyRuntime.shared.configValues.splitDividerColor }
-    override var dividerThickness: CGFloat { 1 }
-}
-
 /// 终端窗口：原生标题栏只承载红黄绿三键与侧栏按钮，content 以 full-size
 /// 铺到窗口四边。标签页侧栏自行避让标题栏高度；右侧 terminal 则延伸到顶边。
 /// 标题栏无系统标题文字，terminal surface 仍完整遵守 Ghostty config。
