@@ -459,14 +459,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private static let mergeBand: CGFloat = 0.25
 
     private var mergeTarget: MergeTarget?
+    /// 当前拖拽的浮层，合并态要让它让出视线（见 setMergeTarget）。
+    private weak var dragSnapshot: NSView?
 
     /// 接管一条 pane 行 / 叶子行的拖拽：快照浮层 1:1 跟随光标（浮在整条侧栏之上，
     /// 不被 scroll 裁剪），逐帧判定是排序还是合并；释放时翻译成一次真实移动。
     private func beginPaneRowDrag(source: PaneRowView, paneID: UUID, event: NSEvent) {
-        guard let image = ReorderDrag.snapshot(of: source) else { return }
         let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
-        let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
+        guard let snap = makeDragCard(of: source, frame: startFrame) else { return }
         addSubview(snap)
+        dragSnapshot = snap
         // 与任务列表同款：源行原地隐身但保留占位 = 随光标流动的空档，其余行让位。
         // alpha 0（不是 isHidden）才会保住这条槽位当空档。
         source.alphaValue = 0
@@ -527,6 +529,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         )
     }
 
+    /// 拖起来的卡片。两件事在这里统一：
+    /// 1. 先摘掉 hover——hover 底色和 ⋯/✕ 是"指针停在这一行"的反馈，卡片上不该有。
+    ///    不摘的话非活跃行会把不透明的 hover 底色烤进快照，活跃行却只有 14% 的强调
+    ///    色淡底，同一个动作在两种行上一个看着实一个看着透。
+    /// 2. 给所有卡片同一层半透明衬底，这样"哪种行都长一个样"，而且压在目标行上时
+    ///    底下的落点框线透得出来。
+    private func makeDragCard(of row: NSView, frame: NSRect) -> NSView? {
+        (row as? SidebarHoverRow)?.setSidebarHovered(false)
+        row.layoutSubtreeIfNeeded()
+        row.displayIfNeeded()
+        guard let image = ReorderDrag.snapshot(of: row) else { return nil }
+        let card = ReorderDrag.makeSnapshot(image, frame: frame)
+        card.layer?.cornerRadius = 7
+        card.layer?.backgroundColor = ShellStyle.raisedSurface
+            .withAlphaComponent(0.72).shellResolvedCGColor(for: effectiveAppearance)
+        return card
+    }
+
     /// 光标是否压在某一行的中央带上。是则进入合并态（高亮目标行）并返回 true。
     private func updateMergeTarget(at cursor: NSPoint, sourceID: UUID) -> Bool {
         let source = sourceIndex(sourceID)
@@ -544,8 +564,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func setMergeTarget(_ target: MergeTarget?) {
         guard mergeTarget?.row != target?.row else { return }
         if let previous = mergeTarget?.row { dropRow(at: previous)?.setDropHighlighted(false) }
+        let wasMerging = mergeTarget != nil
         mergeTarget = target
         if let row = target?.row { dropRow(at: row)?.setDropHighlighted(true) }
+        guard wasMerging != (target != nil) else { return }
+        applySnapshotLook(merging: target != nil)
+    }
+
+    /// 合并态下浮层让出视线：目标行的落点框线正好压在浮层底下，浮层既不透也不缩
+    /// 就完全看不见，用户只能靠猜自己要并进谁。半透明 + 缩进一圈之后框线从四边露出来，
+    /// 顺带把"现在是合并不是排序"再说一遍——模态差异只靠一条框线交代太单薄。
+    private func applySnapshotLook(merging: Bool) {
+        guard let snapshot = dragSnapshot else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            snapshot.animator().alphaValue = merging ? 0.55 : 1
+        }
+        let scale: CGFloat = merging ? 0.9 : 1.03
+        snapshot.layer?.transform = CATransform3DMakeScale(scale, scale, 1)
     }
 
     private func dropRow(at index: Int) -> (any SidebarPaneDropRow)? {
@@ -620,16 +656,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 多 pane 展开着的标签页先临时折叠成一行再拖：拖一个会在脚下抻开收拢的
     /// 多行块，落点根本对不准。松手后恢复原来的展开状态。
     private func beginTabRowDrag(tabID: UUID, tabIndex: Int, source: TabRowView, event: NSEvent) {
-        guard let image = ReorderDrag.snapshot(of: source) else { return }
         let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
+        guard let card = makeDragCard(of: source, frame: startFrame) else { return }
         let wasExpanded = collapseForDrag(tabID: tabID)
         guard var current = rowIndex(ofTab: tabIndex) else {
             restoreAfterDrag(tabID: tabID, wasExpanded: wasExpanded)
             return
         }
 
-        let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
-        addSubview(snap)
+        addSubview(card)
         dropRow(at: current)?.alphaValue = 0
         let cursorInSelf = convert(event.locationInWindow, from: nil)
         let grabOffsetY = cursorInSelf.y - startFrame.minY
@@ -637,7 +672,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         ReorderDrag.run(
             host: self,
-            snapshotView: snap,
+            snapshotView: card,
             startEvent: event,
             grabOffsetY: grabOffsetY,
             onMove: { [weak self] c in
