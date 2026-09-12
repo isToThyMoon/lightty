@@ -340,6 +340,10 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             ])
         }
         row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
+        row.onBeginDrag = { [weak self, weak row] event in
+            guard let self, let row else { return }
+            self.beginTabRowDrag(tabID: tabID, tabIndex: index, source: row, event: event)
+        }
         return row
     }
 
@@ -566,15 +570,19 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         if si > 0, case .pane(_, let id) = rows[si - 1] {
             return .insideTab(next: nil, previous: id)
         }
-        // 顶层位次 = 上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
+        return .betweenTabs(topLevelIndex(in: rows, before: si))
+    }
+
+    /// 顶层位次 = 该行上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
+    static func topLevelIndex(in rows: [TabRowKind], before row: Int) -> Int {
         var index = 0
-        for row in rows[..<si] {
-            switch row {
+        for item in rows[..<min(row, rows.count)] {
+            switch item {
             case .tab, .leaf: index += 1
             case .pane: continue
             }
         }
-        return .betweenTabs(index)
+        return index
     }
 
     /// 把落点翻译成一次真实移动。合并优先：它是用户明确压在某一行上的意图。
@@ -604,6 +612,89 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             } else {
                 controller.detachPane(withID: paneID, toNewTabAt: index)
             }
+        }
+    }
+
+    /// 接管一条标签页容器行的拖拽：整条标签页换位次，不参与合并——把一整棵分屏树
+    /// 并进另一个标签页是另一种操作，现在的通路一次只搬一个 pane。
+    /// 多 pane 展开着的标签页先临时折叠成一行再拖：拖一个会在脚下抻开收拢的
+    /// 多行块，落点根本对不准。松手后恢复原来的展开状态。
+    private func beginTabRowDrag(tabID: UUID, tabIndex: Int, source: TabRowView, event: NSEvent) {
+        guard let image = ReorderDrag.snapshot(of: source) else { return }
+        let startFrame = convert(source.bounds, from: source)  // self（非翻转）坐标
+        let wasExpanded = collapseForDrag(tabID: tabID)
+        guard var current = rowIndex(ofTab: tabIndex) else {
+            restoreAfterDrag(tabID: tabID, wasExpanded: wasExpanded)
+            return
+        }
+
+        let snap = ReorderDrag.makeSnapshot(image, frame: startFrame)
+        addSubview(snap)
+        dropRow(at: current)?.alphaValue = 0
+        let cursorInSelf = convert(event.locationInWindow, from: nil)
+        let grabOffsetY = cursorInSelf.y - startFrame.minY
+        let origin = current
+
+        ReorderDrag.run(
+            host: self,
+            snapshotView: snap,
+            startEvent: event,
+            grabOffsetY: grabOffsetY,
+            onMove: { [weak self] c in
+                guard let self else { return }
+                let peers = self.rowItems.indices.filter { $0 != current }
+                var index = 0
+                for peer in peers {
+                    guard self.convert(self.table.rect(ofRow: peer), from: self.table).midY > c.y
+                    else { break }
+                    index += 1
+                }
+                index = min(max(index, 0), peers.count)
+                guard index != current else { return }
+                let item = self.rowItems.remove(at: current)
+                self.rowItems.insert(item, at: index)
+                self.table.beginUpdates()
+                self.table.moveRow(at: current, to: index)
+                self.table.endUpdates()
+                current = index
+            },
+            dropFrame: { [weak self] in
+                guard let self, self.rowItems.indices.contains(current) else { return nil }
+                return self.convert(self.table.rect(ofRow: current), from: self.table)
+            },
+            onCommit: { [weak self] in
+                guard let self, current != origin else { return }
+                let destination = Self.topLevelIndex(in: self.rowItems.map(\.kind), before: current)
+                self.controller?.moveTab(from: tabIndex, to: destination)
+            },
+            onEnd: { [weak self] in
+                self?.dropRow(at: current)?.alphaValue = 1
+                self?.restoreAfterDrag(tabID: tabID, wasExpanded: wasExpanded)
+            }
+        )
+    }
+
+    /// 拖动容器行前把展开着的标签页临时折叠成一行；返回它本来是否展开着。
+    /// 折叠只摘掉本行下方的 pane 行，本行自己的 frame 不动，所以快照与抓取偏移仍然有效。
+    @discardableResult
+    func collapseForDrag(tabID: UUID) -> Bool {
+        let wasExpanded = !collapsedTabIDs.contains(tabID)
+        guard wasExpanded else { return false }
+        collapsedTabIDs.insert(tabID)
+        reload()
+        return true
+    }
+
+    /// 松手后恢复原来的展开状态：折叠只是拖动期间的取景，不是用户的选择。
+    func restoreAfterDrag(tabID: UUID, wasExpanded: Bool) {
+        if wasExpanded { collapsedTabIDs.remove(tabID) }
+        reload()
+    }
+
+    private func rowIndex(ofTab index: Int) -> Int? {
+        rowItems.firstIndex {
+            if case .tab(let i) = $0.kind { return i == index }
+            return false
         }
     }
 
@@ -661,6 +752,8 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     var onClose: (() -> Void)?
     /// pane 拖到标签页行：移进该标签页。返回是否接受。
     var onPaneDrop: ((UUID) -> Bool)?
+    /// 起手拖拽本行（整条标签页换位次，由所属 TabColumnView 接管跟手循环）。
+    var onBeginDrag: ((NSEvent) -> Void)?
 
     private var isActive: Bool
     private var isCollapsed: Bool
@@ -840,8 +933,29 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
     override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
+    /// 与 pane 行同款 click/drag 分流：3pt 内是点击，超出启动标签页拖拽。
+    /// 选中因此落在 mouseUp（与 pane 行一致），双击仍直接改名。
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 { onRename?() } else { onSelect?() }
+        if event.clickCount == 2 { onRename?(); return }
+        let origin = event.locationInWindow
+        let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+        while let next = NSApp.nextEvent(
+            matching: mask, until: .distantFuture, inMode: .eventTracking, dequeue: true
+        ) {
+            switch next.type {
+            case .leftMouseDragged:
+                let dx = next.locationInWindow.x - origin.x
+                let dy = next.locationInWindow.y - origin.y
+                guard hypot(dx, dy) >= 3 else { continue }
+                onBeginDrag?(next)
+                return
+            case .leftMouseUp:
+                onSelect?()
+                return
+            default:
+                continue
+            }
+        }
     }
 
     // MARK: - SidebarPaneDropRow
