@@ -248,18 +248,42 @@ enum HookInstaller {
 
     /// 查找目录清单，同时也是子进程 PATH 的来源——`claude` 是个 node 包装脚本，
     /// PATH 里没有 node 它会自己失败，而 Finder 启动的 PATH 恰恰什么都没有。
+    ///
+    /// 顺序：进程 PATH → 用户登录 shell 的 PATH（`LoginShellPath`，覆盖任何版本
+    /// 管理器）→ 写死的常见位置兜底（登录 shell 解析失败或首启还没缓存时靠它）。
     static func searchPath() -> [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         var directories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
             .split(separator: ":").map(String.init)
+        directories += LoginShellPath.directories
         directories += [
             "/opt/homebrew/bin", "/usr/local/bin",
             "\(home)/.local/bin", "\(home)/.bun/bin", "\(home)/.cargo/bin",
             "\(home)/.npm-global/bin", "\(home)/.claude/local", "\(home)/bin",
-            "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+            // node 版本管理器：npm 全局包（claude / codex 都能这么装）落在它们各自的目录
+            "\(home)/.volta/bin", "\(home)/n/bin", "\(home)/Library/pnpm",
+            "\(home)/.yarn/bin", "\(home)/.asdf/shims", "\(home)/.local/share/mise/shims",
+            "\(home)/.fnm/aliases/default/bin",
+            "\(home)/.local/share/fnm/aliases/default/bin",
+            "\(home)/Library/Application Support/fnm/aliases/default/bin",
         ]
+        directories += nvmBinDirectories(home: home)
+        directories += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         var seen = Set<String>()
         return directories.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// nvm 每个 node 版本一个 bin 目录，按版本号从高到低排，新装的包通常在最新版下。
+    static func nvmBinDirectories(home: String, fileManager: FileManager = .default) -> [String] {
+        let root = "\(home)/.nvm/versions/node"
+        guard let versions = try? fileManager.contentsOfDirectory(atPath: root) else { return [] }
+        func components(_ name: String) -> [Int] {
+            name.drop(while: { $0 == "v" }).split(separator: ".").map { Int($0) ?? 0 }
+        }
+        return versions
+            .sorted { components($0).lexicographicallyPrecedes(components($1)) }
+            .reversed()
+            .map { "\(root)/\($0)/bin" }
     }
 
     // MARK: - 安装 / 卸载
