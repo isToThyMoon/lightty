@@ -54,9 +54,8 @@ final class PaneHeaderWidthTests: XCTestCase {
         defer { controller.window?.close() }
         let first = try XCTUnwrap(controller.activePane)
         controller.split(first, direction: .right)
-        let split = try XCTUnwrap(first.superview as? NSSplitView)
+        let container = try XCTUnwrap(first.superview as? PaneLayoutView)
         let host = try XCTUnwrap(controller.window?.contentView)
-        split.setPosition(split.frame.width / 2, ofDividerAt: 0)
         host.layoutSubtreeIfNeeded()
         let sibling = try XCTUnwrap(controller.panes().first { $0 !== first })
         let balanced = sibling.frame.width
@@ -69,9 +68,10 @@ final class PaneHeaderWidthTests: XCTestCase {
                        "长标题不该把兄弟 pane 挤扁")
 
         // 分割线要真的动得了：把长标题那侧拖窄，宽度得跟着走。
-        split.setPosition(200, ofDividerAt: 0)
+        let divider = try XCTUnwrap(container.subviews.compactMap { $0 as? PaneDividerView }.first { !$0.isHidden })
+        divider.onDrag?(200)
         host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(first.frame.width, 200, accuracy: 2,
+        XCTAssertEqual(first.frame.width, 200, accuracy: 1,
                        "长标题的 pane 仍然要能被拖窄")
     }
 }

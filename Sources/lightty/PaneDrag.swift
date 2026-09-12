@@ -1,4 +1,5 @@
 import AppKit
+import LighttyCore
 
 extension NSPasteboard.PasteboardType {
     /// 与 Ghostty `ghosttySurfaceId` 同一职责：只在 lightty 进程内搬运现有 pane。
@@ -27,6 +28,16 @@ enum PaneDropZone: CaseIterable, Equatable {
         if minDist == distToRight { return .right }
         if minDist == distToTop { return .top }
         return .bottom
+    }
+
+    /// 落点对应的排布边：被拖 pane 放到目标的哪一侧。
+    var edge: PaneEdge {
+        switch self {
+        case .top: .top
+        case .bottom: .bottom
+        case .left: .left
+        case .right: .right
+        }
     }
 
     func frame(in bounds: NSRect) -> NSRect {
