@@ -30,11 +30,22 @@ enum ReorderDrag {
     }
 
     /// 一行的位图快照。
+    ///
+    /// 关掉上下文的 font smoothing 再画。位图上下文默认开着它，字形会被额外加重
+    /// 描边：同一行文字实测 2154 个深色像素，关掉后 1846，与图层里屏幕上那份栅格
+    /// 逐像素一致。开着的话拖起来的卡片肉眼可见比列表里粗一号，落地换回真行又细
+    /// 回去，那一下就是用户说的"虚实切换"。
+    ///
+    /// 为什么不直接 `layer.render(in:)`（同样不加重）：它只搬图层已有的内容，
+    /// 图层还没绘制过就会搬出一张空图。这里重画一遍，内容有无不依赖时机。
     static func snapshot(of view: NSView) -> NSImage? {
         let bounds = view.bounds
         guard bounds.width > 0, bounds.height > 0,
-              let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        view.cacheDisplay(in: bounds, to: rep)
+              let rep = view.bitmapImageRepForCachingDisplay(in: bounds),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        context.cgContext.setAllowsFontSmoothing(false)
+        context.cgContext.setShouldSmoothFonts(false)
+        view.displayIgnoringOpacity(bounds, in: context)
         let image = NSImage(size: bounds.size)
         image.addRepresentation(rep)
         return image
