@@ -27,6 +27,9 @@ enum PaneIdentityMetrics {
 /// 半透明底色会整张盖住终端（docs/libghostty-embedding.md 透明排查实录）。
 final class PaneHeaderView: NSView, NSDraggingSource {
     static let height: CGFloat = ShellStyle.chromeRowHeight
+    /// 身份胶囊占 pane 宽度的上限。标题是 agent 写的，长度不可信；没有这条上限
+    /// 它会既撑爆视觉，又把 pane 的最小宽度钉死在标题长度上。
+    static let capsuleWidthRatio: CGFloat = 0.8
 
     enum Dot: Equatable {
         case unnamed        // 灰：未绑定任务
@@ -176,6 +179,14 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingTail
+        // 标题由 agent 写，长度不可信。抗压缩优先级必须**低于** NSSplitView 的
+        // holding priority（默认就是 250），否则"标题宽度 + 内边距"会变成整个 pane
+        // 的最小宽度：同 tab 的兄弟 pane 被挤扁，分割线连拖都拖不动。
+        // 正好等于 250 是平手，AppKit 两边都可能赢，所以要显式低一档。
+        // 低一档而不是更低：宽度富余时没有别的力量推它，标题照样取固有宽度。
+        nameLabel.setContentCompressionResistancePriority(
+            .init(rawValue: NSLayoutConstraint.Priority.defaultLow.rawValue - 1),
+            for: .horizontal)
 
         taskHintLabel.font = .systemFont(ofSize: 10.5)
         taskHintLabel.lineBreakMode = .byTruncatingTail
@@ -216,6 +227,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             capsule.heightAnchor.constraint(equalToConstant: 20),
             capsule.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -4),
+            // 胶囊最多占 pane 的 capsuleWidthRatio：居中摆放两侧各留一段气口，
+            // 长标题下它仍然读作一枚 chip 而不是横幅。必需优先级，压过标题的
+            // 固有宽度，超出部分由 byTruncatingTail 收尾。
+            capsule.widthAnchor.constraint(
+                lessThanOrEqualTo: widthAnchor, multiplier: Self.capsuleWidthRatio),
 
             dotView.leadingAnchor.constraint(
                 equalTo: capsule.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
@@ -298,11 +314,18 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     override func layout() {
         super.layout()
         guard bounds.width > 0 else { return }
-        // 胶囊完整需求宽度 vs 可用宽度：不够时先收任务 hint（pane 名常显）。
-        let chrome: CGFloat = 6 + 7 + 6 + 7 // 胶囊内边距 + 点 + 间距
-        let nameWidth = ceil(nameLabel.intrinsicContentSize.width)
-        let available = bounds.width - 8
-        let fits = chrome + nameWidth + fullHintWidth <= available
+        // 预算按胶囊自己的上限算，不是整条 header——胶囊最多占 pane 的
+        // capsuleWidthRatio，居中摆放两侧各留一段气口，长标题下它仍然读作一枚
+        // chip 而不是横幅。
+        let chrome = PaneIdentityMetrics.dotLeading + PaneIdentityMetrics.dotSize
+            + PaneIdentityMetrics.iconLeading + agentIconWidth.constant
+            + agentIconGap.constant + 7  // 胶囊内边距 + 点 + 图标 + 右内边距
+        let budget = min(bounds.width - 8, floor(bounds.width * Self.capsuleWidthRatio))
+        let room = max(0, budget - chrome)
+        let title = ceil(nameLabel.intrinsicContentSize.width)
+        // 放不下时先整条收回任务 hint（pane 名常显）；截成省略号的任务名没有
+        // 信息量，而"本可以收掉任务名保住完整标题"的情况也不该反过来截标题。
+        let fits = title + fullHintWidth <= room
         let want = (fits && boundTaskName != nil)
             ? " · \(boundTaskName ?? "")" : ""
         if taskHintLabel.stringValue != want {
