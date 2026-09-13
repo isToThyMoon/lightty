@@ -21,7 +21,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-$(git -C "$ROOT" describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.0.0-dev)}"
-BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+# 2026-09 历史改写把 236 个提交并成 63 个，而已发布的 v0.14.1 构建号是 236。
+# Sparkle 按构建号判断新旧，所以提交数加固定偏移，保证构建号继续递增。
+BUILD_NUMBER_OFFSET=200
+BUILD_NUMBER="$(( $(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1) + BUILD_NUMBER_OFFSET ))"
 BUNDLE_ID="${BUNDLE_ID:-com.istothymoon.lightty}"
 FLAVOR="${FLAVOR:-universal}"
 case "$FLAVOR" in

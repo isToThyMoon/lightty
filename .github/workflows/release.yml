@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 打包脚本用 rev-list --count 生成 build number
+          fetch-depth: 0 # 打包脚本用 rev-list --count 加偏移生成 build number
 
       - name: Verify release toolchain
         id: toolchain
