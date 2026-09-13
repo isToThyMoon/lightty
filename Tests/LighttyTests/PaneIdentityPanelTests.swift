@@ -409,6 +409,25 @@ final class PaneIdentityPanelTests: XCTestCase {
         }
     }
 
+    /// 真实窗口里 pane 先以 0 宽创建：胶囊宽度上限若是必需约束就会无解，布局引擎
+    /// 断掉的恰是图标宽度且不再恢复，图标撑到 SVG 的 24pt，点和名字间多出一截空隙。
+    func testCapsuleIconKeepsItsWidthWhenThePaneStartsWithZeroWidth() throws {
+        _ = NSApplication.shared
+        ensureTerminalRuntime()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("capsule-icon-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
+        let pane = PaneView()
+        let controller = TerminalWindowController(initialPane: pane)
+        defer { controller.window?.close() }
+        pane.header.sessionAgent = .claude
+        pane.header.title = "ai-search-service和image-audit接口日志查询"
+        controller.window?.setContentSize(NSSize(width: 900, height: 500))
+        controller.window?.layoutIfNeeded()
+        let icon = try XCTUnwrap(pane.header.descendants.first { $0 is NSImageView })
+        XCTAssertEqual(icon.frame.width, PaneIdentityMetrics.iconSize)
+    }
+
     private func makeTaskList() throws -> (PaneIdentityPanel, NSTextField, NSScrollView) {
         _ = NSApplication.shared
         let panel = PaneIdentityPanel()

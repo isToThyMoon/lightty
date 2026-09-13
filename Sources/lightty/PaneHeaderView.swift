@@ -222,16 +222,24 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             // 身份胶囊会被红黄绿与侧栏开关盖住。按各 pane 自身居中后不再依赖
             // 窗口左侧安全区，多分屏也各自保持一致的视觉轴。
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
-            capsule.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        // 胶囊最多占 pane 的 capsuleWidthRatio、两侧各留 4pt：居中摆放两侧各留一段
+        // 气口，长标题下它仍然读作一枚 chip 而不是横幅。优先级 999 而不是必需：
+        // 仍远高于标题的抗压缩（249），正常宽度下照样截标题；但 pane 刚创建时宽度
+        // 是 0，胶囊里点、图标、边距加起来的最小宽度塞不进去，必需约束就无解，
+        // 布局引擎会挑一条断掉且之后不再恢复——实测断的是图标宽度，图标撑回 SVG
+        // 的 24pt 固有宽度，点和名字之间多出 14pt 空隙（展开的岛体没有这条上限，不受影响）。
+        let widthLimits = [
+            capsule.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
             capsule.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -4),
-            // 胶囊最多占 pane 的 capsuleWidthRatio：居中摆放两侧各留一段气口，
-            // 长标题下它仍然读作一枚 chip 而不是横幅。必需优先级，压过标题的
-            // 固有宽度，超出部分由 byTruncatingTail 收尾。
             capsule.widthAnchor.constraint(
                 lessThanOrEqualTo: widthAnchor, multiplier: Self.capsuleWidthRatio),
+        ]
+        for limit in widthLimits { limit.priority = .init(999) }
+        NSLayoutConstraint.activate(widthLimits + [
 
             dotView.leadingAnchor.constraint(
                 equalTo: capsule.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
