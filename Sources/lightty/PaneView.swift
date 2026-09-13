@@ -785,7 +785,12 @@ final class PaneView: NSView {
             return []
         }
         let point = convert(sender.draggingLocation, from: nil)
-        let zone = PaneDropZone.calculate(at: point, in: bounds)
+        showDropPreview(PaneDropZone.calculate(at: point, in: bounds))
+        return .move
+    }
+
+    /// 高亮落点半区。系统拖放（pane 头部）和侧栏行拖动（自建跟手循环，不经过系统拖放）共用。
+    func showDropPreview(_ zone: PaneDropZone) {
         let overlay = dropOverlay ?? PaneDropOverlayView(frame: .zero)
         overlay.frame = zone.frame(in: bounds)
         overlay.autoresizingMask = []
@@ -793,7 +798,6 @@ final class PaneView: NSView {
             addSubview(overlay, positioned: .above, relativeTo: nil)
         }
         dropOverlay = overlay
-        return .move
     }
 
     private func hideDropOverlay() {

@@ -65,6 +65,9 @@ enum ShellStyle {
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
     static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)
+    /// 分段切换：灰底轨道，激活段在浅色下是白色，深色下比轨道亮一档。
+    static let segmentTrack = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x201E24)
+    static let segmentKnob = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x424047)
     static let pressedFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x44414A)
     static let divider = NSColor.shellDynamic(light: 0xE5E1DF, dark: 0x3B3841)
     static let primaryText = NSColor.shellDynamic(light: 0x302E2D, dark: 0xE9E7EC)

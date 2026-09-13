@@ -496,9 +496,17 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         var insertion: Int? = nil
         /// 压着中央带的那一行（按行身份记）。
         var merge: TabRowKind? = nil
+        /// 光标在列表外、压在某个终端 pane 上：落点半区（只有 pane 行有）。
+        var paneDrop: PaneDropTarget? = nil
         /// 松手之后、命令执行完之前：显示冻结在松手那一刻，不再响应指针。
         var committing = false
         let card: NSView
+    }
+
+    /// 侧栏行拖到终端区域时的落点：目标 pane 和它的哪一侧，规则同 pane 头部拖动。
+    struct PaneDropTarget: Equatable {
+        let pane: UUID
+        let zone: PaneDropZone
     }
 
     /// 行高的这个比例之内算中央带（上下各留 25% 给排序）。
@@ -607,6 +615,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             snapshotView: card,
             startEvent: event,
             grabOffsetY: grabOffsetY,
+            // pane 行可以拖到终端上分屏，卡片要跟着光标出列表；标签页行只在列表里排序。
+            followsPointerFreely: { if case .pane = source { return true } else { return false } }(),
             onMove: { [weak self] cursor in self?.moveDrag(to: cursor) },
             dropFrame: { landing },
             onCommit: { [weak self] in landing = self?.finishDrag() },
@@ -628,6 +638,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 指针移动（self 坐标）：压在中央带就进入合并态并停止让位，否则算插入位让列表让位。
     func moveDrag(to cursor: NSPoint) {
         guard var current = drag, !current.committing else { return }
+        guard bounds.contains(cursor) else { moveDragOutsideList(to: cursor); return }
+        if current.paneDrop != nil {
+            setPaneDrop(nil)
+            current = drag ?? current
+        }
         var target: TabRowKind?
         if case .pane = current.source { target = mergeTarget(at: cursor, source: current.source) }
         if target != current.merge {
@@ -654,6 +669,52 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.endUpdates()
     }
 
+    /// 光标离开列表：列表回到原样，不再让位；pane 行压在终端 pane 上时高亮落点半区。
+    /// 标签页行只在列表里排序，拖到外面不响应。
+    private func moveDragOutsideList(to cursor: NSPoint) {
+        guard var current = drag else { return }
+        if case .pane(let source) = current.source {
+            setPaneDrop(paneDropTarget(at: cursor, excluding: source))
+            current = drag ?? current
+        }
+        let wasMerging = current.merge != nil
+        let wasMoved = current.insertion != nil
+        guard wasMerging || wasMoved else { return }
+        current.merge = nil
+        current.insertion = nil
+        drag = current
+        if wasMerging {
+            applyDragDecorations()
+            applySnapshotLook(merging: false)
+        }
+        if wasMoved { reload() }
+    }
+
+    private func setPaneDrop(_ target: PaneDropTarget?) {
+        guard var current = drag, current.paneDrop != target else { return }
+        if let old = current.paneDrop { pane(withID: old.pane)?.clearDropPreview() }
+        if let target { pane(withID: target.pane)?.showDropPreview(target.zone) }
+        current.paneDrop = target
+        drag = current
+    }
+
+    /// 光标（self 坐标）下可见的终端 pane。压在源 pane 自己身上不算落点。
+    private func paneDropTarget(at cursor: NSPoint, excluding source: UUID) -> PaneDropTarget? {
+        guard let controller, let window else { return nil }
+        let inWindow = convert(cursor, to: nil)
+        for pane in controller.panes() where pane.window === window && !pane.isHiddenOrHasHiddenAncestor {
+            let point = pane.convert(inWindow, from: nil)
+            guard pane.bounds.contains(point) else { continue }
+            guard pane.dragIdentifier != source else { return nil }
+            return PaneDropTarget(pane: pane.dragIdentifier, zone: .calculate(at: point, in: pane.bounds))
+        }
+        return nil
+    }
+
+    private func pane(withID id: UUID) -> PaneView? {
+        controller?.panes().first { $0.dragIdentifier == id }
+    }
+
     /// 松手：定下命令、冻结显示，返回卡片的落点；命令在下一拍交给控制器。
     ///
     /// 命令不在跟踪循环里执行，落地动画也不等它：卡片的去留与改树的成败互不牵连，
@@ -667,6 +728,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let sourceIndex = rows.firstIndex { Self.matches($0, current.source) }
         let original = modelRows.firstIndex { Self.matches($0.kind, current.source) }
         var command: RowDropCommand?
+        if let paneDrop = current.paneDrop, case .pane(let source) = current.source {
+            pane(withID: paneDrop.pane)?.clearDropPreview()
+            let command = RowDropCommand.movePaneBeside(source, target: paneDrop.pane, zone: paneDrop.zone)
+            DispatchQueue.main.async { [weak self] in self?.completeDrag(command) }
+            return nil  // 落在列表外，卡片原地淡出
+        }
         if let sourceIndex, current.merge != nil || sourceIndex != original {
             command = Self.dropCommand(rows: rows, sourceIndex: sourceIndex, merge: current.merge)
         }

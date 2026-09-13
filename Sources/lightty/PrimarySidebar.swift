@@ -2,9 +2,9 @@ import AppKit
 
 enum PrimarySidebarMode: String, Codable, CaseIterable {
     case handoff, sessions
-    var title: String { self == .handoff ? L("Handoff tasks") : L("Sessions") }
+    var title: String { self == .handoff ? "Handoff" : "Sessions" }
     var hint: String {
-        self == .handoff ? L("Start an agent with a task. Try saying: “Summarize the task.”")
+        self == .handoff ? L("Injected when an agent starts, written back as it works.")
             : L("Click to resume your last session.")
     }
 }
@@ -14,7 +14,7 @@ final class PrimarySidebar: NSView {
     var onRequestClose: (() -> Void)?
     var onModeChanged: ((PrimarySidebarMode) -> Void)?
     private(set) var mode: PrimarySidebarMode
-    private let titleButton = NSButton()
+    private let modeSwitch = ModeSwitch()
     private let hint = NSTextField(wrappingLabelWithString: "")
     private let host = NSView()
     private let handoff = HandoffSidebarContent()
@@ -29,24 +29,14 @@ final class PrimarySidebar: NSView {
         self.library = library
         super.init(frame: .zero)
         wantsLayer = true
-        titleButton.cell = ModeTitleCell(textCell: "")
-        titleButton.isBordered = false
-        titleButton.font = .systemFont(ofSize: 18, weight: .semibold)
-        titleButton.alignment = .left
-        titleButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-                .applying(.init(paletteColors: [ShellStyle.primaryText])))
-        titleButton.imagePosition = .imageTrailing
-        titleButton.target = self
-        titleButton.action = #selector(chooseMode)
-        HoverCursor.installPointingHand(on: titleButton)
+        modeSwitch.onSelect = { [weak self] value in self?.selectMode(value) }
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = ShellStyle.tertiaryText
         hint.isSelectable = false
         search.target = self; search.action = #selector(searchContent)
         create.target = self; create.action = #selector(newTask)
         collapse.target = self; collapse.action = #selector(closePanel)
-        for view in [titleButton, hint, host, search, create, collapse] {
+        for view in [modeSwitch, hint, host, search, create, collapse] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -60,12 +50,12 @@ final class PrimarySidebar: NSView {
             search.centerYAnchor.constraint(equalTo: collapse.centerYAnchor),
             search.trailingAnchor.constraint(equalTo: create.leadingAnchor, constant: -4),
             search.widthAnchor.constraint(equalToConstant: 28), search.heightAnchor.constraint(equalToConstant: 28),
-            titleButton.topAnchor.constraint(equalTo: collapse.bottomAnchor, constant: 12),
-            titleButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            titleButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
-            titleButton.heightAnchor.constraint(equalToConstant: 34),
-            hint.topAnchor.constraint(equalTo: titleButton.bottomAnchor, constant: 4),
-            hint.leadingAnchor.constraint(equalTo: titleButton.leadingAnchor),
+            modeSwitch.topAnchor.constraint(equalTo: collapse.bottomAnchor, constant: 12),
+            modeSwitch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            modeSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            modeSwitch.heightAnchor.constraint(equalToConstant: ModeSwitch.height),
+            hint.topAnchor.constraint(equalTo: modeSwitch.bottomAnchor, constant: 8),
+            hint.leadingAnchor.constraint(equalTo: modeSwitch.leadingAnchor, constant: 4),
             hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             host.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 14),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -86,9 +76,7 @@ final class PrimarySidebar: NSView {
     }
 
     private func applyMode() {
-        titleButton.title = mode.title
-        titleButton.contentTintColor = ShellStyle.primaryText
-        titleButton.setAccessibilityLabel(mode.title)
+        modeSwitch.select(mode)
         hint.stringValue = mode.hint
         create.isHidden = false
         create.setAccessibilityLabel(mode == .handoff ? L("New task") : L("New session"))
@@ -109,14 +97,6 @@ final class PrimarySidebar: NSView {
         if mode == .sessions { sessions.activate() }
     }
 
-    @objc private func chooseMode() {
-        ShellMenuPopover.present(from: titleButton, items: PrimarySidebarMode.allCases.map { value in
-            .action(value.title, checked: mode == value,
-                    subtitle: value == .handoff ? L("Manage handoff tasks") : L("Continue local CLI sessions")) {
-                [weak self] in self?.selectMode(value)
-            }
-        })
-    }
     @objc private func searchContent() {
         (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
     }
@@ -152,9 +132,102 @@ final class PrimarySidebar: NSView {
     }
 }
 
-/// Align the chevron optically with the title's capitals, not its text baseline.
-private final class ModeTitleCell: NSButtonCell {
-    override func drawImage(_ image: NSImage, withFrame frame: NSRect, in controlView: NSView) {
-        super.drawImage(image, withFrame: frame.offsetBy(dx: 0, dy: controlView.isFlipped ? -2 : 2), in: controlView)
+/// 两段式模式切换：灰底圆角轨道，当前模式的一段铺白色滑块，点另一段即切换。
+final class ModeSwitch: NSView {
+    static let height: CGFloat = 32
+    private static let inset: CGFloat = 3
+    var onSelect: ((PrimarySidebarMode) -> Void)?
+    private(set) var selected: PrimarySidebarMode = .handoff
+    private let knob = NSView()
+    private(set) var segments: [NSButton] = []
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        knob.wantsLayer = true
+        knob.layer?.cornerRadius = 7
+        knob.shadow = {
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.10)
+            shadow.shadowBlurRadius = 3
+            shadow.shadowOffset = NSSize(width: 0, height: -1)
+            return shadow
+        }()
+        addSubview(knob)
+        segments = PrimarySidebarMode.allCases.map { value in
+            let button = NSButton()
+            button.isBordered = false
+            button.focusRingType = .none
+            button.lineBreakMode = .byTruncatingTail
+            button.target = self
+            button.action = #selector(segmentClicked(_:))
+            button.toolTip = value == .handoff ? L("Manage handoff tasks") : L("Continue local CLI sessions")
+            button.setAccessibilityRole(.radioButton)
+            HoverCursor.installPointingHand(on: button)
+            addSubview(button)
+            return button
+        }
+        setAccessibilityRole(.radioGroup)
+        applyState()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func select(_ value: PrimarySidebarMode) {
+        guard value != selected else { return }
+        selected = value
+        applyState()
+        guard window != nil else { return needsLayout = true }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = ShellStyle.animationDuration
+            context.timingFunction = ShellStyle.easeInOutCubic
+            knob.animator().frame = segmentFrame(selectedIndex)
+        }
+    }
+
+    private var selectedIndex: Int { PrimarySidebarMode.allCases.firstIndex(of: selected) ?? 0 }
+
+    private func segmentFrame(_ index: Int) -> NSRect {
+        let inner = bounds.insetBy(dx: Self.inset, dy: Self.inset)
+        let width = inner.width / CGFloat(max(segments.count, 1))
+        return NSRect(x: inner.minX + width * CGFloat(index), y: inner.minY, width: width, height: inner.height)
+    }
+
+    override func layout() {
+        super.layout()
+        for (index, button) in segments.enumerated() { button.frame = segmentFrame(index) }
+        knob.frame = segmentFrame(selectedIndex)
+    }
+
+    @objc private func segmentClicked(_ sender: NSButton) {
+        guard let index = segments.firstIndex(of: sender) else { return }
+        onSelect?(PrimarySidebarMode.allCases[index])
+    }
+
+    private func applyState() {
+        for (value, button) in zip(PrimarySidebarMode.allCases, segments) {
+            let active = value == selected
+            button.attributedTitle = NSAttributedString(string: value.title, attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: active ? .semibold : .medium),
+                .foregroundColor: active ? ShellStyle.primaryText : ShellStyle.secondaryText,
+                .paragraphStyle: { let style = NSMutableParagraphStyle(); style.alignment = .center; style.lineBreakMode = .byTruncatingTail; return style }(),
+            ])
+            button.state = active ? .on : .off
+            button.setAccessibilityValue(active)
+            button.setAccessibilityLabel(value.title)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyColors()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+    private func applyColors() {
+        layer?.backgroundColor = ShellStyle.segmentTrack.shellResolvedCGColor(for: effectiveAppearance)
+        knob.layer?.backgroundColor = ShellStyle.segmentKnob.shellResolvedCGColor(for: effectiveAppearance)
     }
 }

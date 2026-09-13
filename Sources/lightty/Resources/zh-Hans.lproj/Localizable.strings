@@ -250,9 +250,7 @@
 "Purple" = "紫色";
 "White" = "白色";
 
-"Handoff tasks" = "Handoff 任务";
-"Sessions" = "Sessions 会话";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "启动 Agent 时自动注入任务\n试着说：“总结交接文档”";
+"Injected when an agent starts, written back as it works." = "启动 Agent 自动注入、写回 Handoff";
 "Click to resume your last session." = "点击继续上次会话";
 "Primary sidebar" = "第一侧栏";
 "Manage handoff tasks" = "管理 Handoff 任务";

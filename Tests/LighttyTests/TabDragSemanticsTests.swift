@@ -343,6 +343,122 @@ final class TabDragSemanticsTests: XCTestCase {
         XCTAssertEqual(controller.tabOverview().first?.panes.last, loose, "并进来接在最后一个 pane 右侧")
     }
 
+    // MARK: - 拖到终端区域
+
+    /// 窗口放大、列表贴左边，右侧就有一块不和列表重叠的终端区域可以当落点。
+    private func mountedColumnBesideTerminals(_ controller: TerminalWindowController) throws -> (TabColumnView, NSTableView) {
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 1400, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let mounted = try mountedColumn(controller)
+        mounted.0.frame = NSRect(x: 0, y: 0, width: 200, height: 600)
+        mounted.0.layoutSubtreeIfNeeded()
+        return mounted
+    }
+
+    /// 目标 pane 里靠某条边的一点（列表坐标），保证在列表外。
+    private func point(in pane: PaneView, near zone: PaneDropZone, column: TabColumnView) throws -> NSPoint {
+        let b = pane.bounds
+        let local: NSPoint
+        switch zone {
+        case .left: local = NSPoint(x: b.minX + b.width * 0.1, y: b.midY)
+        case .right: local = NSPoint(x: b.maxX - b.width * 0.1, y: b.midY)
+        case .top: local = NSPoint(x: b.midX, y: b.maxY - b.height * 0.1)
+        case .bottom: local = NSPoint(x: b.midX, y: b.minY + b.height * 0.1)
+        }
+        let point = column.convert(pane.convert(local, to: nil), from: nil)
+        XCTAssertFalse(column.bounds.contains(point), "落点必须在列表外")
+        XCTAssertEqual(PaneDropZone.calculate(at: local, in: b), zone)
+        return point
+    }
+
+    private func dropPreviewShown(on pane: PaneView) -> Bool {
+        pane.subviews.contains { $0 is PaneDropOverlayView }
+    }
+
+    func testDraggingAPaneRowOntoATerminalSplitsBesideIt() throws {
+        let controller = TerminalWindowController()
+        AppState.shared.windowControllers = [controller]
+        defer { controller.window?.close(); AppState.shared.windowControllers = [] }
+        let target = try XCTUnwrap(controller.activePane)
+        let loose = PaneView()
+        controller.addTab(initialPane: loose)
+        controller.selectTab(withID: try XCTUnwrap(controller.tabOverview().first { $0.panes.contains(target) }?.id))
+        let (column, _) = try mountedColumnBesideTerminals(controller)
+        let original = column.displayedRows
+
+        XCTAssertTrue(column.startDrag(source: .pane(loose.dragIdentifier), card: NSView()))
+        column.moveDrag(to: try point(in: target, near: .right, column: column))
+        XCTAssertTrue(dropPreviewShown(on: target), "压在终端上显示和 pane 头部拖动一样的落点高亮")
+        column.moveDrag(to: try point(in: target, near: .bottom, column: column))
+        XCTAssertEqual(column.displayedRows, original, "光标在列表外，列表保持原样")
+        XCTAssertNil(column.finishDrag(), "落在列表外，卡片不飞回列表")
+        XCTAssertFalse(dropPreviewShown(on: target))
+
+        try waitUntil("pane moves below the target") { controller.tabOverview().count == 1 }
+        XCTAssertEqual(controller.tabOverview().first?.panes, [target, loose])
+    }
+
+    func testCursorLeavingTheListUndoesTheProposedReorder() throws {
+        let controller = TerminalWindowController()
+        AppState.shared.windowControllers = [controller]
+        defer { controller.window?.close(); AppState.shared.windowControllers = [] }
+        let first = try XCTUnwrap(controller.activePane)
+        let second = PaneView(), third = PaneView()
+        for pane in [second, third] { controller.addTab(initialPane: pane) }
+        controller.selectTab(withID: try XCTUnwrap(controller.tabOverview().first { $0.panes.contains(first) }?.id))
+        let (column, table) = try mountedColumnBesideTerminals(controller)
+        let original = column.displayedRows
+
+        XCTAssertTrue(column.startDrag(source: .pane(second.dragIdentifier), card: NSView()))
+        column.moveDrag(to: gap(below: 2, in: column, table: table))
+        XCTAssertNotEqual(column.displayedRows, original)
+        // 拖出列表但不压在任何 pane 上（压在源 pane 自己身上也一样）再松手：什么都不发生
+        column.moveDrag(to: NSPoint(x: column.bounds.maxX + 1, y: -500))
+        XCTAssertEqual(column.displayedRows, original)
+        column.finishDrag()
+        try waitUntil("drag session ends") { column.startDrag(source: .pane(second.dragIdentifier), card: NSView()) }
+        column.finishDrag()
+        XCTAssertEqual(controller.tabOverview().map(\.panes), [[first], [second], [third]])
+    }
+
+    func testATabRowDraggedOntoATerminalDoesNothing() throws {
+        let controller = TerminalWindowController()
+        AppState.shared.windowControllers = [controller]
+        defer { controller.window?.close(); AppState.shared.windowControllers = [] }
+        let first = try XCTUnwrap(controller.activePane)
+        controller.split(first, direction: .right)
+        let other = PaneView()
+        controller.addTab(initialPane: other)
+        controller.selectTab(withID: try XCTUnwrap(controller.tabOverview().first { $0.panes.contains(other) }?.id))
+        let (column, _) = try mountedColumnBesideTerminals(controller)
+        let tabID = try XCTUnwrap(controller.tabOverview().first?.id)
+
+        XCTAssertTrue(column.startDrag(source: .tab(tabID), card: NSView()))
+        column.moveDrag(to: try point(in: other, near: .right, column: column))
+        XCTAssertFalse(dropPreviewShown(on: other), "标签页行只在列表里排序")
+        column.finishDrag()
+        try waitUntil("drag session ends") { column.startDrag(source: .tab(tabID), card: NSView()) }
+        column.finishDrag()
+        XCTAssertEqual(controller.tabOverview().map(\.panes.count), [2, 1])
+    }
+
+    /// 拖出列表的卡片放在哪一层：必须是真实窗口里标签页侧栏的祖先，卡片排在最上面才不会被侧栏盖住。
+    func testAFreelyFollowingCardSitsAboveTheTabSidebar() throws {
+        let controller = TerminalWindowController()
+        defer { controller.window?.close() }
+        controller.openTabSidebar(animated: false)
+        let window = try XCTUnwrap(controller.window)
+        let themeFrame = try XCTUnwrap(window.contentView?.superview)
+        let column = try XCTUnwrap(descendants(themeFrame).compactMap { $0 as? TabColumnView }.first)
+
+        XCTAssertTrue(ReorderDrag.stage(for: column, followsPointerFreely: false) === column)
+        let stage = ReorderDrag.stage(for: column, followsPointerFreely: true)
+        XCTAssertTrue(column.isDescendant(of: stage), "侧栏不在这一层下面，卡片会被它盖住")
+        XCTAssertFalse(column.isDescendant(of: try XCTUnwrap(window.contentView)),
+                       "侧栏挂在 contentView 之外，放进 contentView 的卡片会被盖住")
+    }
+
     private func descendants(_ view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants($0) }
     }

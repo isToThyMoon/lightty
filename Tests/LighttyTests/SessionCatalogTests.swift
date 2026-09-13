@@ -943,8 +943,9 @@ final class PrimarySidebarTests: XCTestCase {
                 XCTAssertEqual(panel.bounds.maxX - listFrame.maxX, SidebarListScrollView.trailingMargin, accuracy: 0.5)
                 let texts = descendants(panel).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }
                 let hint = try XCTUnwrap(texts.first { $0.stringValue == mode.hint })
-                let title = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSButton }.first { $0.title == mode.title })
-                XCTAssertEqual(title.frame.minY - hint.frame.maxY, 4, accuracy: 0.5)
+                let modeSwitch = try XCTUnwrap(panel.subviews.compactMap { $0 as? ModeSwitch }.first)
+                XCTAssertEqual(modeSwitch.selected, mode)
+                XCTAssertEqual(modeSwitch.frame.minY - hint.frame.maxY, 8, accuracy: 0.5)
                 XCTAssertGreaterThan(hint.frame.height, 0)
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
                    let bitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) {
@@ -974,7 +975,12 @@ final class PrimarySidebarTests: XCTestCase {
         panel.selectMode(.handoff)
         XCTAssertTrue(descendants(panel).first { $0 is HandoffSidebarContent } === before)
         XCTAssertFalse(try XCTUnwrap(before).isHidden)
-        XCTAssertTrue(descendants(panel).compactMap { $0 as? NSButton }.contains { $0.title.contains(L("Handoff tasks")) })
+        let modeSwitch = try XCTUnwrap(descendants(panel).compactMap { $0 as? ModeSwitch }.first)
+        XCTAssertEqual(modeSwitch.segments.map(\.title), ["Handoff", "Sessions"])
+        XCTAssertEqual(modeSwitch.segments.map(\.state), [.on, .off])
+        modeSwitch.segments[1].performClick(nil)
+        XCTAssertEqual(panel.mode, .sessions)
+        XCTAssertEqual(modeSwitch.segments.map(\.state), [.off, .on])
     }
 
     func testOldWindowSnapshotDefaultsToHandoffCompatibleNil() throws {

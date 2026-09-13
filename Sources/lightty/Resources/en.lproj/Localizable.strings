@@ -246,9 +246,7 @@
 "Purple" = "Purple";
 "White" = "White";
 
-"Handoff tasks" = "Handoff tasks";
-"Sessions" = "Sessions";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "Include the task when starting an agent\nTry saying: “Summarize the handoff”";
+"Injected when an agent starts, written back as it works." = "Injected when an agent starts, written back as it works.";
 "Click to resume your last session." = "Click to resume your last session.";
 "Primary sidebar" = "Primary sidebar";
 "Manage handoff tasks" = "Manage handoff tasks";

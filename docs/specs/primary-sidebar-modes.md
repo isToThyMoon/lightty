@@ -46,15 +46,13 @@
 
 ### 2.1 模式标题
 
-- 将现有 11.5pt、浅色的“任务”小节标签改为可点击标题按钮：中文 **Handoff 任务** / **Sessions 会话**；英文 **Handoff tasks** / **Sessions**。
-- 建议 18pt semibold，主文字色，末尾向下 chevron；以实际 pt 设计，不照抄不同缩放截图的像素尺寸。
-- 标题按钮高 34–36pt，长英文允许截断并提供完整辅助标签；红黄绿所在顶部工具行不改动。
-- 标题下方常驻模式说明，不只在下拉菜单里解释。Handoff 模式显示“管理你的 Handoff 任务”，下一行引导“试试在 Agent 中说：‘总结当前 handoff task’”；Sessions 模式显示“继续你的 Claude Code / Codex CLI 会话”，下一行说明“按项目整理，点击继续上次对话”。
+- 模式标题是两段式切换（`ModeSwitch`）：灰底圆角轨道，左右两段 **Handoff** / **Sessions**（中英文相同，不本地化），当前模式一段铺白色滑块（深色下比轨道亮一档），点击另一段直接切换，滑块平移过去。
+- 高 32pt，左右距卡片 16pt，两段等宽，13pt 字，激活段 semibold 主文字色，其余 medium 次级色；长英文截断，辅助功能为单选组；红黄绿所在顶部工具行不改动。
+- 标题下方常驻模式说明，不只在下拉菜单里解释。Handoff 模式只用一句话说明功能：“启动 Agent 自动注入、写回 Handoff”；Sessions 模式显示“继续你的 Claude Code / Codex CLI 会话”，下一行说明“按项目整理，点击继续上次对话”。
 - 说明用 11–12pt secondaryText，提示可用 tertiaryText；按可用宽度自然换行、参与布局，不固定高度覆盖列表。保持标题、说明、列表三级视觉层次；说明文本不触发命令、不自动发送 prompt。
 - Handoff 提示是自然语言引导，不是 CLI 内建命令；需在已绑定任务且 hooks 可用的现场验证写回流程，缺少配置时提供“配置 Agent hooks”入口，不保证未配置的 Agent 会自动写入任务。
-- 点击弹出两行模式菜单，当前模式打勾，每项有简短副说明：“管理 Handoff 任务” / “继续本机 CLI 会话”。菜单不重复整段操作提示。
-- 英文常驻说明：Handoff — “Manage your handoff tasks.” / “Try asking your agent: ‘Summarize the current handoff task.’”；Sessions — “Continue your Claude Code / Codex CLI sessions.” / “Organize by project. Click to pick up where you left off.”
-- 优先复用 ShellMenuPopover 的视觉与键盘模式；若其不支持副标题，在共享菜单能力内做最小扩展，不为这个标题造另一套菜单系统。
+- 每段的 tooltip 是简短副说明：“管理 Handoff 任务” / “继续本机 CLI 会话”，不重复整段操作提示。
+- 英文常驻说明：Handoff — “Injected when an agent starts, written back as it works.”；Sessions — “Continue your Claude Code / Codex CLI sessions.” / “Organize by project. Click to pick up where you left off.”
 - 搜索随模式变化：Handoff 搜索现有任务；Sessions 搜索会话标题、来源、项目、路径，不首期检索完整对话。建档按钮仅在 Handoff 模式显示；Sessions 不保留会误建任务的按钮。
 - 每窗口独立保存模式、各模式查询、选择与滚动位置；新窗口继承最近选用模式，其他已开窗口不被同步切换。
 - 模式切换仅替换内容区：保持面板尺寸、第一侧栏开合、第二侧栏开合、终端焦点策略不变，关闭旧模式的临时弹窗。
@@ -74,7 +72,7 @@ Sessions 顶部的新建会话按钮提供 Codex / Claude Code 选择，使用�
 两种模式共用 SidebarListScrollView：列表左缘距卡片 12pt、滚动容器右缘距卡片 2pt；内部右侧独立保留 16pt 滚动条区域，即使 overlay 隐藏也不改变行宽。正文和操作按钮始终在该区域左侧；Handoff 与 Sessions 使用一致的行首内边距、更多按钮和次级文字颜色。
 
 ```text
-Sessions 会话 ▾
+[ Handoff | Sessions ]
 继续你的 Claude Code / Codex CLI 会话
 按项目整理，点击继续上次对话
 来源：全部 ▾                         搜索
