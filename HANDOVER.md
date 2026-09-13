@@ -32,7 +32,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 
 ## 构建与验证
 
-构建依赖及从零安装步骤以 [README](README.md#building-from-source) 为准。
+构建依赖及从零安装步骤以 [README](README.md#从源码构建--building-from-source) 为准。
 本地调试运行：swift build && .build/debug/lightty；不要误开旧打包实例验证新代码。
 测试：swift test。终端适配门禁：scripts/check-terminal-adapter-parity.sh。
 全量测试要点：
