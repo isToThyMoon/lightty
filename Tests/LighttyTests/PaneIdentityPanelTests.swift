@@ -428,6 +428,38 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertEqual(icon.frame.width, PaneIdentityMetrics.iconSize)
     }
 
+    /// 关闭键长在圆点插槽里，只在胶囊 hover 时出现。hover 区若按某一刻的胶囊 frame
+    /// 算死，标题从「Terminal」换成长会话标题、胶囊向两侧变宽后，圆点落在旧区域外，
+    /// 鼠标移到圆点上关闭键就消失。
+    func testCapsuleHoverAreaFollowsTheCapsuleWhenTheTitleGrows() throws {
+        _ = NSApplication.shared
+        ensureTerminalRuntime()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("capsule-hover-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
+        let pane = PaneView()
+        let controller = TerminalWindowController(initialPane: pane)
+        defer { controller.window?.close() }
+        controller.window?.setContentSize(NSSize(width: 900, height: 500))
+        controller.window?.layoutIfNeeded()
+        let header = pane.header
+        header.updateTrackingAreas()
+        header.title = "ai-search-service和image-audit接口日志查询"
+        controller.window?.layoutIfNeeded()
+
+        let dot = header.capsuleFrame.minX + PaneIdentityMetrics.dotLeading + PaneIdentityMetrics.dotSize / 2
+        let point = NSPoint(x: dot, y: header.capsuleFrame.midY)
+        let hoverRects = header.descendants.flatMap { view in
+            view.trackingAreas
+                .filter { $0.owner === header && !$0.options.contains(.activeAlways) }
+                .map { header.convert($0.options.contains(.inVisibleRect) ? view.visibleRect : $0.rect, from: view) }
+        } + header.trackingAreas
+            .filter { $0.owner === header && !$0.options.contains(.activeAlways) }
+            .map(\.rect)
+        XCTAssertFalse(hoverRects.isEmpty)
+        XCTAssertTrue(hoverRects.allSatisfy { $0.contains(point) }, "\(hoverRects) vs capsule \(header.capsuleFrame)")
+    }
+
     private func makeTaskList() throws -> (PaneIdentityPanel, NSTextField, NSScrollView) {
         _ = NSApplication.shared
         let panel = PaneIdentityPanel()

@@ -206,6 +206,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         applyTerminalColors()
 
+        let capsuleArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self)
+        capsule.addTrackingArea(capsuleArea)
+        capsuleTracking = capsuleArea
+
         addSubview(capsule)
         for v in [dotView, closeButton, agentIcon, nameLabel, taskHintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -360,13 +367,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let capsuleTracking { removeTrackingArea(capsuleTracking) }
-        let area = NSTrackingArea(
-            rect: convert(capsule.frame, from: capsule.superview),
-            options: [.mouseEnteredAndExited, .activeInKeyWindow],
-            owner: self)
-        addTrackingArea(area)
-        capsuleTracking = area
+        // 胶囊的 hover 区挂在胶囊自己身上（init 里装一次，.inVisibleRect 跟随胶囊）。
+        // 以前在这里按 capsule.frame 算死矩形：这个回调只在 header 自身尺寸变时才来，
+        // 胶囊随标题变宽却不会触发——短标题「Terminal」时记下的中间一小块一直不更新，
+        // 换成长标题后移到左侧圆点就算离开胶囊，关闭键随之消失，pane 关不掉。
 
         if let headerTracking { removeTrackingArea(headerTracking) }
         // .activeAlways：app 未激活时第一下点击也可能直接是拖 pane
