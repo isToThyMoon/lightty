@@ -10,7 +10,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         try AppState.shared.taskBindings.store.create(name: "Search fixture", workdir: directory.path)
         let controller = TerminalWindowController()
         let palette = SearchPaletteView(controller: controller)
@@ -41,7 +41,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
             .appendingPathComponent("preview-click-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         let body = "## Current state\n" + String(repeating: "Long handoff preview text. ", count: 150)
         let task = TaskFile(name: "Preview", workdir: directory.path,
@@ -69,7 +69,10 @@ final class AgentLaunchPreferenceTests: XCTestCase {
             .appendingPathComponent("agent-startup-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
+        // 启动命令要在真 shell 里执行才会写出标记文件。
+        TerminalTestShell.usesRealShell = true
+        defer { TerminalTestShell.usesRealShell = false }
         let task = TaskFile(name: "Launch test", workdir: directory.path,
                             created: Date(), updated: Date())
         let file = directory.appendingPathComponent("task.md")
@@ -85,12 +88,10 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         let pointer = PaneRuntimeDirectory.taskPointerFile(for: pane.dragIdentifier.uuidString)
         XCTAssertEqual(try String(contentsOf: pointer).trimmingCharacters(in: .whitespacesAndNewlines), file.path)
         let controller = TerminalWindowController(initialPane: pane)
-        let deadline = Date(timeIntervalSinceNow: 5)
-        while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
-        }
-        withExtendedLifetime(controller) {
-            XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path), "Initial command must execute")
+        try withExtendedLifetime(controller) {
+            try waitUntil("initial command writes the marker") {
+                FileManager.default.fileExists(atPath: marker.path)
+            }
         }
         let actual = try String(contentsOf: marker).trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(URL(fileURLWithPath: actual).resolvingSymlinksInPath().path,
@@ -189,7 +190,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
             .appendingPathComponent("agent-picker-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let key = "lightty.agent.selected"
         let saved = FilePreferences.shared.object(forKey: key)
         defer {
@@ -228,7 +229,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         try FileManager.default.createDirectory(at: taskDirectory, withIntermediateDirectories: true)
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let key = "lightty.agent.selected"
         let saved = FilePreferences.shared.object(forKey: key)
         defer {

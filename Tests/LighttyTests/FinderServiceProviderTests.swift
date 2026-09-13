@@ -78,7 +78,7 @@ private func withTestAppState(_ body: (AppState) throws -> Void) rethrows {
         try? FileManager.default.removeItem(at: directory)
     }
     AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     try body(AppState.shared)
 }
 

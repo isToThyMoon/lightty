@@ -30,6 +30,9 @@
    元数据失效后，即使旧记录已有缓存，也要在本轮读取中到达目标页，不能拿缓存当作已刷新。
 7. Agent 操作可使元数据失效。模型合并延迟读取，最多五次；取消同时清除待重试请求。
    官方目录没有适用于当前独立终端运行方式的完整实时订阅，因此有界读取仍有同步窗口。
+   用户在开着的会话里自己敲 `/rename` 不触发钩子：`SessionTitleSignals` 监听 provider 给出的改名文件
+   （Claude 的会话记录、Codex 的 `session_index.jsonl`），文件变化只当信号，由模型读一次官方目录。
+   只在钩子报过该会话没在跑时才读；运行中交给 Stop 钩子，没有钩子状态时不读。
 8. 已观察进程通过系统 process exit source 订阅退出，不依靠刷新目录或 UI 可见性。
    退出证据使缓存失效，通知受影响会话；旧 PID 被复用也不能复活旧占用状态。
    进程归属无法验证时显示未知，不把读取失败当作外部终端；原生恢复前的占用检查仍独立保留。
@@ -61,7 +64,7 @@ pane 行，不重建标签页树，也不改变选中项、滚动位置或输入
   `TaskBindings`，不各自扫窗口比对 URL。外部改了已绑定任务的 `name`，也以 `rename` 发出（见下条）。
 - `lighttyTasksDidChange`（定义在 LighttyCore）：`object` 是 `TaskBindings`，无载荷，收到的一方
   自己重读。含义是「任务目录里的文件变了」，谁写的都算——lightty 自己的写入与 Agent 按交接协议
-  写回一视同仁。只有 `TaskBindings` 发：它持有任务目录的监听（生产用 `TaskFolderWatcher`，
+  写回一视同仁。只有 `TaskBindings` 发：它持有任务目录的监听（生产用 `PathWatcher`，
   创建时开始、释放时结束，目录打不开时不监听、记一条日志），目录事件防抖约 0.2 秒后在主线程
   处理：先重读已绑定任务的名字，变了就发 `rename` 绑定变更；文件读不出来（不存在、内容写坏）
   不算改名、不解绑，保留现状；然后发本通知。Handoff 列表订阅它，只认
@@ -81,7 +84,7 @@ pane 行，不重建标签页树，也不改变选中项、滚动位置或输入
 - `RestoredSessionTitleTests` 覆盖 Handoff 模式冷启动、前后台 pane 和重复启动。
 - `SessionSurfaceConsistencyTests` 验证一个模型更新两个侧栏和 pane，且保留物化行身份。
 - `SessionRestorationTests`、`AgentProcessLifecycleTests` 保留快照兼容、真实进程退出与任务独立性的验证。
-- `TaskBindingsTests`（Core）验证每种操作发出的载荷与指针文件，以及任务目录变更：手动触发的变更源验证一次事件一条列表通知、外部改名同步到已绑定终端、文件消失或读不出不解绑、跨线程回到主线程、释放即停止监听；另有一条用真实 `TaskFolderWatcher` 验证「临时文件加 mv」到达一次。`PaneTaskBindingsTests` 用真实终端验证改名（含外部改名）、归档、删除传导到每个绑定终端，以及终端释放后任务不再算已打开。`HandoffSidebarReloadTests` 验证列表跟随外部写入与归档恢复，且不再随窗口结构变化重读。
+- `TaskBindingsTests`（Core）验证每种操作发出的载荷与指针文件，以及任务目录变更：手动触发的变更源验证一次事件一条列表通知、外部改名同步到已绑定终端、文件消失或读不出不解绑、跨线程回到主线程、释放即停止监听；另有一条用真实 `PathWatcher` 验证「临时文件加 mv」到达一次。`PaneTaskBindingsTests` 用真实终端验证改名（含外部改名）、归档、删除传导到每个绑定终端，以及终端释放后任务不再算已打开。`HandoffSidebarReloadTests` 验证列表跟随外部写入与归档恢复，且不再随窗口结构变化重读。
 - `SessionPresenceTests` 覆盖真实关闭标签入口、多个本地窗口与外部进程并存、退出后的侧栏原地更新、PID 复用。
 
 本重构不改变工作区快照、任务文件、组织文件或 hook 报文的持久化格式。

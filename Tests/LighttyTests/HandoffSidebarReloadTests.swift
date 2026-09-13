@@ -12,7 +12,7 @@ final class HandoffSidebarReloadTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
-    /// 手动触发的任务目录变更：代替 `TaskFolderWatcher` 防抖后的一次目录事件。
+    /// 手动触发的任务目录变更：代替 `PathWatcher` 防抖后的一次目录事件。
     private var fireFolderChange: (() -> Void)?
 
     /// 先把 AppState 立起来（任务要经它的 store 建），再造视图。

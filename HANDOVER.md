@@ -23,7 +23,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - Claude 官方 SDK helper：`node scripts/prepare-claude-helper.mjs` 准备 debug 依赖，再运行 `swift build && .build/debug/lightty`。打包脚本自动准备双架构运行时；应用运行时不下载依赖。
 - PaneLauncher：由 lightty 发起的新终端（启动浮层、续接会话、原生会话选择器、任务开始处理、重启恢复）都构造启动请求交给它；删除互斥、已打开则聚焦、占用检查、会话关联、任务绑定、放置都在这里，结果交回调用方决定怎么提示。原生 CLI 恢复，目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
 - SessionResumeFlow：续接与原生选择器的呈现层，只按启动器的结果弹目录面板、占用提示和错误框。
-- TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 TaskFolderWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
+- TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 PathWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
 - PaneView / TerminalSurfaceView：终端视图与 libghostty surface；任务绑定只读查询 TaskBindings。
 - WorkspaceSnapshot / WorkspaceStore：窗口现场保存与重启恢复；不是全量 Agent 会话目录。
 - UserDataMigration / UserDataSchemas / JSONSchemaMigration：启动升级、各文件规则及纯内存版本转换，先于业务初始化。
@@ -38,7 +38,9 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 全量测试要点：
 - 在 lightty 的 pane 里跑，先 `unset LIGHTTY_PANE_ID LIGHTTY_SOCK`。
 - 测试里不要广播全局偏好变化（例如 `LanguagePreference.set`）：之前测试留下的窗口会跟着重建，曾让进程稳定卡死在 `ghostty_surface_free`。
-- 机器负载高时（例如多个 worktree 同时跑），`PaneIdentityPanelTests` 偶发卡住，或主线程卡在 `ghostty_surface_free`。判断是不是回归，以单机串行重跑的结果为准。
+- 测试里建 ghostty 运行时一律用 `ensureTerminalRuntime()`（`Tests/LighttyTests/TerminalRuntimeTestSupport.swift`）。测试终端默认跑 `cat`、不跑交互 shell：测试主线程很少 tick，app 邮箱常年是满的，这时释放跑着 zsh 的 surface 会永久卡死在 `ghostty_surface_free`。确实要真 shell 的测试设 `TerminalTestShell.usesRealShell = true`，用完复原。
+- 测试里等异步结果只用 `waitUntil`（XCTest）/ `awaitUntil`（Swift Testing），见 `Tests/LighttyTests/WaitTestSupport.swift`。超时会结束当前测试；不要手写「截止时间 + 循环 + 断言」，超时后继续往下按行号取行会 trap，整个测试进程崩掉。超时上限本身是契约时（如刷新按钮最多转完一圈）才显式传短超时。
+- 机器负载高时（例如多个 worktree 同时跑），固定时长的等待（`RunLoop.main.run(until:)`、固定 `Task.sleep`）仍可能偶发失败。判断是不是回归，以单机串行重跑的结果为准。
 - `scripts/check-config-parity.sh` 会启动 lightty 二进制，入口会先对真实 `~/.lightty` 跑数据迁移，HOME 覆盖无效，先退出正在使用的 lightty 再跑。
 发布打包：scripts/package-app.sh。
 

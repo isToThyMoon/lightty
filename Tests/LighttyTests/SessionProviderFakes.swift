@@ -16,6 +16,7 @@ extension CatalogOnlyProvider {
     func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result { .unknown }
     func checkDeletable(_ key: AgentSessionKey, known: [AgentProcessIdentity: AgentSessionKey]) throws {}
     func observeLiveSessions() -> LiveSessionObservation? { nil }
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL] { [] }
 }
 
 /// 可编排结果、记录调用的 provider 替身，用来走改名 / 删除 / 占用经 interface 的分支。
@@ -64,6 +65,7 @@ final class FakeSessionProvider: AgentSessionProvider {
         calls.append(.observe)
         return observation
     }
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL] { [] }
 }
 
 /// 包一个真 adapter，只替换删除前的进程核查：集成测试不能依赖机器上此刻跑着哪些 claude。
@@ -80,4 +82,5 @@ struct DeletionCheckOverride: AgentSessionProvider {
     func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result { base.occupancy(of: key) }
     func checkDeletable(_ key: AgentSessionKey, known: [AgentProcessIdentity: AgentSessionKey]) throws { try check() }
     func observeLiveSessions() -> LiveSessionObservation? { base.observeLiveSessions() }
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL] { base.titleSignalFiles(for: key) }
 }

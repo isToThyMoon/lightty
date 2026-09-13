@@ -66,7 +66,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let controller = TerminalWindowController()
         AppState.shared.windowControllers.append(controller)
@@ -121,7 +121,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         defer { AppState.shared.windowControllers.removeAll() }
 
         // 旧快照：只有 title 字符串。
@@ -156,7 +156,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let a = TerminalWindowController()
         let b = TerminalWindowController()

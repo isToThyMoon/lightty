@@ -390,7 +390,7 @@ final class PaneIdentityPanelTests: XCTestCase {
     /// 文字整整往回缩了 14pt。
     func testIslandFirstRowKeepsTheCapsuleTitleOffset() {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         for agent in [SessionAgent?.none, .some(.claude), .some(.codex)] {
             let header = PaneHeaderView()
             header.frame = NSRect(x: 0, y: 0, width: 400, height: PaneHeaderView.height)

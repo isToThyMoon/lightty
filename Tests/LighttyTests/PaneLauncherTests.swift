@@ -25,7 +25,7 @@ private final class LauncherFixture {
         previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false,
                                    sessionLibrary: library)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         controller = TerminalWindowController()
         AppState.shared.windowControllers = [controller]
         // 续接在检查占用之后还要确认宿主窗口仍在屏幕上。
@@ -50,8 +50,7 @@ private final class LauncherFixture {
     func outcome(of request: TerminalLaunchRequest, hosted: Bool = true) async throws -> TerminalLaunchOutcome {
         var result: TerminalLaunchOutcome?
         launcher.launch(request, in: hosted ? controller : nil) { result = $0 }
-        let deadline = Date().addingTimeInterval(4)
-        while result == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await awaitUntil("launch outcome") { result != nil }
         return try #require(result)
     }
 
@@ -108,8 +107,7 @@ extension SessionAssociationTests {
             result = outcome
         }
         #expect(f.launcher.isStarting(session.key))
-        let deadline = Date().addingTimeInterval(4)
-        while result == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await awaitUntil("launch outcome") { result != nil }
         guard case .launched(let pane) = try #require(result) else { Issue.record("expected launch"); return }
         #expect(association == .init(key: session.key, configuration: .custom(f.root.path),
                                      workingDirectory: f.workdir.path))
@@ -247,8 +245,7 @@ extension SessionAssociationTests {
             Issue.record("a second request during the check must coalesce"); queue.resume(); return
         }
         queue.resume()
-        let deadline = Date().addingTimeInterval(4)
-        while first == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await awaitUntil("launch outcome") { first != nil }
         guard case .launched(let pane) = try #require(first) else { Issue.record("expected launch"); return }
         #expect(pane.terminal.launchConfiguration.workingDirectory == f.workdir.path)
         #expect(f.controller.tabCount == 2)

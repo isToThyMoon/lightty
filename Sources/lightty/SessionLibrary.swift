@@ -67,14 +67,21 @@ final class SessionLibrary {
         refresh()
     }
 
+    private let titleChanges: PathChangeSource
+    private lazy var titleSignals = SessionTitleSignals(changes: titleChanges) { [weak self] key in
+        self?.titleFileChanged(key)
+    }
+
     init(fileURL: URL, providers: [AgentSessionProvider]? = nil,
          statusStore: PaneStatusStore = .shared, metadataRefreshDelay: TimeInterval = 1.5,
-         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier) {
+         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
+         titleChanges: @escaping PathChangeSource = PathWatcher.changeSource) {
         self.hostProcessID = hostProcessID
         self.fileURL = fileURL
         self.providers = providers
         self.statusStore = statusStore
         self.metadataRefreshDelay = metadataRefreshDelay
+        self.titleChanges = titleChanges
         NotificationCenter.default.addObserver(self, selector: #selector(statusDidChange(_:)),
             name: .lighttyPaneStatusDidChange, object: nil)
         diskQueue.async { [weak self] in
@@ -196,6 +203,18 @@ final class SessionLibrary {
         metadataRefreshes.schedule()
     }
 
+    /// 改名文件变了（见 `SessionTitleSignals`）。文件事件晚于写入，读一次就够，不像钩子那样
+    /// 要等官方目录跟上；已有待重试的请求不缩短它。
+    /// 只在钩子报过「没在跑」时才读：agent 跑着的时候记录文件每条消息都在写，而这一轮结束的
+    /// Stop 钩子会重读。没有钩子状态（没装插件）说不清在不在跑，也不读，否则一轮对话里
+    /// 会一次接一次地起 helper。
+    private func titleFileChanged(_ key: AgentSessionKey) {
+        let states = runtime.panes.values.filter { $0.sessionKey == key }.map { $0.status?.state }
+        guard !states.isEmpty, states.allSatisfy({ $0 != nil && $0 != .thinking && $0 != .tool }) else { return }
+        if metadataRequests[key] == nil { metadataRequests[key] = .init(baseline: recordIndex[key], attempts: 1) }
+        metadataRefreshes.schedule(delay: 0)
+    }
+
     @objc private func statusDidChange(_ notification: Notification) {
         guard PaneStatusStore.source(from: notification) === statusStore else { return }
         let ids = PaneStatusStore.paneID(from: notification).map { [$0] } ?? Array(runtime.inputs.keys)
@@ -211,9 +230,21 @@ final class SessionLibrary {
     }
 
     private func reconcilePane(_ id: UUID) {
-        emit(runtime.update(id, status: statusStore.status(for: id),
-                            isUnread: statusStore.unreadActivity(for: id) != nil, records: recordIndex,
-                            home: FileManager.default.homeDirectoryForCurrentUser))
+        let change = runtime.update(id, status: statusStore.status(for: id),
+                                    isUnread: statusStore.unreadActivity(for: id) != nil, records: recordIndex,
+                                    home: FileManager.default.homeDirectoryForCurrentUser)
+        emit(change)
+        // 关联变了要换监听；钩子到了（活动变化）顺带重找还没找到的文件——新会话写下第一条记录
+        // 之后才有文件，而那时一定有钩子。
+        if let fields = change.panes[id], !fields.isDisjoint(with: [.identity, .activity]) { syncTitleSignals() }
+    }
+
+    /// 用列表读取时建好的 provider，不用 `provider(for:)`：那个要扫 PATH。
+    /// 还没读过列表就先不监听，`refresh` 建好 provider 后会再调。
+    private func syncTitleSignals() {
+        titleSignals.watch(Set(runtime.panes.values.compactMap(\.sessionKey))) { [unowned self] agent in
+            self.activeProviders.first { $0.source.agent == agent }
+        }
     }
 
     private func emit(_ change: SessionChange) {
@@ -245,6 +276,7 @@ final class SessionLibrary {
         errors = [:]
         let sources = SessionAgent.allCases.compactMap { source(for: $0) }
         activeProviders = providers ?? sources.map { $0.makeProvider() }
+        syncTitleSignals()
         for agent in SessionAgent.allCases where !sources.contains(where: { $0.agent == agent }) {
             errors[agent] = L("CLI was not found on this Mac.")
         }

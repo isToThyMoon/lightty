@@ -58,50 +58,31 @@ final class PaneStatusStoreTests: XCTestCase {
         ).send(to: socketPath)
     }
 
-    /// 主线程上等 `condition` 成立。`wait` 会泵主 runloop，
-    /// 这正是 store 的 `DispatchQueue.main.async` 落地所需要的。
-    private func waitUntil(
-        _ description: String, timeout: TimeInterval = 2,
-        _ condition: @escaping () -> Bool
-    ) {
-        let expectation = XCTestExpectation(description: description)
-        func poll() {
-            if condition() {
-                expectation.fulfill()
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.005) { poll() }
-            }
-        }
-        poll()
-        XCTAssertEqual(
-            XCTWaiter().wait(for: [expectation], timeout: timeout), .completed, description)
-    }
-
     // MARK: - 用例
 
     /// 顺序就是契约：datagram 到达顺序 == 发送顺序，所以 `seq` 才敢删掉。
-    func testDeliversDatagramsInSendOrder() {
+    func testDeliversDatagramsInSendOrder() throws {
         let pane = UUID()
         attach(pane)
 
         for state in [PaneActivity.thinking, .tool, .thinking, .done] { send(state, to: pane) }
 
-        waitUntil("四发都到") { self.received.count >= 4 }
+        try waitUntil("四发都到") { self.received.count >= 4 }
         XCTAssertEqual(received.map(\.state), [.thinking, .tool, .thinking, .done])
         XCTAssertEqual(store.status(for: pane)?.state, .done)
     }
 
     /// 分发是**定向**的：通知必须说清是哪个 pane 变了，否则呈现层只能全量重扫。
-    func testNotificationCarriesTheChangedPaneID() {
+    func testNotificationCarriesTheChangedPaneID() throws {
         let a = UUID()
         let b = UUID()
         attach(a)
         attach(b)
 
         send(.tool, to: a)
-        waitUntil("a 到了") { self.received.count >= 1 }
+        try waitUntil("a 到了") { self.received.count >= 1 }
         send(.done, to: b)
-        waitUntil("b 到了") { self.received.count >= 2 }
+        try waitUntil("b 到了") { self.received.count >= 2 }
 
         XCTAssertEqual(received.map(\.pane), [a, b])
         XCTAssertEqual(store.status(for: a)?.state, .tool)
@@ -110,7 +91,7 @@ final class PaneStatusStoreTests: XCTestCase {
 
     /// 这条是换传输层的**理由**本身：文件当可变槽位时主线程一忙就整批丢，
     /// 内核接收队列不会。200 发是 20 个并发 agent 的一轮突发量级。
-    func testBurstOfTwoHundredDatagramsAllArrive() {
+    func testBurstOfTwoHundredDatagramsAllArrive() throws {
         let pane = UUID()
         attach(pane)
 
@@ -122,17 +103,17 @@ final class PaneStatusStoreTests: XCTestCase {
             }
         }
 
-        waitUntil("200 发全到", timeout: 10) { self.received.count >= 200 }
+        try waitUntil("200 发全到", timeout: 10) { self.received.count >= 200 }
         XCTAssertEqual(received.count, 200)
         XCTAssertTrue(received.allSatisfy { $0.pane == pane })
     }
 
     /// 未 attach 的 pane 的报文要丢：detach 之后还有在途报文，不能把状态复活。
-    func testDetachDropsStateAndIgnoresInFlightDatagrams() {
+    func testDetachDropsStateAndIgnoresInFlightDatagrams() throws {
         let pane = UUID()
         attach(pane)
         send(.done, to: pane)
-        waitUntil("先收到一发") { self.store.status(for: pane) != nil }
+        try waitUntil("先收到一发") { self.store.status(for: pane) != nil }
 
         store.detach(pane)
         XCTAssertNil(store.status(for: pane))
@@ -145,7 +126,7 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertNil(store.status(for: pane))
     }
 
-    func testMalformedDatagramIsDroppedWithoutBreakingTheStream() {
+    func testMalformedDatagramIsDroppedWithoutBreakingTheStream() throws {
         let pane = UUID()
         attach(pane)
 
@@ -160,20 +141,20 @@ final class PaneStatusStoreTests: XCTestCase {
 
         // 链路必须还活着：好报文照收
         send(.done, to: pane)
-        waitUntil("坏报文之后好报文仍然到达") { self.received.count >= 1 }
+        try waitUntil("坏报文之后好报文仍然到达") { self.received.count >= 1 }
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(store.status(for: pane)?.state, .done)
     }
 
     /// `markAllRead` 一次改多个 pane，通知不带 pane（object 为 nil），呈现层走全量分支。
-    func testMarkAllReadPostsAFullPassNotification() {
+    func testMarkAllReadPostsAFullPassNotification() throws {
         let a = UUID()
         let b = UUID()
         attach(a)
         attach(b)
         send(.done, to: a)
         send(.done, to: b)
-        waitUntil("两发都到") { self.received.count >= 2 }
+        try waitUntil("两发都到") { self.received.count >= 2 }
 
         XCTAssertEqual(store.unreadCount, 2)
         XCTAssertEqual(store.aggregate, .done)
@@ -187,11 +168,11 @@ final class PaneStatusStoreTests: XCTestCase {
     }
 
     /// Reading acknowledges the reminder without claiming that the Agent has resumed.
-    func testMarkReadPreservesAttention() {
+    func testMarkReadPreservesAttention() throws {
         let pane = UUID()
         attach(pane)
         send(.attention, to: pane)
-        waitUntil("attention 到达") { self.received.count >= 1 }
+        try waitUntil("attention 到达") { self.received.count >= 1 }
         XCTAssertEqual(store.aggregate, .attention)
 
         store.markRead(pane)

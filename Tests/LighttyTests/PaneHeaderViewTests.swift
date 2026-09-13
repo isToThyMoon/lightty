@@ -6,9 +6,7 @@ import XCTest
 final class PaneHeaderViewTests: XCTestCase {
     func testHeaderHasNoManualHandoffControls() {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        ensureTerminalRuntime()
 
         let header = PaneHeaderView()
         let manualControls = header.subviews.compactMap { $0 as? ShellTextButton }
@@ -20,9 +18,7 @@ final class PaneHeaderViewTests: XCTestCase {
 
     func testIdentityCapsuleIsCenteredWithinPaneHeader() {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        ensureTerminalRuntime()
 
         let header = PaneHeaderView()
         header.title = "Terminal 12"

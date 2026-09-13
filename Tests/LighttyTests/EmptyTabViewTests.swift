@@ -6,9 +6,7 @@ import Testing
 struct EmptyTabViewTests {
     @Test func subtitleStaysOnOneLine() throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        ensureTerminalRuntime()
 
         let view = EmptyTabView()
         view.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
@@ -24,9 +22,7 @@ struct EmptyTabViewTests {
 
     @Test func darkTerminalThemeUpdateKeepsEmptyStateReadableInDarkShellAppearance() throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        ensureTerminalRuntime()
 
         let view = EmptyTabView()
         view.appearance = NSAppearance(named: .darkAqua)

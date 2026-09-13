@@ -60,7 +60,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let title = L("Move to recent sessions")
@@ -70,11 +70,11 @@ final class PrimarySidebarTests: XCTestCase {
             $0.projects = [project]
             $0.move(record, to: project.id)
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let item = try XCTUnwrap(content.sessionMenuItems(record, anchor: NSView()).first { $0.title == title })
         guard case .action(let action) = item.kind else { return XCTFail("Expected move action") }
         action()
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertNil(library.organization.projectID(for: record))
         XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
     }
@@ -87,7 +87,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let items = content.managementItems()
         XCTAssertFalse(items.contains { if case .separator = $0.kind { return true } else { return false } })
         for title in [L("Refresh"), L("Cancel")] {
@@ -107,7 +107,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let items = content.sessionMenuItems(record, anchor: NSView())
@@ -127,7 +127,7 @@ final class PrimarySidebarTests: XCTestCase {
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 2))
         row.frame = NSRect(x: 0, y: 0, width: 240, height: 32)
@@ -178,7 +178,7 @@ final class PrimarySidebarTests: XCTestCase {
                                      providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 3))
         let cell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 3) as? NSTableCellView)
@@ -220,9 +220,9 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Project")] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         XCTAssertFalse(content.tableView(table, shouldSelectRow: 1), "A project toggles its members; it isn't a selected destination")
         content.layoutSubtreeIfNeeded()
@@ -237,7 +237,7 @@ final class PrimarySidebarTests: XCTestCase {
                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             NSApp.postEvent(up, atStart: true)
             table.mouseDown(with: down)
-            spin { !library.saving }
+            try waitUntil("condition") { !library.saving }
             XCTAssertEqual(library.organization.projects[0].collapsed, expected)
             XCTAssertEqual(table.selectedRow, -1)
             XCTAssertFalse(rowView.isSelected)
@@ -255,9 +255,9 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Empty project")] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         content.layoutSubtreeIfNeeded()
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let recentCell = try XCTUnwrap(table.view(atColumn: 0, row: 3, makeIfNecessary: true))
@@ -265,7 +265,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
         XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: true) === recentCell,
                       "Saving state must not tear down unrelated visible cells")
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: true) === recentCell,
                       "An empty project's disclosure must only update its own icon")
         content.toggleProjects()
@@ -283,13 +283,13 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Project")
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         content.layoutSubtreeIfNeeded()
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let button = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarDisclosureButton }.first)
@@ -330,7 +330,7 @@ final class PrimarySidebarTests: XCTestCase {
         // A concrete project's members animate independently of the outer section.
         table.selectRowIndexes([1], byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(table.numberOfRows, 3)
         XCTAssertTrue(button.expanded)
     }
@@ -365,7 +365,7 @@ final class PrimarySidebarTests: XCTestCase {
         // 会话库通知合流到下一拍再重算（见 `Coalescer`），所以按钮晚一拍翻。
         // 顺序是确定的：`refresh()` 先把重算排进主队列，provider 的完成回调排在它后面。
         // 真实 app 里主 runloop 一直在转，这一拍是几微秒，看不出来。
-        spin { refresh.toolTip == L("Cancel") }
+        try waitUntil("condition") { refresh.toolTip == L("Cancel") }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(refresh.toolTip, L("Cancel"), "在读时这个按钮就是取消")
         // 图标不许换：换成 ✕ 会让按钮在光标底下变身。读取时靠它自己旋转来表达。
@@ -377,12 +377,12 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertFalse(descendants(content).compactMap { $0 as? NSTextField }
             .contains { !$0.isHidden && $0.stringValue.contains(L("Loading local sessions…")) })
 
-        spin { !library.loading }
-        spin { refresh.toolTip == L("Refresh") }
+        try waitUntil("condition") { !library.loading }
+        try waitUntil("condition") { refresh.toolTip == L("Refresh") }
         XCTAssertEqual(refresh.toolTip, L("Refresh"))
         XCTAssertTrue(refresh.image === iconAtRest)
         // 收尾会等当前这一圈走完再摘，所以最少转满一圈；这里等它自己停。
-        spin { refreshRotationLayer(in: refresh.layer) == nil }
+        try waitUntil("condition") { refreshRotationLayer(in: refresh.layer) == nil }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, before)
     }
@@ -396,7 +396,7 @@ final class PrimarySidebarTests: XCTestCase {
         let catalog = SessionModelCatalog(root: root, agent: .claude)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [catalog])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
 
         let parent = try XCTUnwrap(AgentProcessIdentity.parent(of: ProcessInfo.processInfo.processIdentifier))
@@ -408,7 +408,7 @@ final class PrimarySidebarTests: XCTestCase {
                                 title: "没在跑", workingDirectory: root.path, updatedAt: Date())
         catalog.records = [elsewhere, idle]
         library.start()
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
         XCTAssertEqual(library.records.count, 2)
         XCTAssertTrue(external.liveness == .running)
         XCTAssertEqual(library.presence(for: elsewhere.key), .elsewhere)
@@ -431,8 +431,8 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.loaded && !library.loading }
-        spin { content.makeState().rows.count > 10 }
+        try waitUntil("condition") { library.loaded && !library.loading }
+        try waitUntil("condition") { content.makeState().rows.count > 10 }
         content.layoutSubtreeIfNeeded()
 
         let scroll = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
@@ -452,7 +452,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertGreaterThan(scrolled, 0)
 
         library.refresh()
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
                        "刷新不该把列表弹回顶部")
@@ -488,7 +488,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         content.layoutSubtreeIfNeeded()
 
         let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
@@ -536,7 +536,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
 
         let state = content.makeState()
         XCTAssertEqual(state.recentTitle, L("Recent sessions"))
@@ -562,7 +562,7 @@ final class PrimarySidebarTests: XCTestCase {
                                      providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library, searchMode: true)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         content.layoutSubtreeIfNeeded()
         XCTAssertFalse(descendants(content).contains { $0 is NSButton
             && ($0 as? NSButton)?.toolTip == L("Filter sessions") })
@@ -578,11 +578,11 @@ final class PrimarySidebarTests: XCTestCase {
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.loaded && !library.loading }
+        try waitUntil("condition") { library.loaded && !library.loading }
         for _ in 0..<3 {
             NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
             XCTAssertFalse(library.loading, "Returning focus to click a project must not start a catalog refresh")
-            spin { !library.loading }
+            try waitUntil("condition") { !library.loading }
         }
     }
     func testProjectsCollapseAndSessionSearchAreIndependent() throws {
@@ -593,13 +593,13 @@ final class PrimarySidebarTests: XCTestCase {
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let sidebar = SessionsSidebarContent(library: library)
         library.start(); sidebar.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Mixed")
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? NSTableView }.first)
         XCTAssertEqual(table.numberOfRows, 7)
         XCTAssertFalse(descendants(sidebar).contains { ($0 as? NSTextField)?.placeholderString == L("Search sessions…") })
@@ -611,12 +611,12 @@ final class PrimarySidebarTests: XCTestCase {
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
         XCTAssertFalse(library.loading, "Project disclosure must not query an Agent")
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertFalse(library.loading)
         XCTAssertTrue(library.organization.projects[0].collapsed)
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let search = SessionsSidebarContent(library: library, searchMode: true)
         let field = try XCTUnwrap(descendants(search).compactMap { $0 as? NSTextField }.first {
             $0.placeholderString == L("Search sessions…")
@@ -661,7 +661,7 @@ final class PrimarySidebarTests: XCTestCase {
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.loaded && !library.loading }
+        try waitUntil("condition") { library.loaded && !library.loading }
         content.layoutSubtreeIfNeeded()
         let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
         let frame = list.frame
@@ -675,13 +675,13 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertEqual(list.frame, frame, "A loading status must not move or resize the list")
         XCTAssertEqual(content.frame.width, 280, "Status text must not expand the sidebar/window")
         XCTAssertEqual(library.records, records, "Cached rows remain visible during refresh")
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, frame)
         let reopened = SessionsSidebarContent(library: library)
         library.start(); reopened.activate()
         XCTAssertFalse(library.loading, "Reopening a view must not drive the model's synchronization")
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
     }
 
     func testProjectFolderResourcesAreDistinctTemplateVectors() throws {
@@ -700,7 +700,7 @@ final class PrimarySidebarTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         for agent in [LaunchAgent.codex, .claudeCode] {
             let pane = try AppState.shared.paneLauncher.makePane(
                 for: .init(.agent(agent), workingDirectory: directory.path))
@@ -765,11 +765,11 @@ final class PrimarySidebarTests: XCTestCase {
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         var project = SessionProject(name: "Mixed project")
         project.collapsed = true
         library.updateOrganization { $0.projects = [project] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         XCTAssertNil(content.tableView(table, pasteboardWriterForRow: 0))
         XCTAssertNotNil(content.tableView(table, pasteboardWriterForRow: 3))
@@ -780,7 +780,7 @@ final class PrimarySidebarTests: XCTestCase {
             XCTAssertFalse(content.acceptSessionDrop(data, at: 0), "A section is not a project")
             XCTAssertFalse(content.acceptSessionDrop(Data("invalid".utf8), at: 1))
             XCTAssertTrue(content.acceptSessionDrop(data, at: 1))
-            spin { !library.saving }
+            try waitUntil("condition") { !library.saving }
             XCTAssertEqual(library.organization.projectID(for: record), project.id)
             XCTAssertFalse(library.organization.projects[0].collapsed)
             XCTAssertFalse(content.acceptSessionDrop(data, at: 1), "Same-project drops are no-ops")
@@ -796,10 +796,10 @@ final class PrimarySidebarTests: XCTestCase {
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let project = SessionProject(name: "Mixed project")
         library.updateOrganization { $0.projects = [project] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let records = library.records
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         for agent in SessionAgent.allCases {
@@ -807,7 +807,11 @@ final class PrimarySidebarTests: XCTestCase {
             let data = try JSONEncoder().encode(record.key)
             for destination in 0..<3 {
                 library.updateOrganization { $0.move(record, to: project.id) }
-                spin { !library.saving }
+                try waitUntil("condition") { !library.saving }
+                // 保存完不等于表格已刷新：等第 2 行真的变成项目里的会话（刷新前是「最近」标题）。
+                try waitUntil("grouped session shown at row 2") {
+                    table.numberOfRows > 2 && content.tableView(table, shouldSelectRow: 2)
+                }
                 // Projects heading, project, grouped session, recent heading, recent rows.
                 let row = destination == 0 ? 3 : (destination == 1 ? 4 : table.numberOfRows)
                 XCTAssertFalse(content.acceptSessionDrop(data, at: 2), "A grouped session is not a drop destination")
@@ -815,8 +819,11 @@ final class PrimarySidebarTests: XCTestCase {
                     XCTFail("Cannot return \(agent) to recent destination \(destination)")
                     return
                 }
-                spin { !library.saving }
+                try waitUntil("condition") { !library.saving }
                 XCTAssertNil(library.organization.projectID(for: record))
+                try waitUntil("recent heading back at row 2") {
+                    table.numberOfRows > 2 && !content.tableView(table, shouldSelectRow: 2)
+                }
                 XCTAssertFalse(content.acceptSessionDrop(data, at: 2), "Already-recent drops are no-ops")
                 let saved = try JSONDecoder().decode(SessionOrganization.self, from: Data(contentsOf: file))
                 XCTAssertNil(saved.projectID(for: record))
@@ -875,14 +882,14 @@ final class PrimarySidebarTests: XCTestCase {
         let content = SessionsSidebarContent(library: library)
         content.frame = NSRect(x: 0, y: 0, width: 280, height: 720)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let project = SessionProject(name: "Mixed archive")
         library.updateOrganization { state in
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
             state.setArchived(true, projectID: project.id)
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         XCTAssertEqual(table.numberOfRows, 3, "Projects heading, empty projects and recent heading")
         XCTAssertFalse(content.tableView(table, rowViewForRow: 0) is ShellTableRowView,
@@ -897,7 +904,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertEqual(table.numberOfRows, 7, "Two headings, project and four sessions")
         XCTAssertFalse(library.loading, "Local archive filtering must not query an Agent")
         library.updateOrganization { $0.setArchived(false, projectID: project.id) }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(table.numberOfRows, 3)
         content.setArchiveFilter(false)
         XCTAssertEqual(table.numberOfRows, 7)
@@ -909,18 +916,18 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"), providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         library.updateOrganization { $0.projects.append(SessionProject(name: "lightty")) }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let panel = PrimarySidebar(headerCenterY: 20, mode: .sessions, library: library)
         library.start()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 270, height: 720),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = panel
-        spin { library.loaded && !library.loading }
+        try waitUntil("condition") { library.loaded && !library.loading }
         for mode in PrimarySidebarMode.allCases {
             panel.selectMode(mode)
-            spin { !library.loading }
+            try waitUntil("condition") { !library.loading }
             for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                 panel.appearance = NSAppearance(named: appearance)
                 panel.layoutSubtreeIfNeeded()
@@ -982,23 +989,18 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("library.json")
         let library = SessionLibrary(fileURL: file, providers: [])
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         library.updateOrganization { $0.projects.append(SessionProject(name: "Project")) }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(try JSONDecoder().decode(SessionOrganization.self, from: Data(contentsOf: file)).projects.first?.name, "Project")
         let broken = Data("{broken".utf8)
         try broken.write(to: file)
         let corrupt = SessionLibrary(fileURL: file, providers: [])
-        spin { corrupt.storageError != nil }
+        try waitUntil("condition") { corrupt.storageError != nil }
         corrupt.updateOrganization { $0.projects.append(SessionProject(name: "Do not overwrite")) }
         XCTAssertEqual(try Data(contentsOf: file), broken)
     }
 
-    private func spin(until condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(2)
-        while !condition(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
-        XCTAssertTrue(condition())
-    }
     private func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
 }
 

@@ -24,10 +24,13 @@ final class SurfaceEnvironmentTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         previousAppState = AppState.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
+        // 要读 shell 里的环境变量，得是真 zsh。
+        TerminalTestShell.usesRealShell = true
     }
 
     override func tearDown() {
+        TerminalTestShell.usesRealShell = false
         GhosttyRuntime.shared.setColorScheme(GHOSTTY_COLOR_SCHEME_LIGHT)
         AppState.shared = previousAppState ?? AppState.shared
         try? FileManager.default.removeItem(at: directory)
@@ -83,13 +86,13 @@ final class SurfaceEnvironmentTests: XCTestCase {
         XCTAssertNotNil(pane.terminal.surface, "surface should spawn once the pane is in a window")
 
         // shell 就绪 = shell 集成报了首个 OSC 7（与恢复会话敲 --resume 的时机一致）。
-        try wait(15, "shell ready") { pane.terminal.currentWorkingDirectory != nil }
+        try waitUntil("shell ready", timeout: 15) { pane.terminal.currentWorkingDirectory != nil }
 
         let output = directory.appendingPathComponent("env-\(pane.dragIdentifier.uuidString).txt")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         pane.terminal.sendText("env > '\(output.path)'; touch '\(output.path).done'")
         _ = pane.terminal.sendReturn()
-        try wait(10, "env dump") { FileManager.default.fileExists(atPath: output.path + ".done") }
+        try waitUntil("env dump", timeout: 10) { FileManager.default.fileExists(atPath: output.path + ".done") }
 
         let lines = try String(contentsOf: output, encoding: .utf8)
             .split(separator: "\n").map(String.init)
@@ -98,13 +101,5 @@ final class SurfaceEnvironmentTests: XCTestCase {
 
     private func pump(_ seconds: TimeInterval) {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
-    }
-
-    private func wait(_ timeout: TimeInterval, _ what: String, until condition: () -> Bool) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            if Date() > deadline { XCTFail("timed out waiting for \(what)"); throw CancellationError() }
-            pump(0.05)
-        }
     }
 }

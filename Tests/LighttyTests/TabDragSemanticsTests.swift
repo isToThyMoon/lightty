@@ -11,7 +11,7 @@ final class TabDragSemanticsTests: XCTestCase {
 
     override func setUp() {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
     }

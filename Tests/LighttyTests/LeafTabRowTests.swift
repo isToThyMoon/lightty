@@ -14,7 +14,7 @@ final class LeafTabRowTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         controller = TerminalWindowController()
         column = TabColumnView()
         controller.window!.contentView!.addSubview(column)

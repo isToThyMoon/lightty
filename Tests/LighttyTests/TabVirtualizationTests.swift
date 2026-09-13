@@ -9,7 +9,7 @@ final class TabVirtualizationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
         let column = TabColumnView()

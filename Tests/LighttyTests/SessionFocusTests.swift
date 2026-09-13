@@ -21,7 +21,7 @@ extension SessionAssociationTests {
         AppState.shared = previous ?? AppState.shared
         try? FileManager.default.removeItem(at: root)
     }
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let first = TerminalWindowController()
     let other = TerminalWindowController()
     AppState.shared.windowControllers = [first, other]
@@ -53,7 +53,7 @@ extension SessionAssociationTests {
     let previous = AppState.shared
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let source = TerminalWindowController()
     let destination = TerminalWindowController()
     AppState.shared.windowControllers = [source, destination]
@@ -111,7 +111,7 @@ extension SessionAssociationTests {
     let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
         providers: [FocusCatalog(source: .init(agent: .claude, root: root, executable: "/bin/false", configuration: .custom(root.path)))])
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false, sessionLibrary: library)
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let controller = TerminalWindowController()
     AppState.shared.windowControllers = [controller]
     defer { controller.window?.close() }
@@ -120,22 +120,19 @@ extension SessionAssociationTests {
     content.frame = NSRect(x: 0, y: 0, width: 280, height: 600)
     library.start()
     content.activate()
-    let deadline = Date().addingTimeInterval(2)
-    while (!library.loaded || library.loading) && Date() < deadline {
-        try await Task.sleep(for: .milliseconds(10))
-    }
+    try await awaitUntil("catalog loaded") { library.loaded && !library.loading }
     // 循环在 `loading` 转 false 的那一刻就退出，而那之后才广播通知；会话库的通知
     // 合流到下一拍再重算（见 `Coalescer`），所以这里必须再让出一拍，否则读到的
     // 还是上一轮的行。真实 app 里主 runloop 一直在转，这一拍是几微秒。
     try await Task.sleep(for: .milliseconds(50))
     func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
     let table = try #require(descendants(content).compactMap { $0 as? NSTableView }.first)
-    func expectSelection(_ row: Int) async throws {
-        let deadline = Date().addingTimeInterval(1)
-        while table.selectedRow != row, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(table.selectedRow == row)
+    func expectSelection(_ row: Int, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await awaitUntil("row \(row) selected", sourceLocation: sourceLocation) { table.selectedRow == row }
     }
     let record = try #require(library.records.first)
+    // 下面按 `numberOfRows - 1` 取行，空表会越界 trap。
+    try await awaitUntil("session rows shown") { table.numberOfRows > 0 }
     let pane = try #require(controller.activePane)
     pane.associateSession(.init(key: record.key, configuration: .custom(root.path), workingDirectory: root.path))
     controller.selectTab(at: 0)
@@ -188,10 +185,7 @@ extension SessionAssociationTests {
     let count = controller.tabCount
     let resumable = AgentSession(key: record.key, title: record.title, workingDirectory: root.path, updatedAt: nil)
     SessionResumeFlow.open(resumable, source: .init(agent: .claude, root: root, executable: "/bin/echo", configuration: .custom(root.path)), in: controller)
-    let openDeadline = Date().addingTimeInterval(4)
-    while controller.tabCount == count && Date() < openDeadline {
-        try await Task.sleep(for: .milliseconds(10))
-    }
+    try await awaitUntil("An ended/closed binding must not intercept a new resume") { controller.tabCount != count }
     #expect(controller.tabCount == count + 1, "An ended/closed binding must not intercept a new resume")
     #expect(controller.activePane !== pane)
 }

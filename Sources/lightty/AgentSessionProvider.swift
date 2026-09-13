@@ -25,6 +25,11 @@ protocol AgentSessionProvider: SessionCatalogProvider {
     /// 此刻观察到的活会话进程（以及能顺带补上的工作目录）。问不出来返回 nil——绝不返回
     /// 空观察冒充「一个都没在跑」。
     func observeLiveSessions() -> LiveSessionObservation?
+    /// 这段会话改名时 agent 会写的文件，只拿来当「该重读元数据了」的信号，内容不解析——
+    /// 标题照旧从官方列表读。用户在开着的会话里自己敲 `/rename` 不触发任何钩子，
+    /// 没有这个信号，标题要等下一轮对话结束才更新。
+    /// 文件还不存在（新会话还没写第一条）返回空，调用方稍后再问。
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL]
 }
 
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。

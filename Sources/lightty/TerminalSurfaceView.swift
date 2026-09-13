@@ -1025,11 +1025,16 @@ final class TerminalSurfaceView: NSView {
     }
 
     /// shell 就绪后把 agent 启动/续接命令发进去，发一次即清。surface 未建（极少见）则留待下次。
+    ///
+    /// 提交必须另按一次回车键，不能靠命令末尾的换行：`sendText` 是粘贴，而 OSC 7 发自
+    /// precmd，紧接着 zsh 的行编辑器就打开括号粘贴模式。主线程稍慢（启动时恢复多个 pane、
+    /// 机器负载高）落到模式打开之后，粘进去的换行只是插入，命令会停在提示符上。
     private func fireReadyInputIfNeeded() {
         guard !sentReadyInput, let command = pendingReadyInput, surface != nil else { return }
         sentReadyInput = true
         pendingReadyInput = nil
-        sendText(command)
+        sendText(command.hasSuffix("\n") ? String(command.dropLast()) : command)
+        sendReturn()
     }
 
     private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {

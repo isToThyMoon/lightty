@@ -142,34 +142,34 @@ final class ClaudeSessionCatalogTests: XCTestCase {
 
 @MainActor
 final class SessionLibraryPagingTests: XCTestCase {
-    func testPagesMergeWithoutDuplicates() {
+    func testPagesMergeWithoutDuplicates() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("library-pages-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [PagedFixture()])
         library.refresh()
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         XCTAssertEqual(library.records.map(\.title), ["first"])
         XCTAssertTrue(library.hasMore(archived: false))
         library.loadMore(archived: false)
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         XCTAssertEqual(Set(library.records.map(\.title)), ["first", "second"])
         XCTAssertFalse(library.hasMore(archived: false))
     }
 
-    func testLaterPageFailureRetainsRowsAndRetryCursor() {
+    func testLaterPageFailureRetainsRowsAndRetryCursor() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("library-failure-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [PagedFixture(failSecond: true)])
         library.refresh()
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         library.loadMore(archived: false)
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         XCTAssertEqual(library.records.map(\.title), ["first"])
         XCTAssertTrue(library.hasMore(archived: false))
         XCTAssertNotNil(library.errors[.claude])
     }
 
-    func testRefreshAndCancelIgnoreLateResults() {
+    func testRefreshAndCancelIgnoreLateResults() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("library-cancel-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [PagedFixture(delay: 0.05)])
@@ -179,20 +179,15 @@ final class SessionLibraryPagingTests: XCTestCase {
         XCTAssertTrue(library.records.isEmpty)
         XCTAssertFalse(library.loading)
         library.refresh()
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         XCTAssertEqual(library.records.count, 1)
         library.loadMore(archived: false)
         library.cancelLoading()
         library.loadMore(archived: false)
-        wait { !library.loading }
+        try waitUntil("catalog load") { !library.loading }
         XCTAssertEqual(library.records.count, 2)
     }
 
-    private func wait(_ ready: () -> Bool) {
-        let deadline = Date().addingTimeInterval(3)
-        while !ready(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
-        XCTAssertTrue(ready())
-    }
 }
 
 private struct PagedFixture: CatalogOnlyProvider {

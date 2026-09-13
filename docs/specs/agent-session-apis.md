@@ -34,6 +34,11 @@
 
 唯一给不了改名的情况是「开着、而且 agent 正在跑」：那一刻 PTY 前台是它的输出流，塞不进命令。
 
+两家都没有「会话改名」的钩子或订阅接口。用户自己敲 `/rename` 之后，lightty 靠监听改名时会写的文件得知
+（`AgentSessionProvider.titleSignalFiles`：Claude 往 `projects/<项目>/<id>.jsonl` 追加 `custom-title`，
+Codex 往配置根的 `session_index.jsonl` 追加 `thread_name`），**只当信号、不解析内容**，标题仍从上表的列表接口读。
+这两个位置不是公开契约，将来变了只会退回「等下一轮 Stop 钩子才更新」，不会读错。
+
 **敲命令必须分两步**：先送文本，再单独按一次回车键（`TerminalSurfaceView.sendReturn()`）。
 `sendText` 在 core 里走的是 `completeClipboardPaste`——它是粘贴，不是打字（`vendor/ghostty/src/apprt/embedded.zig` 的 `ghostty_surface_text` 注释写着这句）。
 agent 的 TUI 开着括号粘贴模式，**粘进去的回车只是插入一个换行，不提交**，命令会原样停在输入框里。

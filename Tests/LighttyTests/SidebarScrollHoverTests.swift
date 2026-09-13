@@ -69,7 +69,7 @@ final class SidebarScrollHoverTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
         // 单 pane 标签页是叶子行，没有容器行；分屏一次才有标签页行 + pane 行可测。
@@ -109,7 +109,7 @@ final class SidebarScrollHoverTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
         // 单 pane 标签页是叶子行，没有容器行；分屏一次才有标签页行 + pane 行可测。

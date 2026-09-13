@@ -15,6 +15,13 @@ final class SessionModelCatalog: CatalogOnlyProvider {
         set { lock.lock(); defer { lock.unlock() }; values = newValue }
     }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
+    /// `titleSignalFiles` 的答案；默认没有文件，即不监听。
+    var signalFiles: [URL] {
+        get { lock.lock(); defer { lock.unlock() }; return files }
+        set { lock.lock(); defer { lock.unlock() }; files = newValue }
+    }
+    private var files: [URL] = []
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL] { signalFiles }
     init(root: URL, pageSize: Int = 100, agent: SessionAgent = .codex) {
         source = .init(agent: agent, root: root, executable: "/bin/echo", configuration: .custom(root.path))
         self.pageSize = pageSize
@@ -39,13 +46,15 @@ final class SessionModelFixture {
     private var paneIDs: [UUID] = []
 
     init(pageSize: Int = 100, agent: SessionAgent = .codex,
-         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier) throws {
+         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
+         titleChanges: @escaping PathChangeSource = PathWatcher.changeSource) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         catalog = SessionModelCatalog(root: root, pageSize: pageSize, agent: agent)
         statuses = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lt-\(UUID().uuidString).sock"))
         library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [catalog],
-                                 statusStore: statuses, metadataRefreshDelay: 0.01, hostProcessID: hostProcessID)
+                                 statusStore: statuses, metadataRefreshDelay: 0.01, hostProcessID: hostProcessID,
+                                 titleChanges: titleChanges)
     }
     func record(_ id: String = "fixture", title: String = "Conversation", directory: String? = nil,
                 archived: Bool = false, processes: Set<AgentProcessIdentity> = []) -> AgentSession {
@@ -67,10 +76,8 @@ final class SessionModelFixture {
         statuses.stop()
         try? FileManager.default.removeItem(at: root)
     }
-    func wait(_ predicate: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(2)
-        while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(predicate())
+    func wait(sourceLocation: SourceLocation = #_sourceLocation, _ predicate: () -> Bool) async throws {
+        try await awaitUntil("condition", sourceLocation: sourceLocation, predicate)
     }
     func load(_ records: [AgentSession]) async throws {
         catalog.records = records

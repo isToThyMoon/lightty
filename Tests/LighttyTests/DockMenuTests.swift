@@ -12,7 +12,7 @@ import Testing
         try? FileManager.default.removeItem(at: directory)
     }
     AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let controller = TerminalWindowController()
     AppState.shared.windowControllers = [controller]
     defer { controller.window?.close() }

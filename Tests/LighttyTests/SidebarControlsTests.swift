@@ -10,14 +10,11 @@ final class SidebarControlsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
         let host = try XCTUnwrap(window.contentView?.superview)
-        let deadline = Date(timeIntervalSinceNow: 2)
-        while !host.subviews.contains(where: { $0 is PrimarySidebar }), Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
-        }
+        try waitUntil("primary sidebar installed") { host.subviews.contains(where: { $0 is PrimarySidebar }) }
         // 收敛初始任务侧栏动画；仅任务侧栏打开是实际复现的前置状态。
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
         host.layoutSubtreeIfNeeded()
@@ -60,9 +57,7 @@ final class SidebarControlsTests: XCTestCase {
 
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        ensureTerminalRuntime()
 
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -75,10 +70,7 @@ final class SidebarControlsTests: XCTestCase {
         // TerminalWindowController finishes installing its initial chrome on the
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
         // 轮询而不是固定睡 50ms：整套测试跑起来主队列可能排着别的事，固定时长会偶发。
-        let deadline = Date(timeIntervalSinceNow: 2)
-        while themeFrame.subviews.first(where: { $0 is PrimarySidebar }) == nil, Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
-        }
+        try waitUntil("primary sidebar installed") { themeFrame.subviews.contains(where: { $0 is PrimarySidebar }) }
         themeFrame.layoutSubtreeIfNeeded()
 
         // 默认打开 task 侧栏。

@@ -76,6 +76,17 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         return SessionCatalogPage(sessions: rows, nextCursor: response.nextCursor)
     }
 
+    /// `/rename` 往会话记录 `projects/<项目>/<id>.jsonl` 里追加一条 `custom-title`。
+    /// 项目目录名是工作目录编码出来的、不可逆，所以按 ID 在各项目目录里找，不从目录反推。
+    func titleSignalFiles(for key: AgentSessionKey) -> [URL] {
+        guard UUID(uuidString: key.nativeID) != nil else { return [] }
+        let projects = URL(fileURLWithPath: key.sourceRoot).appendingPathComponent("projects")
+        let directories = (try? FileManager.default.contentsOfDirectory(
+            at: projects, includingPropertiesForKeys: nil)) ?? []
+        return directories.lazy.map { $0.appendingPathComponent(key.nativeID + ".jsonl") }
+            .first { FileManager.default.fileExists(atPath: $0.path) }.map { [$0] } ?? []
+    }
+
     // MARK: - 改名、删除
 
     /// 官方开发包的 `renameSession`，跟 `listSessions` / `deleteSession` 同一个包。

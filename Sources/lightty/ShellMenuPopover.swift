@@ -71,12 +71,20 @@ enum ShellMenuPopover {
         let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? anchorRect
         var origin = NSPoint(x: anchorRect.maxX - size.width, y: anchorRect.minY - 6 - size.height)
         if origin.y < screen.minY { origin.y = anchorRect.maxY + 6 }  // 下方放不下 → 上方
+        // 先收进父窗口（浮层里右对齐会把卡片甩出浮层左缘），再收进屏幕
+        if parent.frame.width >= size.width + 16 {
+            origin.x = min(max(origin.x, parent.frame.minX + 8), parent.frame.maxX - size.width - 8)
+        }
         origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
         let cardFrame = NSRect(origin: origin, size: size)
         // 窗口比卡片大一圈：自绘阴影要落在这圈透明边距里
         menu.setFrame(cardFrame.insetBy(dx: -ShellMenuWindow.shadowMargin,
                                         dy: -ShellMenuWindow.shadowMargin), display: false)
-        menu.setBackdrop(Self.blurredBackdrop(of: parent, under: cardFrame))
+        if isPopoverWindow(parent) {
+            menu.useLiveBlur()
+        } else {
+            menu.setBackdrop(Self.blurredBackdrop(of: parent, under: cardFrame))
+        }
 
         window = menu
         parent.addChildWindow(menu, ordered: .above)
@@ -109,6 +117,12 @@ enum ShellMenuPopover {
         return NSImage(cgImage: output, size: rootRect.size)
     }
 
+    /// NSPopover 的窗口是私有类 `_NSPopoverWindow`，没有公开的判断办法，只能认类名。
+    /// 将来改名了也只是退回截图底图，不会崩。
+    private static func isPopoverWindow(_ window: NSWindow) -> Bool {
+        NSStringFromClass(type(of: window)).contains("Popover")
+    }
+
     static func dismiss() {
         guard let menu = window else { return }
         window = nil
@@ -135,6 +149,8 @@ final class ShellMenuWindow: NSWindow {
     /// 只为持有：不能设成 contentViewController，那会把它的 view 抢去当窗口根视图
     private let controller: NSViewController
     private let backdrop = NSImageView()
+    private let liveBlur = NSVisualEffectView()
+    private let card = MenuCardView()
     private let shadowHost = MenuShadowView()
 
     /// 卡片本体尺寸（不含阴影边距）
@@ -145,6 +161,19 @@ final class ShellMenuWindow: NSWindow {
 
     func setBackdrop(_ image: NSImage?) {
         backdrop.image = image
+        backdrop.isHidden = false
+        liveBlur.isHidden = true
+        card.drawsSurface = true
+    }
+
+    /// 截不到底图时（父窗口是 NSPopover：玻璃由合成器画，`cacheDisplay` 拿回来是
+    /// 花屏）改用窗口服务器的实时模糊。观感和截图那档不完全一样，但真实透出后面的
+    /// 浮层与终端，也跟着底下内容刷新。
+    func useLiveBlur() {
+        backdrop.image = nil
+        backdrop.isHidden = true
+        liveBlur.isHidden = false
+        card.drawsSurface = false
     }
 
     init(content: NSViewController) {
@@ -164,7 +193,6 @@ final class ShellMenuWindow: NSWindow {
         root.addSubview(shadowHost)
 
         // 卡片 = 底色 → 模糊底图 → 高透抬升面罩 → 内容；圆角由 masksToBounds 裁齐
-        let card = MenuCardView()
         card.wantsLayer = true
         card.layer?.cornerRadius = 14
         card.layer?.masksToBounds = true
@@ -173,6 +201,14 @@ final class ShellMenuWindow: NSWindow {
         backdrop.imageScaling = .scaleAxesIndependently
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(backdrop)
+        liveBlur.material = .popover
+        liveBlur.blendingMode = .behindWindow
+        liveBlur.state = .active
+        // 窗口后模糊不吃父层的 masksToBounds，圆角要靠 maskImage 自己裁
+        liveBlur.maskImage = Self.roundedMask(radius: 14)
+        liveBlur.isHidden = true
+        liveBlur.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(liveBlur)
         let tint = MenuTintOverlay()
         tint.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(tint)
@@ -183,6 +219,10 @@ final class ShellMenuWindow: NSWindow {
             backdrop.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             backdrop.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            liveBlur.topAnchor.constraint(equalTo: card.topAnchor),
+            liveBlur.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            liveBlur.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            liveBlur.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             tint.topAnchor.constraint(equalTo: card.topAnchor),
             tint.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             tint.leadingAnchor.constraint(equalTo: card.leadingAnchor),
@@ -209,6 +249,18 @@ final class ShellMenuWindow: NSWindow {
     }
 
     override var canBecomeKey: Bool { true }
+
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
 
     /// 透明边距也属于本窗口，落在那里的点击不会传给父窗口；按菜单惯例，
     /// 点在卡片之外即关闭（不转发给底下的控件）。
@@ -450,6 +502,9 @@ private final class MenuTintOverlay: NSView {
 
 /// 菜单卡本体：底色与描边随明暗重解析（底图截不到的区域露出底色）。
 private final class MenuCardView: NSView {
+    /// 实时模糊时底色必须透明，否则实色把玻璃整个盖住
+    var drawsSurface = true { didSet { applyColors() } }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyColors()
@@ -461,7 +516,9 @@ private final class MenuCardView: NSView {
     }
 
     private func applyColors() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
+        layer?.backgroundColor = drawsSurface
+            ? ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
+            : NSColor.clear.cgColor
         layer?.borderColor = ShellStyle.primaryText.withAlphaComponent(0.08)
             .shellResolvedCGColor(for: effectiveAppearance)
     }

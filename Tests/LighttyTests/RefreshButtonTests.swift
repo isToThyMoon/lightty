@@ -218,11 +218,10 @@ struct RefreshButtonTests {
         #expect(layer.animation(forKey: "refresh.spin")?.beginTime == animation.beginTime,
                 "A new load cancels the pending stop without restarting the rotation")
         button.isRefreshing = false
-        let deadline = Date().addingTimeInterval(1.5)
-        while refreshRotationLayer(in: button.layer) != nil, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        // 上限就是契约：最多转完当前一圈（0.9 秒）就停，不能放宽。
+        try await awaitUntil("rotation stops within one revolution", timeout: .milliseconds(1500)) {
+            refreshRotationLayer(in: button.layer) == nil
         }
-        #expect(refreshRotationLayer(in: button.layer) == nil)
         #expect(button.image === image)
         #expect(button.frame == frame)
         #expect(CATransform3DIsIdentity(layer.transform))

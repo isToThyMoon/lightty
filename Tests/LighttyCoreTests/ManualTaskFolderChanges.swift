@@ -10,7 +10,7 @@ final class ManualTaskFolderChanges {
     /// 置上后 `source` 抛错，模拟目录打不开。
     var failure: Error?
 
-    var source: TaskFolderChangeSource {
+    var source: PathChangeSource {
         { [unowned self] directory, onChange in
             if let failure { throw failure }
             self.directory = directory

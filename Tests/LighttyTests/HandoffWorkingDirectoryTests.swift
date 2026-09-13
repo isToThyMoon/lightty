@@ -35,7 +35,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let window = TerminalWindowController()
         defer { window.window?.close() }
@@ -214,7 +214,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let task = TaskFile(name: "Fixture", workdir: root.path,
                             created: Date(), updated: Date())
         let subjects: [LaunchSubject] = [
@@ -241,7 +241,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let controller = LaunchComposerController(subject: .session, controller: nil)
         _ = controller.view
@@ -266,7 +266,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let store = AppState.shared.taskBindings.store
 
         let onlyCreate = LaunchComposerController(subject: .newTask, controller: nil)
@@ -305,7 +305,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let creator = LaunchComposerController(subject: .newTask, controller: nil)
         _ = creator.view

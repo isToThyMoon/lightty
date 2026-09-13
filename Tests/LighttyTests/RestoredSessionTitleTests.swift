@@ -30,7 +30,7 @@ extension SessionAssociationTests {
     /// No sidebar activation, hooks, manual library refresh, or manual title refresh.
     @Test func restoredSessionTitlesLoadInHandoffMode() async throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let previous = AppState.shared
@@ -65,10 +65,7 @@ extension SessionAssociationTests {
             controller.addTab(initialPane: pane, select: false, installPane: false)
         }
         controller.selectTab(at: 1) // Restore one foreground and one background agent pane.
-        let deadline = Date().addingTimeInterval(1)
-        while panes.map({ $0.header.title }) != records.map(\.title), Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await awaitUntil("restored panes show catalog titles") { panes.map({ $0.header.title }) == records.map(\.title) }
         #expect(controller.snapshot()?.primarySidebarMode == PrimarySidebarMode.handoff.rawValue)
         #expect(panes.map(\.displayedSessionKey) == records.map(\.key))
         #expect(panes.map { $0.header.title } == records.map(\.title))
@@ -84,16 +81,13 @@ extension SessionAssociationTests {
         let column = try #require(descendants(rootView).compactMap { $0 as? TabColumnView }.first)
         let table = try #require(descendants(column).compactMap { $0 as? NSTableView }.first)
         // Let the title-change notification reach the actual sidebar; do not call reload().
-        let sidebarDeadline = Date().addingTimeInterval(1)
         func visibleTitles() -> Set<String> {
             table.layoutSubtreeIfNeeded()
             return Set(descendants(table).compactMap { ($0 as? NSTextField)?.stringValue })
         }
-        while !Set(records.map(\.title)).isSubset(of: visibleTitles()), Date() < sidebarDeadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await awaitUntil("The Tabs sidebar must update without switching sidebar mode or tabs") {
+            Set(records.map(\.title)).isSubset(of: visibleTitles())
         }
-        #expect(Set(records.map(\.title)).isSubset(of: visibleTitles()),
-                "The Tabs sidebar must update without switching sidebar mode or tabs")
     }
 
     @Test(arguments: [false, true])
@@ -113,10 +107,7 @@ extension SessionAssociationTests {
         if alreadyLoading { library.refresh() }
         library.start()
         library.start()
-        let deadline = Date().addingTimeInterval(1)
-        while library.loading, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await awaitUntil("catalog bootstrap finishes") { !library.loading }
         #expect(library.loaded)
         #expect(!library.loading)
         #expect(provider.requestCount == 2, "One initial read for active and archived sessions")

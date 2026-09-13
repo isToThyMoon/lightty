@@ -10,7 +10,7 @@ struct SessionAssociationTests {
 @Test(arguments: SessionAgent.allCases)
 func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) async throws {
     _ = NSApplication.shared
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
         let f = try SessionModelFixture(agent: agent)
         defer { f.close() }
         let key = f.record().key
@@ -47,7 +47,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
     let previous = AppState.shared
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let task = try AppState.shared.taskBindings.store.create(name: "Independent task", workdir: root.path)
     for agent in SessionAgent.allCases {
         let key = AgentSessionKey(agent: agent,
@@ -99,20 +99,13 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
             sessionID: key.nativeID, sourceRoot: root.path, sourceConfiguration: location,
             cwd: root.path, event: "SessionStart")
         _ = PaneStatusDatagram(pane: pane.dragIdentifier, status: status).send(to: store.socketPath)
-        let deadline = Date().addingTimeInterval(2)
-        while store.status(for: pane.dragIdentifier) == nil && Date() < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        try await awaitUntil("SessionStart delivered") { store.status(for: pane.dragIdentifier) != nil }
         #expect(pane.displayedSessionKey == key)
         let terminalName = pane.snapshot().name
         let records = [AgentSession(key: key, title: "Live conversation", workingDirectory: root.path, updatedAt: nil)]
         catalog.records = records
         library.refresh()
-        let titleDeadline = Date().addingTimeInterval(2)
-        while pane.header.title != "Live conversation", Date() < titleDeadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(pane.header.title == "Live conversation")
+        try await awaitUntil("catalog title reaches the pane") { pane.header.title == "Live conversation" }
         let disk = WorkspaceStore(fileURL: root.appendingPathComponent("workspace.json"))
         disk.freeze(with: .init(windows: [.init(activeTabIndex: 0,
             tabs: [.init(title: "Hook", root: .pane(pane.snapshot()))],
@@ -125,10 +118,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
         let end = PaneStatus(ts: Date(), state: .idle, agent: agent.rawValue, sessionID: key.nativeID,
                              sourceRoot: root.path, event: "SessionEnd")
         _ = PaneStatusDatagram(pane: pane.dragIdentifier, status: end).send(to: store.socketPath)
-        let endDeadline = Date().addingTimeInterval(2)
-        while store.status(for: pane.dragIdentifier)?.event != "SessionEnd" && Date() < endDeadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        try await awaitUntil("SessionEnd delivered") { store.status(for: pane.dragIdentifier)?.event == "SessionEnd" }
         #expect(pane.displayedSessionKey == nil)
         try await Task.sleep(for: .milliseconds(20))
         #expect(pane.header.title == terminalName)
@@ -157,7 +147,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
     let previous = AppState.shared
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-    if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+    ensureTerminalRuntime()
     let task = try AppState.shared.taskBindings.store.create(name: "Shared task", workdir: root.path)
     let controller = TerminalWindowController()
     AppState.shared.windowControllers = [controller]
