@@ -12,12 +12,22 @@ public final class TaskStore {
     /// 已做符号链接解析的目录（macOS 临时目录 /var → /private/var 陷阱）
     public let directory: URL
     private let clock: () -> Date
+    private let trashItem: (URL) throws -> Void
     private let fm = FileManager.default
 
     /// 目录不存在时自动创建（尽力而为，失败推迟到首次写入时暴露）
-    public init(directory: URL, clock: @escaping () -> Date = Date.init) {
+    public convenience init(directory: URL, clock: @escaping () -> Date = Date.init) {
+        self.init(directory: directory, trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                  clock: clock)
+    }
+
+    /// `trash` 是「移到废纸篓」的实际动作。生产走系统废纸篓；测试注入替身，
+    /// 免得往用户的废纸篓里扔 fixture。
+    public init(directory: URL, trash: @escaping (URL) throws -> Void,
+                clock: @escaping () -> Date = Date.init) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         self.directory = directory.resolvingSymlinksInPath()
+        self.trashItem = trash
         self.clock = clock
     }
 
@@ -93,7 +103,7 @@ public final class TaskStore {
                        body: String = "") throws -> (fileURL: URL, task: TaskFile) {
         let timestamp = now()
         let task = TaskFile(
-            name: name, status: "active", workdir: workdir, tool: tool,
+            name: name, workdir: workdir, tool: tool,
             created: timestamp, updated: timestamp, body: body
         )
         let url = uniqueURL(for: name)
@@ -141,18 +151,9 @@ public final class TaskStore {
         return target
     }
 
-    /// 追加会话；tool+id 相同视为重复，去重且不写盘
-    @discardableResult
-    public func appendSession(at fileURL: URL, tool: String, id: String) throws -> TaskFile {
-        var task = try load(at: fileURL)
-        let session = TaskSession(tool: tool, id: id)
-        if task.sessions.contains(session) {
-            return task
-        }
-        task.sessions.append(session)
-        task.updated = now()
-        try atomicWrite(task.serialize(), to: fileURL)
-        return task
+    /// 删除任务：移到废纸篓（可从废纸篓找回），不是 `removeItem`。
+    public func trash(at fileURL: URL) throws {
+        try trashItem(fileURL)
     }
 
     // MARK: - 内部

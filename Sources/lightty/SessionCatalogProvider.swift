@@ -5,15 +5,9 @@ struct SessionCatalogSource: Equatable {
     let agent: SessionAgent
     let root: URL
     let executable: String
+    /// 配置来源没有默认值：standard 与 custom 即使路径相同也不是一回事
+    /// （见 docs/terminal-associations.md），构造的人必须说清是哪一种。
     let configuration: SessionConfigurationLocation
-
-    init(agent: SessionAgent, root: URL, executable: String,
-         configuration: SessionConfigurationLocation? = nil) {
-        self.agent = agent
-        self.root = root
-        self.executable = executable
-        self.configuration = configuration ?? .custom(root.path)
-    }
 }
 
 enum SessionCatalogError: LocalizedError {

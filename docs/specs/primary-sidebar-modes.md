@@ -107,7 +107,7 @@ Sessions 会话 ▾
 4. CLI 不存在、目录丢失、来源不可用：先显示可恢复的错误，不创建一个无声失败的空终端。目录丢失可让用户选择新目录并展示影响，不直接退到 home 后执行 Agent。
 5. 已确认运行的 Codex 会话始终前往原终端，避免第二个 writer。手动恢复在后台进行最长约 2 秒的只读文件占用检查，同一身份的检查合并；对应 Agent 进程以可写方式持有相同来源目录下的准确会话文件时，提示回原终端继续或自行退出后再恢复，不创建新终端。没有匹配、工具失败或超时都属于未知，由原生 CLI 判断；进程名为 node 等情况及未持续持有文件的 Claude 会话可能无法识别。该检查不是互斥锁，不保证消除检查与启动间的竞态，不结束 Agent 进程、删除锁或自动 fork。原生选择器尚未选定会话 ID，其占用检查由 CLI 自行处理。
 
-恢复环境由 `SessionConfigurationLocation` 保存来源语义：默认配置与显式目录分开，即使目录路径相同也不合并。默认配置通过子进程 `env -u` 清除对应覆盖变量，自定义配置只在子进程中设置该变量。侧栏、搜索、原生选择器与目录会话的工作区恢复共用 `SessionResumePlan`；工作区同时保存确认后的会话身份和配置来源，缺少来源时不猜测目录。恢复流程不修改 Agent 配置、认证文件或原始会话，不附加新建 Agent 的权限参数。
+恢复环境由 `SessionConfigurationLocation` 保存来源语义：默认配置与显式目录分开，即使目录路径相同也不合并。默认配置通过子进程 `env -u` 清除对应覆盖变量，自定义配置只在子进程中设置该变量。侧栏、搜索与目录会话的工作区恢复共用 `SessionResumePlan`，原生选择器用 `SessionPickerPlan`，两者组合同一份 `AgentLaunchContext`（校验与命令拼法只在这里）；工作区同时保存确认后的会话身份和配置来源，缺少来源时不猜测目录。恢复流程不修改 Agent 配置、认证文件或原始会话，不附加新建 Agent 的权限参数。
 
 浏览历史和手动恢复不要求历史会话仍 alive。现有 `AgentResume.command(...alive:)` 的 alive 是“重启应用时是否自动重开 Agent”的策略，不能拿它过滤会话目录。
 
@@ -211,8 +211,6 @@ TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地�
 | `AgentLaunchPreference.swift` | 新 Agent 命令及用户选择 | 保留配置兼容；与来源身份、resume 策略分开 |
 | `WorkspaceSnapshot.swift` / `AgentResume` | 工作区恢复与原生 resume | 工作区快照使用 workspace.json；格式升级集中在启动迁移 Module，业务只读取当前模型 |
 | `PaneStatusStore` / `PaneView` | hook 会话 ID、现场状态 | 给出已知 lightty 现场映射；来源标识缺失时不得猜测跨配置根相同 ID |
-| `TaskFile.sessions` | Handoff 的历史会话关联 | 保持不变，不作为全量会话目录，不为新来源身份直接破坏任务格式 |
-
 第一侧栏模式写入窗口快照时新增可选字段，旧快照缺失按 Handoff 解码；不要仅增加一个必填 Codable 字段导致所有旧快照失效。
 现有 `taskPanelOpen` 等序列化键不急于改名；内部变量可逐步更名，避免概念更正变成无关大重构。
 

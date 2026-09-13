@@ -5,7 +5,7 @@
 ## 实验结论
 
 **官方 SDK + 独立本地 helper 路线技术验证通过，推荐按此接入，不编写 Swift transcript parser。**
-接口、运行时、受限执行和合成会话覆盖已验证；最终发布许可、Developer ID 签名/公证、Intel 和旧系统仍待验收。App 已通过 `ClaudeSessionCatalog` 接入独立 helper，SDK 不进入 Swift target，依赖由构建准备脚本及锁文件管理。
+接口、运行时、受限执行和合成会话覆盖已验证；最终发布许可、Developer ID 签名/公证、Intel 和旧系统仍待验收。App 已通过 `ClaudeSessionProvider` 接入独立 helper，SDK 不进入 Swift target，依赖由构建准备脚本及锁文件管理。
 
 复现脚本：[probe-claude-sdk.mjs](../../scripts/probe-claude-sdk.mjs)。脚本只生成临时合成数据，保留 `report.json` 供检查。SDK 包保持未修改，省略可选原生 CLI，保留全部 peer dependencies。
 
@@ -46,7 +46,7 @@
 ### 接入决策
 
 1. 固定 SDK、Node、lockfile 与校验值；依赖随构建产物分发，不要求用户手装运行时、不在运行时下载。开发先运行 `node scripts/prepare-claude-helper.mjs`；打包自动传 `--all` 准备双架构。
-2. `ClaudeSessionCatalog` 只负责启动 helper 和将明确版本的 JSON 元数据映射为 `AgentSession`。不向 UI 暴露 SDK 字段，不导出消息全文。
+2. `ClaudeSessionProvider` 只负责启动 helper 和将明确版本的 JSON 元数据映射为 `AgentSession`。不向 UI 暴露 SDK 字段，不导出消息全文。
 3. 查询固定 `includeProgrammatic:false`、不传 `dir/sessionStore`；只发现本机记录。项目组织继续由 lightty 保存，禁止回写原始会话。
 4. 生命周期带超时、输出上限、取消和进程回收；按页运行，加载完释放，避免常驻几百 MiB 的无用进程。已通过两页合成数据、超时、取消、异常退出和输出限额测试。
 5. 恢复继续用用户安装的 `claude --resume <id>` 及原配置根，不通过 SDK 启动对话，不注入 prompt。

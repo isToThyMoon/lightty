@@ -45,7 +45,7 @@ enum LaunchComposer {
     /// 动作，以磁盘为准；读不了再用快照兜底。
     private static func resolved(_ subject: LaunchSubject) -> LaunchSubject {
         guard case .task(let fileURL, let task) = subject else { return subject }
-        return .task(fileURL: fileURL, task: (try? AppState.shared.taskStore.load(at: fileURL)) ?? task)
+        return .task(fileURL: fileURL, task: (try? AppState.shared.taskBindings.store.load(at: fileURL)) ?? task)
     }
 
     /// 摘要 = 正文的 Next steps 一节。
@@ -121,7 +121,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     private let launchButton = ShellAccentButton()
     private var createOnlyButton: ShellTextButton?
     private var destinationButtons: [NSButton] = []
-    private var selectedDestination = 1
+    private var selectedDestination = TerminalLaunchDestination.tab
     private let contextHint = NSTextField(wrappingLabelWithString: "")
     private weak var contentStack: NSStackView?
     private static let panelWidth: CGFloat = 340
@@ -245,11 +245,11 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         destinations.orientation = .vertical
         destinations.alignment = .leading
         destinations.spacing = 6
-        for (index, label) in [L("Split in current tab"), L("New tab"), L("New window")].enumerated() {
-            let button = RestoreSelectionButton(label, target: self,
+        for (index, destination) in TerminalLaunchDestination.allCases.enumerated() {
+            let button = RestoreSelectionButton(Self.title(of: destination), target: self,
                                                   action: #selector(destinationChanged(_:)))
             button.tag = index
-            button.state = index == selectedDestination ? .on : .off
+            button.state = destination == selectedDestination ? .on : .off
             destinationButtons.append(button)
             destinations.addArrangedSubview(button)
         }
@@ -324,9 +324,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     /// 已打开：每个绑定该任务的运行中 pane 一行，点击直接跳转。
     private func openedRows(for fileURL: URL, sectionLabels: inout [NSView],
                             buttonRows: inout [NSButton], divider: inout NSView?) -> [NSView] {
-        let bound = AppState.shared.runningPanes().filter {
-            $0.pane.taskFileURL?.standardizedFileURL == fileURL.standardizedFileURL
-        }
+        let bound = AppState.shared.boundPanes(of: fileURL)
         guard !bound.isEmpty else { return [] }
         var rows: [NSView] = []
         let opened = NSTextField(labelWithString: L("Already open"))
@@ -429,6 +427,14 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         directoryError.isHidden = true
     }
 
+    private static func title(of destination: TerminalLaunchDestination) -> String {
+        switch destination {
+        case .split: return L("Split in current tab")
+        case .tab: return L("New tab")
+        case .window: return L("New window")
+        }
+    }
+
     private static func sectionLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
@@ -444,47 +450,43 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         onDone?()
     }
 
-    /// 走到这里说明用户已经点了启动。三种情况在这里合流：会话直接建终端，
+    /// 走到这里说明用户已经点了启动。三种情况在这里合流成一个启动请求：会话不挂任务，
     /// 已有任务重读后按选中的目录启动，新建任务先落盘再按同一条路启动。
-    func makePane() -> PaneView? {
+    /// 怎么造终端、放到哪里归 `PaneLauncher`。
+    func makeRequest() -> TerminalLaunchRequest? {
         guard let path = WorkingDirectory.validated(directory.path) else {
             show(directoryError, L("Choose an existing folder."))
             return nil
         }
         directoryError.isHidden = true
+        let task: BoundTask
         switch subject {
         case .session:
-            // 删除某段会话的过程中不开同一家的新会话：那条路会去问「谁占着这个文件」，
-            // 中途冒出一个新进程只会让它更难判断。窗口很短，说一句就够。
-            if selectedAgent != .terminal,
-               SessionDeletion.busyAgents.contains(selectedAgent == .codex ? .codex : .claude) {
-                show(directoryError, L("A session is being deleted. Try again in a moment."))
-                return nil
-            }
-            return PaneView(surfaceConfiguration: SessionResumeFlow.newSessionConfiguration(
-                agent: selectedAgent, workingDirectory: path))
+            return TerminalLaunchRequest(.agent(selectedAgent), workingDirectory: path,
+                                         destination: selectedDestination)
         case .task(let fileURL, _):
             do {
                 // Reload before editing so a fresh Agent handoff is not replaced by the preview snapshot.
-                var launchTask = try AppState.shared.taskStore.load(at: fileURL)
+                var launchTask = try AppState.shared.taskBindings.store.load(at: fileURL)
                 launchTask.workdir = path
                 if !saveDirectory.isHidden && saveDirectory.state == .on {
-                    try AppState.shared.taskStore.update(at: fileURL, task: launchTask)
+                    // 浮层自己同步更新；Handoff 列表经任务目录变更跟上，不另发通知。
+                    try AppState.shared.taskBindings.store.update(at: fileURL, task: launchTask)
                     defaultDirectory = path
                     updateDirectoryPresentation()
-                    NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
                 }
-                return PaneView.restoring(task: launchTask, fileURL: fileURL,
-                                          command: .start(selectedAgent))
+                task = BoundTask(fileURL: fileURL, name: launchTask.name)
             } catch {
                 show(directoryError, error.localizedDescription)
                 return nil
             }
         case .newTask:
             guard let created = createTask(at: path) else { return nil }
-            return PaneView.restoring(task: created.task, fileURL: created.fileURL,
-                                      command: .start(selectedAgent))
+            task = BoundTask(fileURL: created.fileURL, name: created.task.name)
         }
+        // 终端生在任务的目录（刚刚按选中的目录改写过），Agent 起来就在项目里。
+        return TerminalLaunchRequest(.agent(selectedAgent), workingDirectory: path, task: task,
+                                     destination: selectedDestination)
     }
 
     private func createTask(at path: String) -> (fileURL: URL, task: TaskFile)? {
@@ -495,10 +497,10 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         }
         nameError.isHidden = true
         do {
-            let created = try AppState.shared.taskStore.create(
+            // 经 TaskBindings 建档：列表经它的类型化变更刷新。这里还没有终端，
+            // 「创建并启动」由随后的启动请求绑定。
+            return try AppState.shared.taskBindings.createTask(
                 name: name, workdir: path, body: bodyEditor.string)
-            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-            return created
         } catch {
             show(nameError, error.localizedDescription)
             return nil
@@ -536,14 +538,14 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         } else {
             launchButton.title = selectedAgent.launchTitle
         }
-        guard selectedAgent != .terminal else {
+        guard let sessionAgent = selectedAgent.sessionAgent else {
             contextHint.stringValue = carriesTask
                 ? L("Open a terminal with this task, without starting an Agent.")
                 : L("Open a terminal without starting an Agent.")
             contextHint.isHidden = false
             return
         }
-        let report = HookInstaller.report(for: selectedAgent == .claudeCode ? .claudeCode : .codex)
+        let report = HookInstaller.report(for: HookAgent(sessionAgent))
         if !report.isAgentPresent {
             contextHint.stringValue = L("%@ was not detected. Install it, then check the launch options in Agent settings.", selectedAgent.title)
         } else if !carriesTask {
@@ -558,7 +560,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     }
 
     @objc private func destinationChanged(_ sender: NSButton) {
-        selectedDestination = sender.tag
+        selectedDestination = TerminalLaunchDestination.allCases[sender.tag]
         for button in destinationButtons { button.state = button === sender ? .on : .off }
     }
 
@@ -572,10 +574,18 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     }
 
     @objc func launch() {
-        switch selectedDestination {
-        case 0: launchInPane()
-        case 1: launchInTab()
-        default: launchInWindow()
+        // 先确认有地方放，再 makeRequest()：新建任务那一支在里面就落盘了，
+        // 顺序反过来会留下一个「文件建好了、终端没开」的半截结果。
+        guard selectedDestination == .window || controller != nil else { return }
+        guard let request = makeRequest() else { return }
+        AppState.shared.paneLauncher.launch(request, in: controller) { [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+            case .launched, .focused:
+                self.onDone?()
+            case .notLaunched:
+                break
+            }
         }
     }
 
@@ -585,28 +595,6 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
             sender.tag = 0
             jumpToPane(sender)
         } else { launch() }
-    }
-
-    // 先确认有地方放，再 makePane()：新建任务那一支在 makePane() 里就落盘了，
-    // 顺序反过来会留下一个「文件建好了、终端没开」的半截结果。
-    @objc private func launchInPane() {
-        guard let controller else { return }
-        guard let pane = makePane() else { return }
-        controller.addPaneToActiveTab(pane)
-        onDone?()
-    }
-
-    @objc private func launchInTab() {
-        guard let controller else { return }
-        guard let pane = makePane() else { return }
-        controller.addTab(initialPane: pane)
-        onDone?()
-    }
-
-    @objc private func launchInWindow() {
-        guard let pane = makePane() else { return }
-        AppState.shared.newWindow(initialPane: pane)
-        onDone?()
     }
 }
 

@@ -71,7 +71,7 @@ final class PaneArrangementTests: XCTestCase {
         assertConsistent(controller)
         XCTAssertEqual(controller.tabOverview().map(\.panes.count), [1, 1, 1, 2])
 
-        XCTAssertTrue(controller.detachPane(withID: a.dragIdentifier, toNewTabAt: 0))
+        XCTAssertTrue(controller.detachPane(withID: a.dragIdentifier, toNewTabAfter: nil))
         assertConsistent(controller)
         XCTAssertEqual(controller.tabOverview().map(\.panes.count), [1, 1, 1, 1, 1])
         XCTAssertEqual(controller.tabOverview().first?.panes.first, a)
@@ -91,9 +91,12 @@ final class PaneArrangementTests: XCTestCase {
                     assertConsistent(controller)
                     controller.split(b, direction: .down)
                     assertConsistent(controller)
-                    XCTAssertTrue(controller.detachPane(withID: a.dragIdentifier, toNewTabAt: round))
+                    let slot = min(round, controller.tabCount) - 1
+                    XCTAssertTrue(controller.detachPane(withID: a.dragIdentifier,
+                        toNewTabAfter: slot < 0 ? nil : controller.tabIDForTesting(at: slot)))
                     assertConsistent(controller)
-                    XCTAssertTrue(controller.moveTab(from: 0, to: controller.tabCount - 1))
+                    XCTAssertTrue(controller.moveTab(withID: controller.tabIDForTesting(at: 0),
+                        after: controller.tabIDForTesting(at: controller.tabCount - 1)))
                     assertConsistent(controller)
                     if let extraPane = controller.panes().first(where: {
                         $0 !== a && $0 !== b && controller.tabName(of: $0) == controller.tabName(of: b)
@@ -116,10 +119,10 @@ final class PaneArrangementTests: XCTestCase {
 
         XCTAssertFalse(controller.movePane(withID: only.dragIdentifier, to: only, zone: .right))
         XCTAssertFalse(controller.movePane(withID: UUID(), to: other, zone: .right), "源 pane 不存在")
-        XCTAssertFalse(controller.movePane(withID: only.dragIdentifier, toTabAt: 9))
-        XCTAssertFalse(controller.movePane(withID: only.dragIdentifier, toTabAt: 0), "本来就独占这个标签页")
-        XCTAssertFalse(controller.detachPane(withID: only.dragIdentifier, toNewTabAt: 1), "独占标签页拆不出东西")
-        XCTAssertFalse(controller.moveTab(from: 1, to: 1))
+        XCTAssertFalse(controller.movePane(withID: only.dragIdentifier, intoTabWithID: UUID()))
+        XCTAssertFalse(controller.movePane(withID: only.dragIdentifier, intoTabWithID: before[0].0), "本来就独占这个标签页")
+        XCTAssertFalse(controller.detachPane(withID: only.dragIdentifier, toNewTabAfter: before[0].0), "独占标签页拆不出东西")
+        XCTAssertFalse(controller.moveTab(withID: before[1].0, after: before[0].0))
 
         let after = controller.tabOverview().map { ($0.id, $0.panes.map(\.dragIdentifier)) }
         XCTAssertEqual(after.map(\.0), before.map(\.0))
@@ -142,6 +145,27 @@ final class PaneArrangementTests: XCTestCase {
         assertConsistent(destination)
     }
 
+    /// 一次关多个标签页是一次提交：只广播一次结构变化，不逐个关。
+    func testClosingSeveralTabsCommitsOnce() throws {
+        let controller = makeController(extraTabs: 3)
+        controller.selectTab(at: 1)
+        var commits = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: .lighttyWindowArrangementDidChange, object: nil, queue: nil) { _ in commits += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        controller.closeTabs(mode: .other)
+        XCTAssertEqual(controller.tabCount, 1)
+        XCTAssertEqual(commits, 1, "closeTabs(.other) 一次提交")
+
+        controller.addTab(initialPane: PaneView())
+        controller.addTab(initialPane: PaneView())
+        commits = 0
+        controller.clearTabs()
+        XCTAssertEqual(controller.tabCount, 0)
+        XCTAssertEqual(commits, 1, "clearTabs 一次提交")
+    }
+
     // MARK: - 撤销
 
     func testUndoRestoresTheArrangementAndRedoReappliesIt() throws {
@@ -153,7 +177,7 @@ final class PaneArrangementTests: XCTestCase {
         undo.removeAllActions()
         let split = controller.tabOverview().map { $0.panes.map(\.dragIdentifier) }
 
-        XCTAssertTrue(controller.detachPane(withID: b.dragIdentifier, toNewTabAt: 1))
+        XCTAssertTrue(controller.detachPane(withID: b.dragIdentifier, toNewTabAfter: controller.tabIDForTesting(at: 0)))
         let detached = controller.tabOverview().map { $0.panes.map(\.dragIdentifier) }
         XCTAssertEqual(detached, [[a.dragIdentifier], [b.dragIdentifier]])
 
@@ -173,7 +197,7 @@ final class PaneArrangementTests: XCTestCase {
         let undo = try XCTUnwrap(controller.window?.undoManager)
         undo.removeAllActions()
 
-        XCTAssertTrue(controller.detachPane(withID: b.dragIdentifier, toNewTabAt: 1))
+        XCTAssertTrue(controller.detachPane(withID: b.dragIdentifier, toNewTabAfter: controller.tabIDForTesting(at: 0)))
         controller.split(a, direction: .down)  // 新建了一个 pane：旧编排里没有它
         let now = controller.tabOverview().map { $0.panes.map(\.dragIdentifier) }
         undo.undo()
@@ -231,5 +255,24 @@ final class PaneArrangementTests: XCTestCase {
         bottom.focusTerminal()
         controller.focusPane(direction: .top)
         XCTAssertTrue(controller.activePane === top, "容器 flipped 之后上下不能反")
+    }
+
+    /// 关掉的不是正在用的分屏，焦点就留在原地；关掉的正是它，才交给标签页里第一个。
+    func testClosingAnUnfocusedSplitKeepsFocusWhereItWas() throws {
+        let controller = makeController()
+        let a = try XCTUnwrap(controller.activePane)
+        controller.split(a, direction: .right)
+        let b = try XCTUnwrap(controller.panes().first { $0 !== a })
+        controller.split(b, direction: .right)
+        let c = try XCTUnwrap(controller.panes().first { $0 !== a && $0 !== b })
+
+        c.focusTerminal()
+        XCTAssertTrue(controller.activePane === c)
+        controller.close(pane: b)
+        XCTAssertTrue(controller.activePane === c, "关掉的是 B，焦点不该被挪到 A")
+
+        controller.close(pane: c)
+        XCTAssertTrue(controller.activePane === a, "关掉的正是聚焦的分屏：交给剩下的第一个")
+        assertConsistent(controller)
     }
 }

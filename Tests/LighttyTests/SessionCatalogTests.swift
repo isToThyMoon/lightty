@@ -5,17 +5,17 @@ import LighttyCore
 
 final class SessionCatalogTests: XCTestCase {
     func testCodexDecodeUsesThreadIDAndSecondsAndExcludesDesktop() throws {
-        let source = SessionCatalogSource(agent: .codex, root: URL(fileURLWithPath: "/config"), executable: "/bin/codex")
+        let source = SessionCatalogSource(agent: .codex, root: URL(fileURLWithPath: "/config"), executable: "/bin/codex", configuration: .custom("/config"))
         let page: [String: Any] = ["data": [
             ["id": "thread-1", "sessionId": "shared-tree", "source": "cli", "cwd": "/repo", "updatedAt": 1000.0, "preview": "Preview"],
             ["id": "desktop-1", "source": "appServer"],
             ["id": "ide-1", "source": "vscode"],
         ]]
-        let rows = try CodexSessionCatalog.decode(page, source: source, archived: false)
+        let rows = try CodexSessionProvider.decode(page, source: source, archived: false)
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.key.nativeID, "thread-1")
         XCTAssertEqual(rows.first?.updatedAt, Date(timeIntervalSince1970: 1000))
-        XCTAssertThrowsError(try CodexSessionCatalog.decode([:], source: source, archived: false))
+        XCTAssertThrowsError(try CodexSessionProvider.decode([:], source: source, archived: false))
     }
 
     func testInstalledCodexReadsOnlySyntheticCLIHistory() throws {
@@ -43,7 +43,7 @@ final class SessionCatalogTests: XCTestCase {
             let data = try lines.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }.joined(separator: "\n") + "\n"
             try data.write(to: directory.appendingPathComponent("rollout-2026-09-07T00-00-0\(index)-\(id).jsonl"), atomically: true, encoding: .utf8)
         }
-        let provider = CodexSessionCatalog(source: .init(agent: .codex, root: root, executable: executable))
+        let provider = CodexSessionProvider(source: .init(agent: .codex, root: root, executable: executable, configuration: .custom(root.path)))
         let records = try provider.sessions(archived: false, cancelled: { false })
         XCTAssertEqual(Set(records.map(\.key.nativeID)), expected)
         XCTAssertTrue(records.allSatisfy { $0.workingDirectory == root.path })
@@ -459,7 +459,7 @@ final class PrimarySidebarTests: XCTestCase {
 
         // 开一个终端会广播这几条：它们会把已建单元格整批重配一遍。
         library.updateWindow(UUID(), panes: [], selected: nil)
-        for name: Notification.Name in [.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+        for name: Notification.Name in [.lighttyWindowArrangementDidChange, .lighttyPaneStatusDidChange] {
             NotificationCenter.default.post(name: name, object: nil)
         }
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -694,10 +694,18 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertNotEqual(closed.tiffRepresentation, open.tiffRepresentation)
     }
 
-    func testNewSessionUsesConfiguredAgentCommandAndDirectory() {
+    func testNewSessionUsesConfiguredAgentCommandAndDirectory() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("new-session-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
         for agent in [LaunchAgent.codex, .claudeCode] {
-            let config = SessionResumeFlow.newSessionConfiguration(agent: agent, workingDirectory: "/tmp")
-            XCTAssertEqual(config.workingDirectory, "/tmp")
+            let pane = try AppState.shared.paneLauncher.makePane(
+                for: .init(.agent(agent), workingDirectory: directory.path))
+            let config = pane.terminal.launchConfiguration
+            XCTAssertEqual(config.workingDirectory, directory.path)
             XCTAssertEqual(config.initialInput, AgentLaunchPreference.initialInput(for: agent))
         }
     }
@@ -727,7 +735,7 @@ final class PrimarySidebarTests: XCTestCase {
         let scroll = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? SidebarListScrollView }.first)
         let document = try XCTUnwrap(scroll.documentView)
         let column = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? TabColumnView }.first)
-        column.reload(overview: (0..<100).map { (UUID(), $0, "Tab \($0)", false, false, []) })
+        column.reload(overview: (0..<100).map { (UUID(), "Tab \($0)", false, false, []) })
         scroll.autohidesScrollers = false
         for style in [NSScroller.Style.legacy, .overlay] {
             scroll.scrollerStyle = style
@@ -994,7 +1002,7 @@ final class PrimarySidebarTests: XCTestCase {
     private func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
 }
 
-private struct FixtureCatalog: SessionCatalogProvider {
+private struct FixtureCatalog: CatalogOnlyProvider {
     let root: URL
     var agent: SessionAgent = .codex
     /// 让读取真的占住一点时间。真实 provider 要起一个子进程（几百毫秒），
@@ -1003,7 +1011,7 @@ private struct FixtureCatalog: SessionCatalogProvider {
     var delay: TimeInterval = 0
     /// 需要一条长到能滚动的列表时传。默认两条，保持既有用例不变。
     var count: Int = 2
-    var source: SessionCatalogSource { .init(agent: agent, root: root, executable: "/bin/false") }
+    var source: SessionCatalogSource { .init(agent: agent, root: root, executable: "/bin/false", configuration: .custom(root.path)) }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }  // 后台队列上，不挡主线程
         guard !archived else { return SessionCatalogPage(sessions: [], nextCursor: nil) }

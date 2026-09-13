@@ -62,7 +62,7 @@ struct PaneSessionAssociation: Equatable {
 
     func resumePlan(executable: String) throws -> SessionResumePlan {
         guard configuration.root(for: key.agent, home: FileManager.default.homeDirectoryForCurrentUser)
-            .standardizedFileURL.path == key.sourceRoot else { throw SessionResumePlan.InvalidPlan.invalidValue }
+            .standardizedFileURL.path == key.sourceRoot else { throw InvalidLaunchPlan.invalidValue }
         return try SessionResumePlan(resuming: .init(key: key, title: "", workingDirectory: workingDirectory, updatedAt: nil),
                                      executable: executable, configuration: configuration)
     }

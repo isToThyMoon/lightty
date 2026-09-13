@@ -247,15 +247,12 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
     // MARK: - 检索
 
     private func refresh(query: String) {
-        let running = AppState.shared.runningPanes()
-        let all = AppState.shared.taskStore.list().tasks
+        let all = AppState.shared.taskBindings.store.list().tasks
         let trimmed = query.trimmingCharacters(in: .whitespaces)
 
         var scored: [(result: Result, nameScore: Int?, bodyHits: Int)] = []
         for entry in all {
-            let bound = running.filter {
-                $0.pane.taskFileURL?.standardizedFileURL == entry.fileURL.standardizedFileURL
-            }
+            let bound = AppState.shared.boundPanes(of: entry.fileURL)
             var nameScore: Int?
             var snippet: NSAttributedString?
             var bodyHits = 0

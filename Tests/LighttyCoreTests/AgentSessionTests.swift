@@ -100,7 +100,7 @@ final class AgentSessionTests: XCTestCase {
         let plan = try SessionResumePlan(session: session(), executable: "/test path/it's codex",
                                         configuration: .custom("/config/codex"), launchArguments: [])
         XCTAssertEqual(plan.arguments, ["resume", "abc-123"])
-        XCTAssertEqual(plan.environment, ["CODEX_HOME": "/config/codex"])
+        XCTAssertEqual(plan.context.environment, ["CODEX_HOME": "/config/codex"])
         XCTAssertEqual(plan.shellInput, "/usr/bin/env 'CODEX_HOME=/config/codex' '/test path/it'\\''s codex' 'resume' 'abc-123'\n")
         XCTAssertFalse(plan.shellInput.contains("--yolo"))
     }
@@ -111,7 +111,8 @@ final class AgentSessionTests: XCTestCase {
         let codex = try SessionResumePlan(session: session(), executable: "/bin/codex",
                                           configuration: .standard, launchArguments: ["--yolo"])
         XCTAssertEqual(codex.arguments, ["resume", "--yolo", "abc-123"])
-        XCTAssertTrue(codex.nativePickerInput.hasSuffix("'resume' '--yolo' '--all'\n"))
+        XCTAssertTrue(try picker(.codex, root: "/config/codex", launchArguments: ["--yolo"])
+            .shellInput.hasSuffix("'resume' '--yolo' '--all'\n"))
 
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: "/config/claude", nativeID: "abc-123"),
                                   title: "", workingDirectory: "/repo", updatedAt: nil)
@@ -119,11 +120,46 @@ final class AgentSessionTests: XCTestCase {
                                            configuration: .standard,
                                            launchArguments: ["--permission-mode", "bypassPermissions"])
         XCTAssertEqual(claude.arguments, ["--permission-mode", "bypassPermissions", "--resume", "abc-123"])
-        XCTAssertTrue(claude.nativePickerInput.hasSuffix("'--permission-mode' 'bypassPermissions' '--resume'\n"))
+        XCTAssertTrue(try picker(.claude, root: "/config/claude", launchArguments: ["--permission-mode", "bypassPermissions"])
+            .shellInput.hasSuffix("'--permission-mode' 'bypassPermissions' '--resume'\n"))
 
         for bad in [[""], ["--yolo\n; rm -rf /"]] {
             XCTAssertThrowsError(try SessionResumePlan(session: session(), executable: "/bin/codex",
                                                        configuration: .standard, launchArguments: bad))
+        }
+    }
+
+    private func picker(_ agent: SessionAgent, root: String, launchArguments: [String]) throws -> SessionPickerPlan {
+        try SessionPickerPlan(agent: agent, sourceRoot: root, executable: "/bin/\(agent.executableName)",
+                              configuration: .standard, workingDirectory: "/repo", launchArguments: launchArguments)
+    }
+
+    /// 原生选择器不续接任何一段会话，构造它不需要会话身份：以前要伪造一个
+    /// `nativeID: "placeholder"` 的会话才拿得到计划。它与续接共用环境、参数位置和
+    /// 引号规则，同样拒绝不可信的值。
+    func testSessionPickerNeedsNoSessionIdentity() throws {
+        let codex = try SessionPickerPlan(agent: .codex, sourceRoot: "/config/codex/", executable: "/test path/codex",
+                                          configuration: .custom("/config/codex"), workingDirectory: "/home/me",
+                                          launchArguments: ["--yolo"])
+        XCTAssertEqual(codex.context.workingDirectory, "/home/me")
+        XCTAssertEqual(codex.arguments, ["resume", "--yolo", "--all"])
+        XCTAssertEqual(codex.shellInput,
+                       "/usr/bin/env 'CODEX_HOME=/config/codex' '/test path/codex' 'resume' '--yolo' '--all'\n")
+        let claude = try SessionPickerPlan(agent: .claude, sourceRoot: "/config/claude", executable: "/bin/claude",
+                                           configuration: .standard, workingDirectory: "/home/me",
+                                           launchArguments: ["--permission-mode", "bypassPermissions"])
+        XCTAssertEqual(claude.shellInput,
+                       "/usr/bin/env -u 'CLAUDE_CONFIG_DIR' '/bin/claude' '--permission-mode' 'bypassPermissions' '--resume'\n")
+        for (executable, cwd, root, configuration, arguments): (String, String, String, SessionConfigurationLocation, [String]) in [
+            ("bin/claude", "/home", "/config", .standard, []),
+            ("/bin/claude", "home", "/config", .standard, []),
+            ("/bin/claude", "/home\n", "/config", .standard, []),
+            ("/bin/claude", "/home", "/config", .custom("/elsewhere"), []),
+            ("/bin/claude", "/home", "/config", .standard, [""]),
+        ] {
+            XCTAssertThrowsError(try SessionPickerPlan(agent: .claude, sourceRoot: root, executable: executable,
+                                                       configuration: configuration, workingDirectory: cwd,
+                                                       launchArguments: arguments))
         }
     }
 
@@ -134,6 +170,33 @@ final class AgentSessionTests: XCTestCase {
             XCTAssertThrowsError(try SessionResumePlan(session: record, executable: "/bin/codex",
                                                        configuration: .standard, launchArguments: []))
         }
+    }
+
+    /// Agent 描述集中在 `SessionAgent` 的穷举扩展里。这些值都是用户可见或已写进
+    /// 外部约定的（CLI 名、环境变量、目录、侧栏文案），钉住它们，集中来源时不会悄悄换字。
+    func testAgentDescriptionIsExhaustiveAndStable() {
+        let expected: [SessionAgent: [String]] = [
+            .claude: ["claude", "CLAUDE_CONFIG_DIR", ".claude", "Claude Code", "Claude Code", "Claude Code"],
+            .codex: ["codex", "CODEX_HOME", ".codex", "Codex CLI", "Codex", "OpenAI Codex"],
+        ]
+        XCTAssertEqual(Set(expected.keys), Set(SessionAgent.allCases))
+        let home = URL(fileURLWithPath: "/fixture/home")
+        for agent in SessionAgent.allCases {
+            XCTAssertEqual([agent.executableName, agent.configurationVariable, agent.standardConfigurationDirectory,
+                            agent.sourceName, agent.launchName, agent.iconToolTip], expected[agent])
+            XCTAssertEqual(SessionConfigurationLocation.standard.root(for: agent, home: home).path,
+                           "/fixture/home/" + agent.standardConfigurationDirectory)
+        }
+        let codex = AgentSession(key: .init(agent: .codex, sourceRoot: "/c", nativeID: "id"),
+                                 title: "", workingDirectory: "/tmp", updatedAt: nil)
+        let claude = AgentSession(key: .init(agent: .claude, sourceRoot: "/c", nativeID: "id"),
+                                  title: "", workingDirectory: "/tmp", updatedAt: nil)
+        XCTAssertEqual(try SessionResumePlan(session: codex, executable: "/bin/codex", configuration: .standard,
+                                             launchArguments: ["--yolo"]).arguments, ["resume", "--yolo", "id"])
+        XCTAssertEqual(try SessionResumePlan(session: claude, executable: "/bin/claude", configuration: .standard,
+                                             launchArguments: ["-x"]).arguments, ["-x", "--resume", "id"])
+        XCTAssertTrue(try picker(.codex, root: "/c", launchArguments: []).shellInput.hasSuffix("'resume' '--all'\n"))
+        XCTAssertTrue(try picker(.claude, root: "/c", launchArguments: []).shellInput.hasSuffix("'--resume'\n"))
     }
 
     func testConfigurationProvenanceIsNotInferredFromDirectory() throws {
@@ -149,13 +212,15 @@ final class AgentSessionTests: XCTestCase {
                                       title: "", workingDirectory: "/tmp", updatedAt: nil)
             let plan = try SessionResumePlan(session: record, executable: "/bin/echo",
                                              configuration: standard, launchArguments: [])
-            XCTAssertEqual(plan.environment, [:])
-            XCTAssertEqual(plan.unsetEnvironment, [agent.configurationVariable])
-            XCTAssertTrue(plan.nativePickerInput.contains("-u '\(agent.configurationVariable)'"))
+            XCTAssertEqual(plan.context.environment, [:])
+            XCTAssertEqual(plan.context.unsetEnvironment, [agent.configurationVariable])
+            XCTAssertTrue(try SessionPickerPlan(agent: agent, sourceRoot: root, executable: "/bin/echo",
+                                                configuration: standard, workingDirectory: "/tmp", launchArguments: [])
+                .shellInput.contains("-u '\(agent.configurationVariable)'"))
             let custom = try SessionResumePlan(session: record, executable: "/bin/echo",
                                                configuration: explicit, launchArguments: [])
-            XCTAssertEqual(custom.environment, [agent.configurationVariable: root])
-            XCTAssertEqual(custom.unsetEnvironment, [])
+            XCTAssertEqual(custom.context.environment, [agent.configurationVariable: root])
+            XCTAssertEqual(custom.context.unsetEnvironment, [])
             XCTAssertThrowsError(try SessionResumePlan(session: record, executable: "/bin/echo",
                                                        configuration: .custom("/different/source"), launchArguments: []))
         }
@@ -177,10 +242,13 @@ final class AgentSessionTests: XCTestCase {
         for location: SessionConfigurationLocation in [.standard, .custom(directory.path)] {
             let plan = try SessionResumePlan(session: record, executable: executable.path,
                                              configuration: location, launchArguments: [])
+            let pickerPlan = try SessionPickerPlan(agent: .claude, sourceRoot: directory.path,
+                                                   executable: executable.path, configuration: location,
+                                                   workingDirectory: directory.path, launchArguments: [])
             for picker in [false, true] {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/bin/sh")
-                process.arguments = ["-c", picker ? plan.nativePickerInput : plan.shellInput]
+                process.arguments = ["-c", picker ? pickerPlan.shellInput : plan.shellInput]
                 process.environment = ["PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/wrong/inherited/root"]
                 let output = Pipe()
                 process.standardOutput = output

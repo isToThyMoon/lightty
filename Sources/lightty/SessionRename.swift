@@ -9,9 +9,9 @@ import LighttyCore
 /// 1. **会话正开在某个 pane 里**：把 `/rename` 敲进那个终端，让 agent 自己改
 ///    （`PaneView.renameSession(to:)`）。只有这条能让终端里正在显示的标题也跟着变
 ///    ——从外面写进去，那个已经跑起来的进程不会重读。
-/// 2. **会话没开**：走各家的官方接口，也就是本文件。codex 用 app-server 的
-///    `thread/name/set`，claude 用官方开发包的 `renameSession`——跟已经在用的
-///    `listSessions` / `deleteSession` 同一个包，不新增依赖。
+/// 2. **会话没开**：走各家的官方接口，也就是本文件经 `AgentSessionProvider.rename`。
+///    codex 用 app-server 的 `thread/name/set`，claude 用官方开发包的 `renameSession`
+///    ——跟已经在用的 `listSessions` / `deleteSession` 同一个包，不新增依赖。
 ///
 /// 有了第 2 条，关着的会话才第一次能改名：以前必须先把它开起来、还得等它空闲。
 ///
@@ -43,9 +43,9 @@ enum SessionRename {
     /// 后台执行 + 回主线程刷新列表。改名不是破坏性操作，所以不设确认对话框，
     /// 也不像删除那样锁住整个 agent。
     static func perform(_ session: AgentSession, to name: String, library: SessionLibrary) {
-        guard let source = library.source(for: session.key.agent) else { return }
+        guard let provider = library.provider(for: session.key.agent) else { return }
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try rename(session.key, to: name, source: source) }
+            let result = Result { try rename(session.key, to: name, provider: provider) }
             DispatchQueue.main.async {
                 if case .failure = result { NSSound.beep() }
                 // 成功要拉一次才看得到新名字；失败也要拉，避免列表停在乐观状态。
@@ -54,46 +54,13 @@ enum SessionRename {
         }
     }
 
-    static func rename(_ key: AgentSessionKey, to name: String, source: SessionCatalogSource,
-                       helperDirectory: URL = ClaudeSessionCatalog.installedHelper) throws {
-        guard UUID(uuidString: key.nativeID) != nil, key.agent == source.agent,
-              source.root.standardizedFileURL.path == key.sourceRoot,
-              source.root.path != "/" else { throw Failure.invalidSource }
+    /// 身份核对与名字清洗在这里，一次原生调用在 provider 里；provider 抛出的任何错误
+    /// 对用户都是同一句「CLI 改不了」。
+    static func rename(_ key: AgentSessionKey, to name: String, provider: AgentSessionProvider) throws {
+        guard provider.source.owns(key) else { throw Failure.invalidSource }
         guard let title = sanitize(name) else { throw Failure.invalidName }
-        do {
-            switch key.agent {
-            case .codex: try renameCodex(key, to: title, source: source)
-            case .claude: try renameClaude(key, to: title, source: source, helperDirectory: helperDirectory)
-            }
-        } catch let error as Failure { throw error }
+        do { try provider.rename(key, to: title) }
+        catch let error as Failure { throw error }
         catch { throw Failure.failed }
-    }
-
-    private static func renameCodex(_ key: AgentSessionKey, to title: String,
-                                    source: SessionCatalogSource) throws {
-        let rpc = try CatalogJSONRPC.connected(to: source, cancelled: { false })
-        defer { rpc.close() }
-        _ = try rpc.request("thread/name/set",
-                            params: ["threadId": key.nativeID, "name": title],
-                            cancelled: { false })
-    }
-
-    private static func renameClaude(_ key: AgentSessionKey, to title: String,
-                                     source: SessionCatalogSource, helperDirectory: URL) throws {
-        #if arch(arm64)
-        let runtime = "runtime-arm64/node"
-        #else
-        let runtime = "runtime-x64/node"
-        #endif
-        // 名字作为参数直接交给进程，不经过 shell，所以不需要引号规则。
-        let data = try SessionHelperProcess.readPage(
-            executable: helperDirectory.appendingPathComponent(runtime),
-            arguments: [helperDirectory.appendingPathComponent("rename-session.mjs").path,
-                        key.nativeID, title],
-            directory: helperDirectory,
-            environment: ["PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": source.root.path],
-            cancelled: { false })
-        guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              value["renamed"] as? String == key.nativeID else { throw Failure.failed }
     }
 }

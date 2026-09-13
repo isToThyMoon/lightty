@@ -16,7 +16,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
         let key = f.record().key
         let snapshot = PaneSnapshot(name: "My terminal", agentCWD: f.root.path, agentAlive: true,
                                     catalogSession: key, catalogConfiguration: .custom(f.root.path))
-        let pane = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
+        let pane = restoredPane(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
         func record(_ title: String) -> AgentSession {
             .init(key: key, title: title, workingDirectory: f.root.path, updatedAt: nil)
         }
@@ -32,10 +32,10 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
         #expect(pane.header.title == "Renamed conversation")
         try await f.load([record("  ")])
         #expect(pane.header.title == "My terminal")
-        let restored = PaneView.restored(from: pane.snapshot(), sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
+        let restored = restoredPane(from: pane.snapshot(), sessionLibrary: f.library, locateExecutable: { _ in "/bin/echo" })
         try await f.load([record("Conversation")])
         #expect(restored.header.title == "Conversation")
-        let unavailable = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
+        let unavailable = restoredPane(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
         #expect(unavailable.header.title == "My terminal")
         #expect(unavailable.header.sessionAgent == nil)
 }
@@ -48,7 +48,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
     if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-    let task = try AppState.shared.taskStore.create(name: "Independent task", workdir: root.path)
+    let task = try AppState.shared.taskBindings.store.create(name: "Independent task", workdir: root.path)
     for agent in SessionAgent.allCases {
         let key = AgentSessionKey(agent: agent,
             sourceRoot: SessionConfigurationLocation.standard.root(for: agent,
@@ -65,7 +65,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
             snapshot = try #require(store.load()?.windows.first?.tabs.first?.root.firstLeaf)
             #expect(snapshot.catalogSession == key)
             #expect(snapshot.agentAlive)
-            let restored = PaneView.restored(from: snapshot, locateExecutable: { _ in "/bin/echo" })
+            let restored = restoredPane(from: snapshot, locateExecutable: { _ in "/bin/echo" })
             #expect(restored.displayedSessionKey == key)
             #expect(restored.terminal.launchConfiguration.initialInput?.contains("'restart-fixture'") == true)
             #expect(restored.taskFileURL == task.fileURL)
@@ -118,7 +118,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
             tabs: [.init(title: "Hook", root: .pane(pane.snapshot()))],
             taskPanelOpen: true, tabSidebarOpen: true)]))
         let saved = try #require(disk.load()?.windows.first?.tabs.first?.root.firstLeaf)
-        let restored = PaneView.restored(from: saved, locateExecutable: { _ in "/bin/echo" })
+        let restored = restoredPane(from: saved, locateExecutable: { _ in "/bin/echo" })
         #expect(restored.displayedSessionKey == key)
         #expect(restored.snapshot().catalogConfiguration == location)
         #expect(restored.terminal.launchConfiguration.initialInput?.contains(agent.configurationVariable + "=" + root.path) == true)
@@ -145,7 +145,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
                                 catalogSession: key, catalogConfiguration: .standard)
     let f = try SessionModelFixture()
     defer { f.close() }
-    let pane = PaneView.restored(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
+    let pane = restoredPane(from: snapshot, sessionLibrary: f.library, locateExecutable: { _ in nil })
     #expect(pane.displayedSessionKey == nil)
     #expect(pane.terminal.launchConfiguration.initialInput == nil)
     #expect(pane.snapshot().catalogSession == key)
@@ -158,7 +158,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
     AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
     defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
     if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-    let task = try AppState.shared.taskStore.create(name: "Shared task", workdir: root.path)
+    let task = try AppState.shared.taskBindings.store.create(name: "Shared task", workdir: root.path)
     let controller = TerminalWindowController()
     AppState.shared.windowControllers = [controller]
     let first = try #require(controller.activePane)
@@ -180,7 +180,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
     #expect(saved.tabs.flatMap { $0.root.leaves.compactMap(\.catalogSession) } == keys)
     #expect(saved.tabs.flatMap { $0.root.leaves.compactMap(\.taskFile) } == [task.fileURL.path, task.fileURL.path])
     for (snapshot, key) in zip(saved.tabs.flatMap { $0.root.leaves }, keys) {
-        let pane = PaneView.restored(from: snapshot, locateExecutable: { _ in "/bin/echo" })
+        let pane = restoredPane(from: snapshot, locateExecutable: { _ in "/bin/echo" })
         #expect(pane.displayedSessionKey == key)
         #expect(pane.taskFileURL == task.fileURL)
         #expect(pane.terminal.launchConfiguration.initialInput?.contains(key.nativeID) == true)

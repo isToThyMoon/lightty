@@ -48,10 +48,10 @@ final class ArchivedTasksView: NSStackView {
             }
         } catch { present(error) }
     }
+    /// 设置页自己立刻重读；Handoff 列表经任务目录变更跟上（恢复会把文件移回任务目录）。
     private func perform(_ operation: () throws -> Void) {
         do {
             try operation()
-            NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
             reload()
         } catch { present(error) }
     }

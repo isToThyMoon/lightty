@@ -1,48 +1,45 @@
 import AppKit
 import LighttyCore
 
-/// 窗口内的一个 tab：pane 排布模型 + 渲染它的容器。tab 是 lightty 概念（切换只换
-/// 主区域内容），不是 macOS 原生 tab（那是多 NSWindow 结组，已弃用）。
-final class TerminalTab {
-    let id: UUID
-    /// 渲染 `layout` 的容器：挂在 contentHost 里，isHidden 控制显隐。
-    let container = PaneLayoutView()
-    /// pane 排布。结构只能整份换，入口是 `TerminalWindowController.commit`。
-    fileprivate(set) var layout: PaneLayout
-    /// 放大中的 pane（toggle_split_zoom）。树一变就失效。
-    fileprivate(set) var zoomedPane: UUID?
-    /// 标签页名：双击 tab 标签改，不从 pane/任务派生。
-    var title: String
-    /// 用户亲手改过名（不是「标签页 N」）。快照只存字符串，所以按默认名格式反推；
-    /// 侧栏据此决定单 pane 标签页的叶子行用谁的名字。
-    var hasCustomTitle: Bool { TerminalTab.defaultTitleNumber(title) == nil }
+/// 标签页默认名（「标签页 N」）的序号源，跨窗口共享：标签页是语义单元、窗口只是
+/// 展示容器，默认名必须全局唯一，才能在侧栏跳转行里直接当位置说明。
+/// app 里由 `AppState` 持有一份；测试各自新建 AppState，互不串号。
+final class TabNumbering {
+    /// 已经用出去的最大序号。
+    private(set) var highest = 0
+    /// 下一个新标签页该用的序号。只在编排提交成功后经 `raise` 占用，失败的命令不耗号。
+    var upcoming: Int { highest + 1 }
 
-    /// 「标签页 N」→ N；不是默认名返回 nil。
-    static func defaultTitleNumber(_ title: String) -> Int? {
-        let prefix = L("Tab %d").replacingOccurrences(of: "%d", with: "")
-        guard title.hasPrefix(prefix) else { return nil }
-        return Int(title.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
-    }
+    func raise(to number: Int) { highest = max(highest, number) }
+    /// 清空窗口后回落：只能落到别处还在用的最大序号，不许与它们撞名。
+    func lower(to number: Int) { highest = max(0, number) }
+}
 
-    init(id: UUID, layout: PaneLayout, title: String) {
-        self.id = id
-        self.layout = layout
-        self.title = title
+extension TabTitle {
+    /// 显示用的标签页名：默认名按当前语言格式化。
+    var displayed: String {
+        switch self {
+        case .numbered(let number): return L("Tab %d", number)
+        case .custom(let title): return title
+        }
     }
 }
 
-/// 层级：window（1 侧边栏 + 1 tab 条）→ tab（pane 树容器）→ split 布局 → pane。
+/// 层级：window（1 侧边栏）→ tab（pane 树容器）→ split 布局 → pane。
 /// core new_tab 在当前窗口追加 tab；new_split 改当前 tab 的 pane tree，
 /// 并继承当前任务；方向一致插相邻位、方向不同原位包反向 split。
 final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private let rootContainer = NSView()
-    /// 主体区（tab 条 + tab 内容），随侧栏钉住向右推移。
+    /// 主体区（tab 内容），随侧栏钉住向右推移。
     private let mainArea = NSView()
-    private let tabStrip = TabStripView()
     private let contentHost = NSView()
-    private var tabStripHeightConstraint: NSLayoutConstraint?
-    private var tabs: [TerminalTab] = []
-    private var activeTabIndex = 0
+    /// 本窗口的编排：标签页（身份、排布、标题、放大态）与当前标签页。结构只经 `commit` 整份换；
+    /// 只改比例、选中、改名这些不动树的更新直接写。
+    private var arrangement = WindowArrangement()
+    /// 渲染各标签页排布的容器，按标签页身份索引：挂在 contentHost 里，isHidden 控制显隐。
+    /// tab 是 lightty 概念（切换只换主区域内容），不是 macOS 原生 tab。只由 `commit` 维护。
+    private var containers: [UUID: PaneLayoutView] = [:]
+    private let tabNumbering: TabNumbering
     /// 会话恢复出的窗口：frame 来自快照，不再由 core 的 INITIAL_SIZE 重设。
     var suppressesInitialSize = false
     /// 首帧侧栏布局（默认 task 开、标签页栏关；恢复时按快照）
@@ -51,20 +48,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 恢复中的快照：frame 与分隔线比例要等侧栏就位后再应用（侧栏展开会改布局，
     /// 先设 frame 会被改回默认宽）。
     private var pendingRestore: WindowSnapshot?
-    private var activeTab: TerminalTab? {
-        tabs.indices.contains(activeTabIndex) ? tabs[activeTabIndex] : nil
-    }
-    var tabCount: Int { tabs.count }
+    var tabCount: Int { arrangement.tabs.count }
     let sessionWindowID = UUID()
     let sessionLibrary: SessionLibrary
 
     /// Built only when the Dock menu opens; no workspace serialization or observation.
     func appendDockTabItems(to menu: NSMenu) {
-        for tab in tabs {
-            let item = NSMenuItem(title: tab.title, action: #selector(revealDockTab(_:)), keyEquivalent: "")
+        for tab in arrangement.tabs {
+            let item = NSMenuItem(title: tab.title.displayed, action: #selector(revealDockTab(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = tab.id
-            item.state = window?.isMainWindow == true && tab === activeTab ? .on : .off
+            item.state = window?.isMainWindow == true && tab.id == arrangement.activeTabID ? .on : .off
             menu.addItem(item)
         }
     }
@@ -72,13 +66,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     @objc private func revealDockTab(_ sender: NSMenuItem) {
         // Resolve identity at click time: a tab may have moved or closed since menu creation.
         guard let id = sender.representedObject as? UUID,
-              let index = tabs.firstIndex(where: { $0.id == id }),
+              arrangement.tab(id) != nil,
               let window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.deminiaturize(nil)
         window.makeKeyAndOrderFront(nil)
         hideSettings()
-        selectTab(at: index)
+        selectTab(withID: id)
     }
     /// pinned 侧栏是 docked layout：主体区从侧栏右缘开始；preview 保持 overlay。
     private var rootLeadingConstraint: NSLayoutConstraint?
@@ -188,13 +182,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private weak var titlebarChrome: NSView?
-    private weak var lastFocusedPane: PaneView?
     /// 本窗口的 pane 视图，按身份索引。标签页模型里只存身份，视图从这里取；
     /// 只由 `commit` 维护，与各标签页树里引用的 pane 严格一致。
     private var paneRegistry: [UUID: PaneView] = [:]
 
-    init(initialPane: PaneView = PaneView()) {
+    /// `tabNumbering` 缺省取 `AppState` 共享的那一份（没有 AppState 时自带一份）。
+    init(initialPane: PaneView = PaneView(), tabNumbering: TabNumbering? = nil) {
         sessionLibrary = initialPane.sessionLibrary
+        self.tabNumbering = tabNumbering ?? AppState.shared?.tabNumbering ?? TabNumbering()
         let window = TerminalWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640))
         // 新建 surface 的窗口先保持透明：contentRect 只是占位，真实尺寸要等 core 的
         // INITIAL_SIZE（window-width/height × cell）异步到达。若此时就露脸，用户会
@@ -219,7 +214,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = rootContainer
         installMainArea()
         install(pane: initialPane)
-        lastFocusedPane = initialPane
         addTab(initialPane: initialPane, select: true, installPane: false)
         installTitlebarAccessory(on: window)
         updateWindowTitle(for: initialPane)
@@ -296,7 +290,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         // 系统标题不显示；window.title 只喂 cmd-tab、Mission Control 等系统 UI。
         _ = pane
         window.titleVisibility = .hidden
-        window.title = activeTab?.title ?? "lightty"
+        window.title = arrangement.activeTab?.title.displayed ?? "lightty"
     }
 
     /// 侧栏按钮 = task 卡片开关。卡片开着时它挪进卡片头部行（点了收起），
@@ -340,13 +334,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    // MARK: - 主体区（tab 条 + tab 内容）
+    // MARK: - 主体区（tab 内容）
 
-    /// rootContainer → mainArea（leading 随侧栏钉住推移）→ [tabStrip, contentHost]。
+    /// rootContainer → mainArea（leading 随侧栏钉住推移）→ contentHost。
     /// tab 切换只翻转各 tab container 的 isHidden，视图不出层级、surface 不重建。
     private func installMainArea() {
         mainArea.translatesAutoresizingMaskIntoConstraints = false
-        tabStrip.translatesAutoresizingMaskIntoConstraints = false
         contentHost.translatesAutoresizingMaskIntoConstraints = false
         // 侧栏区 chrome 底毯：主区让位后左侧露出的窗口透明底（桌面壁纸）
         // 由它兜住——task 悬浮卡片要浮在 chrome 面上，不是浮在"洞"上。
@@ -355,14 +348,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         underlay.translatesAutoresizingMaskIntoConstraints = false
         rootContainer.addSubview(underlay)
         rootContainer.addSubview(mainArea)
-        mainArea.addSubview(tabStrip)
         mainArea.addSubview(contentHost)
 
         let leading = mainArea.leadingAnchor.constraint(
             equalTo: rootContainer.leadingAnchor)
         rootLeadingConstraint = leading
-        let stripHeight = tabStrip.heightAnchor.constraint(equalToConstant: 0)
-        tabStripHeightConstraint = stripHeight
         NSLayoutConstraint.activate([
             underlay.leadingAnchor.constraint(equalTo: rootContainer.leadingAnchor),
             underlay.topAnchor.constraint(equalTo: rootContainer.topAnchor),
@@ -374,73 +364,59 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             mainArea.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
             mainArea.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
 
-            tabStrip.topAnchor.constraint(equalTo: mainArea.topAnchor),
-            tabStrip.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor),
-            tabStrip.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor),
-            stripHeight,
-
-            contentHost.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
+            contentHost.topAnchor.constraint(equalTo: mainArea.topAnchor),
             contentHost.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor),
             contentHost.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor),
             contentHost.bottomAnchor.constraint(equalTo: mainArea.bottomAnchor),
         ])
-
-        tabStrip.onSelect = { [weak self] index in self?.selectTab(at: index) }
-        tabStrip.onClose = { [weak self] index in self?.closeTab(at: index) }
-        tabStrip.onRename = { [weak self] index, name in
-            self?.renameTab(at: index, to: name)
-        }
     }
 
     // MARK: - tab 管理
 
-    /// 标签页默认名计数器（跨窗口全局，与「终端 N」的 pane 计数同策略）：
-    /// 标签页是语义单元、窗口只是展示容器，默认名必须全局唯一才能在
-    /// 侧栏跳转行里直接当身份用，窗口层不需要另起名字。
-    private var tabCounter = 0
     private var terminalCounter = 0
-
-    /// 同 PaneView.seedDefaultNameCounter：恢复后新标签页不与「标签页 2」重名。
-    private func seedTabCounter(from titles: [String]) {
-        let numbers = titles.compactMap(TerminalTab.defaultTitleNumber)
-        if let top = numbers.max() { tabCounter = max(tabCounter, top) }
-    }
 
     /// core `new_tab`：当前窗口追加一个 tab（标签页 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
         if installPane { install(pane: initialPane) }
-        let tabID = UUID()
-        commit(arrangement + [TabLayout(id: tabID, layout: .pane(initialPane.dragIdentifier))],
-               incoming: [initialPane], select: select ? .tab(tabID) : .keep)
+        guard let next = arrangement.appendingTab(
+                UUID(), layout: .pane(initialPane.dragIdentifier),
+                title: .numbered(tabNumbering.upcoming), select: select) else { return }
+        commit(next, incoming: [initialPane])
     }
 
-    func selectTab(at index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        defer { syncSessionWindow() }
-        activeTabIndex = index
-        for (i, tab) in tabs.enumerated() {
-            tab.container.isHidden = i != index
-        }
-        refreshTabStrip()
-        let pane = activePane
-        if let pane {
-            lastFocusedPane = pane
+    func selectTab(withID id: UUID) {
+        guard let next = arrangement.selecting(id) else { return }
+        arrangement = next
+        presentActiveTab()
+        syncSessionWindow()
+    }
+
+    /// 活跃标签页换了人（或要求重新交还焦点）：显隐、焦点、窗口标题一起切。
+    /// 不同步会话库：一次用户动作只在收尾同步一次，由调用方（或 `commit`）负责。
+    private func presentActiveTab() {
+        guard arrangement.activeTab != nil else { return }
+        applyTabVisibility()
+        refreshTabSidebar()
+        if let pane = activePane {
+            recordFocus(pane)
             pane.focusTerminal()
             updateWindowTitle(for: pane)
         }
     }
 
-    /// 关一个 tab：它的 pane 随注销释放（surface 随引用释放）。关掉最后一个进空态，
+    private func applyTabVisibility() {
+        for (id, container) in containers { container.isHidden = id != arrangement.activeTabID }
+    }
+
+    /// 关一个 tab（容器行 ✕）：关掉它的全部 pane。关掉最后一个进空态，
     /// 不退出软件：task 是核心，回到空态等待再次派发。
-    func closeTab(at index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        var next = arrangement
-        next.remove(at: index)
-        commit(next)
+    func closeTab(withID id: UUID) {
+        guard let tab = arrangement.tab(id) else { return }
+        close(panes: Set(tab.layout.panes))
     }
 
     func requestClearTabs() {
-        guard !tabs.isEmpty, let window else { return }
+        guard !arrangement.tabs.isEmpty, let window else { return }
         let confirmation = SessionDeletionConfirmation()
         confirmation.messageText = L("Close all tabs in this window?")
         confirmation.informativeText = L("Running terminals will close. Session history and task files will be kept.")
@@ -453,9 +429,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Explicitly confirmed window-local operation; the normal tab teardown owns processes.
+    /// 默认名序号回落到其他窗口还在用的最大值：本窗口重新从小号编起，但不与别的窗口撞名。
     func clearTabs() {
-        for index in tabs.indices.reversed() { closeTab(at: index) }
-        tabCounter = 0
+        close(panes: Set(arrangement.panes))
+        let others = (AppState.shared?.windowControllers ?? []).filter { $0 !== self }
+        tabNumbering.lower(to: others.map(\.arrangement.highestTitleNumber).max() ?? 0)
         terminalCounter = 0
         WorkspaceStore.shared.scheduleSave()
     }
@@ -479,122 +457,92 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             emptyStateView = view
         }
         view.isHidden = false
-        lastFocusedPane = nil
         updateWindowTitle(for: nil)
-        refreshTabStrip()
+        refreshTabSidebar()
         tabSidebar?.reload()
         if taskPanel == nil { openTaskPanel() }
     }
 
-    enum CloseTabMode { case this, other, right }
+    typealias CloseTabMode = WindowArrangement.CloseScope
 
-    /// core close_tab：this/other/right 三种范围。
+    /// core close_tab：this/other/right 三种范围，一次提交。
     func closeTabs(mode: CloseTabMode) {
-        switch mode {
-        case .this:
-            closeTab(at: activeTabIndex)
-        case .other:
-            for i in tabs.indices.reversed() where i != activeTabIndex {
-                closeTab(at: i)
-            }
-        case .right:
-            for i in tabs.indices.reversed() where i > activeTabIndex {
-                closeTab(at: i)
-            }
-        }
+        let doomed = arrangement.tabIDs(in: mode).compactMap(arrangement.tab)
+        close(panes: Set(doomed.flatMap(\.layout.panes)))
     }
 
-    /// core goto_tab：previous/next/last/1-based 序号。
-    enum GotoTab { case previous, next, last, index(Int) }
+    /// core goto_tab：previous/next/last/1-based 序号。序号只在这里换算成身份。
+    typealias GotoTab = WindowArrangement.TabTarget
 
     func gotoTab(_ target: GotoTab) {
-        guard tabs.count > 1 else { return }
-        let destination: Int
-        switch target {
-        case .previous:
-            destination = activeTabIndex == 0 ? tabs.count - 1 : activeTabIndex - 1
-        case .next:
-            destination = activeTabIndex == tabs.count - 1 ? 0 : activeTabIndex + 1
-        case .last:
-            destination = tabs.count - 1
-        case .index(let number): // 1-based；超界落到最后一个
-            destination = min(max(0, number - 1), tabs.count - 1)
-        }
-        selectTab(at: destination)
+        guard let next = arrangement.selecting(target) else { return }
+        arrangement = next
+        presentActiveTab()
+        syncSessionWindow()
     }
 
-    /// core move_tab：活跃 tab 在条内移位（环绕）。
+    /// core move_tab：活跃 tab 在列表内移位（环绕）。
     func moveActiveTab(by amount: Int) {
-        guard tabs.count > 1, amount != 0 else { return }
-        let destination = (activeTabIndex + amount % tabs.count + tabs.count) % tabs.count
-        guard let next = TabArrangement.movingTab(from: activeTabIndex, to: destination, in: arrangement)
-        else { return }
+        guard let next = arrangement.movingActiveTab(by: amount) else { return }
         commit(next)
     }
 
-    /// 侧栏拖拽重排标签页：把第 `from` 个标签页挪到第 `to` 位。
-    /// `to` 是**摘掉源标签页之后**的插入位（与列表拖拽算出来的落点同一坐标系）。
+    /// 侧栏拖拽重排标签页：挪到 `anchor` 之后（nil = 最前）。落点按身份给出：松手到执行
+    /// 之间有别的标签页被关掉，也仍然落在同一个邻居后面。
     /// 选中项跟着标签页本体走，不跟着序号走——重排不该顺手换走当前上下文。
     @discardableResult
-    func moveTab(from: Int, to: Int) -> Bool {
-        guard let next = TabArrangement.movingTab(from: from, to: to, in: arrangement) else { return false }
+    func moveTab(withID id: UUID, after anchor: UUID?) -> Bool {
+        guard let next = arrangement.movingTab(id, after: anchor) else { return false }
         return commit(next)
     }
 
-    /// 侧栏拖拽把一个分屏 pane 拆出来独立成新标签页，插在第 `index` 位。
+    /// 侧栏拖拽把一个分屏 pane 拆出来独立成新标签页，放在 `anchor` 之后（nil = 最前）。
     /// pane 视图本体不重建，PTY、cwd 与 scrollback 全保留；不跟随切换标签页
     /// （拖动是整理动作）。源标签页只剩这一个 pane 时没有可拆的东西，交给 moveTab。
     @discardableResult
-    func detachPane(withID sourceID: UUID, toNewTabAt index: Int) -> Bool {
-        guard let host = tab(hostingPaneID: sourceID) else { return false }
-        let before = arrangementRecord()
+    func detachPane(withID sourceID: UUID, toNewTabAfter anchor: UUID?) -> Bool {
+        guard let host = arrangement.tabID(hosting: sourceID) else { return false }
+        let before = arrangement
         let wasFocused = activePane?.dragIdentifier == sourceID
-        guard let next = TabArrangement.detachingPane(sourceID, toNewTab: UUID(), at: index, in: arrangement),
-              commit(next) else { return false }
+        guard let next = arrangement.detachingPane(sourceID, toNewTab: UUID(),
+                                                   title: .numbered(tabNumbering.upcoming), after: anchor)
+        else { return false }
+        // 拆走的是当前焦点时，焦点留在原标签页剩下的 pane 上（模型已清掉源标签页的焦点），视线不跳走。
+        guard commit(next, focus: wasFocused ? next.tab(host)?.focusTarget : nil) else { return false }
         registerArrangementUndo([(self, before)])
-        // 拆走的是当前焦点时，焦点留在原标签页剩下的 pane 上，视线不跳走。
-        if wasFocused, host === activeTab { panes(in: host).first?.focusTerminal() }
         return true
     }
 
-    /// 用户重命名标签页（tab 标签双击）。OSC set_tab_title 已忽略：标签页名归用户。
-    func renameTab(at index: Int, to title: String) {
-        guard tabs.indices.contains(index) else { return }
-        tabs[index].title = title
-        refreshTabStrip()
-        if index == activeTabIndex { window?.title = title }
+    /// 用户重命名标签页（侧栏双击 / 菜单）。OSC set_tab_title 已忽略：标签页名归用户。
+    func renameTab(withID id: UUID, to title: String) {
+        guard let next = arrangement.renamingTab(id, to: title) else { return }
+        arrangement = next
+        refreshTabSidebar()
+        if id == arrangement.activeTabID { window?.title = title }
     }
 
     /// 标签页名查询（侧栏气泡"跳转"行显示 pane 位置用）。
     func tabName(of pane: PaneView) -> String? {
-        tab(hosting: pane)?.title
+        arrangement.tabID(hosting: pane.dragIdentifier).flatMap(arrangement.tab)?.title.displayed
     }
 
     /// 标签页列（双栏侧栏左栏）的数据快照：全部标签页 + 各自 pane 叶子序。
     func tabOverview() -> [(
         id: UUID,
-        index: Int,
         title: String,
         hasCustomTitle: Bool,
         isActive: Bool,
         panes: [PaneView]
     )] {
-        tabs.enumerated().map { index, tab in
-            (tab.id, index, tab.title, tab.hasCustomTitle, index == activeTabIndex, panes(in: tab))
+        arrangement.tabs.map { tab in
+            (tab.id, tab.title.displayed, tab.title.isCustom, tab.id == arrangement.activeTabID, panes(inTab: tab.id))
         }
     }
 
-    private func refreshTabStrip() {
-        // 横向 tab 栏已停用（标签页导航归侧栏标签页列）；代码保留待彻底拆除。
-        let visible = false && tabs.count > 1
-        tabStripHeightConstraint?.constant = visible ? TabStripView.height : 0
-        tabStrip.isHidden = !visible
-        if visible {
-            tabStrip.update(titles: tabs.map(\.title), activeIndex: activeTabIndex)
-        }
+    /// 标签页列表、标题或选中变了：侧栏标签页列重载并排一次保存。
+    private func refreshTabSidebar() {
         tabSidebar?.reload()
         WorkspaceStore.shared.scheduleSave()
-        syncSessionWindow()
     }
 
     /// Window layout is local; session membership and selection are app-owned model inputs.
@@ -603,110 +551,101 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                                     selected: activePane?.dragIdentifier)
     }
 
-    /// 聚焦指定 pane：先切到其所在 tab（后台 tab 的 pane 无法成为 first responder），
-    /// 再交还终端焦点。侧边栏任务行点击跳转用。
+    /// 聚焦指定 pane：先在模型里记下焦点、切到其所在 tab（后台 tab 的 pane 无法成为
+    /// first responder），再交还终端焦点，最后同步一次。侧边栏行点击、任务跳转用。
     func reveal(pane: PaneView) {
-        if let hostTab = tab(hosting: pane),
-           let index = tabs.firstIndex(where: { $0 === hostTab }),
-           index != activeTabIndex {
-            selectTab(at: index)
+        guard let host = arrangement.tabID(hosting: pane.dragIdentifier),
+              let next = arrangement.focusing(pane.dragIdentifier)?.selecting(host) else { return }
+        let switching = host != arrangement.activeTabID
+        arrangement = next
+        if switching {
+            presentActiveTab()  // 新标签页里没有 first responder，按模型交还的就是这个 pane
+        } else {
+            pane.focusTerminal()
         }
-        pane.focusTerminal()
+        syncSessionWindow()
+    }
+
+    /// 在模型里记下 pane 是它所在标签页的焦点。返回记录是否变了。
+    @discardableResult
+    private func recordFocus(_ pane: PaneView) -> Bool {
+        guard let next = arrangement.focusing(pane.dragIdentifier), next != arrangement else { return false }
+        arrangement = next
+        return true
     }
 
     /// 跳转落点提示的聚光灯：只有目标 pane 浮现一次，同标签页其余 pane 一个不动。
     /// 单 pane 标签页无事发生——整个标签页就是它，本来也不存在「落在哪」的疑问，
     /// 整屏闪一下只是噪音。
     func spotlight(on pane: PaneView) {
-        guard let hostTab = tab(hosting: pane), panes(in: hostTab).count > 1 else { return }
+        guard let host = arrangement.tabID(hosting: pane.dragIdentifier), panes(inTab: host).count > 1 else { return }
         pane.flashSpotlight()
     }
 
     // MARK: - 编排提交
 
-    /// 本窗口当前的编排。
-    private var arrangement: [TabLayout] { tabs.map { TabLayout(id: $0.id, layout: $0.layout) } }
-
-    enum TabSelection {
-        /// 活跃标签页还在就留在它身上；它被移除了就落到原位次上的邻居。
-        case keep
-        case tab(UUID)
-    }
-
     /// 改 pane 树的唯一通路：拿一份完整的新编排，校验通过后一次性提交到视图。
     ///
-    /// 1. 校验：新编排里每个 pane 都要找得到视图（本窗口已有的或 `incoming` 带来的），
-    ///    身份不许重复。不通过就整份拒绝、什么都不动，调用方拿到 false。
-    /// 2. 标签页对位：身份相同的沿用，树变了的清掉放大态；新身份建容器；消失的摘容器。
+    /// 1. 校验：新编排自身合法（身份不重复、当前标签页在列表里），每个 pane 都要找得到
+    ///    视图（本窗口已有的或 `incoming` 带来的）。不通过就整份拒绝、什么都不动，调用方拿到 false。
+    /// 2. 标签页按身份对位：沿用、新建或摘掉容器。放大态与当前标签页的落点规则已经在
+    ///    `WindowArrangement` 的命令里算好，这里不再判断。
     /// 3. 渲染：每个容器按新树摆放 pane。pane 换标签页、换窗口都只是换父视图，
     ///    全程是 frame，不经过任何排布约束。
-    /// 4. 收尾：选中、空态、侧栏、持久化、广播。
+    /// 4. 收尾：默认名占号、选中、焦点、空态、侧栏、持久化、同步会话库（一次）、广播。
+    ///
+    /// `focus`：提交后要交还焦点的 pane。只在它落在当前标签页时生效——先记进模型，再让它
+    /// 成为 first responder，最后才同步会话库，这一次同步看到的就是它。
     ///
     /// 不负责关闭 surface：不再被引用的 pane 只是从本窗口注销并摘下。它是被关掉还是被搬去
     /// 别的窗口，由调用方决定。
     @discardableResult
-    private func commit(_ next: [TabLayout], titles: [UUID: String] = [:],
-                        incoming: [PaneView] = [], select selection: TabSelection = .keep) -> Bool {
+    private func commit(_ proposed: WindowArrangement, incoming: [PaneView] = [], focus: UUID? = nil) -> Bool {
         var lookup = paneRegistry
         for pane in incoming { lookup[pane.dragIdentifier] = pane }
-        let referenced = next.flatMap(\.layout.panes)
-        let wanted = Set(referenced)
-        guard Set(next.map(\.id)).count == next.count,
-              wanted.count == referenced.count,
-              wanted.allSatisfy({ lookup[$0] != nil }) else { return false }
+        let wanted = Set(proposed.panes)
+        guard proposed.isWellFormed, wanted.allSatisfy({ lookup[$0] != nil }) else { return false }
+        let focus = focus.flatMap { proposed.tabID(hosting: $0) == proposed.activeTabID ? $0 : nil }
+        let next = focus.flatMap(proposed.focusing) ?? proposed
 
-        let previousActive = activeTab
-        let previousIndex = activeTabIndex
-        var retired = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
-        tabs = next.map { entry in
-            if let tab = retired.removeValue(forKey: entry.id) {
-                if tab.layout != entry.layout { tab.zoomedPane = nil }
-                tab.layout = entry.layout
-                if let title = titles[entry.id] { tab.title = title }
-                return tab
-            }
-            let title: String
-            if let given = titles[entry.id] {
-                title = given
-            } else {
-                tabCounter += 1
-                title = L("Tab %d", tabCounter)
-            }
-            let tab = TerminalTab(id: entry.id, layout: entry.layout, title: title)
-            mount(tab)
-            return tab
+        let previousActive = arrangement.activeTabID
+        arrangement = next
+        tabNumbering.raise(to: next.highestTitleNumber)
+        var retired = containers
+        for tab in next.tabs {
+            if retired.removeValue(forKey: tab.id) == nil { containers[tab.id] = makeContainer(forTab: tab.id) }
         }
         paneRegistry = lookup.filter { wanted.contains($0.key) }
         // 先让每个容器接收自己的 pane、再摘掉退场的容器：搬家的 pane 直接换父视图，
         // 一刻也不离开窗口。
-        tabs.forEach(render)
-        retired.values.forEach { $0.container.removeFromSuperview() }
+        next.tabs.forEach(render)
+        for (id, container) in retired {
+            container.removeFromSuperview()
+            containers.removeValue(forKey: id)
+        }
 
-        if tabs.isEmpty {
-            activeTabIndex = 0
+        if next.tabs.isEmpty {
             enterEmptyState()
         } else {
             emptyStateView?.isHidden = true
-            let fallback = min(previousIndex, tabs.count - 1)
-            let target: Int
-            switch selection {
-            case .tab(let id): target = tabs.firstIndex { $0.id == id } ?? fallback
-            case .keep: target = previousActive.flatMap { active in tabs.firstIndex { $0 === active } } ?? fallback
-            }
-            if let previousActive, tabs[target] === previousActive {
-                activeTabIndex = target
-                for (index, tab) in tabs.enumerated() { tab.container.isHidden = index != target }
-                refreshTabStrip()
+            if previousActive != nil, next.activeTabID == previousActive {
+                applyTabVisibility()
+                refreshTabSidebar()
             } else {
-                selectTab(at: target)  // 活跃标签页换了人：显隐、焦点、窗口标题一起切
+                presentActiveTab()
+            }
+            if let focus, let pane = paneRegistry[focus] {
+                pane.focusTerminal()
+                updateWindowTitle(for: pane)
             }
         }
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        syncSessionWindow()
+        NotificationCenter.default.post(name: .lighttyWindowArrangementDidChange, object: nil)
         return true
     }
 
-    private func mount(_ tab: TerminalTab) {
-        let container = tab.container
+    private func makeContainer(forTab id: UUID) -> PaneLayoutView {
+        let container = PaneLayoutView()
         container.isHidden = true
         contentHost.addSubview(container)
         NSLayoutConstraint.activate([
@@ -716,35 +655,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             container.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
         ])
         // 分隔线拖动只改比例：写回模型再渲染，不走 commit；松手才落盘。
-        container.onLayoutChange = { [weak self, weak tab] layout in
-            guard let self, let tab else { return }
-            self.updateLayout(of: tab, to: layout, persist: false)
+        container.onLayoutChange = { [weak self] layout in
+            self?.updateLayout(ofTab: id, to: layout, persist: false)
         }
         container.onLayoutChangeEnded = { WorkspaceStore.shared.scheduleSave() }
+        return container
     }
 
-    private func render(_ tab: TerminalTab) {
-        tab.container.render(tab.layout, zoomed: tab.zoomedPane, panes: paneRegistry)
+    private func render(_ tab: ArrangedTab) {
+        containers[tab.id]?.render(tab.layout, zoomed: tab.zoomedPane, panes: paneRegistry)
     }
 
     // MARK: - pane 树
 
-    private func tab(hosting pane: PaneView) -> TerminalTab? {
-        tab(hostingPaneID: pane.dragIdentifier)
-    }
-
-    private func tab(hostingPaneID id: UUID) -> TerminalTab? {
-        tabs.first { $0.layout.contains(id) }
-    }
-
     private func install(pane: PaneView) {
         terminalCounter += 1
         pane.assignWindowNumber(terminalCounter)
-        bind(pane: pane)
+        wireCallbacks(of: pane)
     }
 
     /// 把 pane 的回调接到本窗口。跨窗口搬来的 pane 只需要这一步，不重新编号。
-    private func bind(pane: PaneView) {
+    private func wireCallbacks(of pane: PaneView) {
         pane.onClose = { [weak self] p in self?.close(pane: p) }
         pane.onMetadataChange = { [weak self] p in
             guard let self, self.activePane === p else { return }
@@ -759,9 +690,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
                 .flatMap { $0.panes() }
                 .forEach { $0.clearDropPreview() }
         }
+        // 程序交还焦点的路径（选中、提交、跳转）已经先记进模型并自己同步；这里只接
+        // 用户直接点进终端、分屏导航这类模型还不知道的焦点变化。
         pane.terminal.onFocusChange = { [weak self, weak pane] focused in
-            guard focused, let self, let pane else { return }
-            self.lastFocusedPane = pane
+            guard focused, let self, let pane, self.recordFocus(pane) else { return }
             self.updateWindowTitle(for: pane)
             self.syncSessionWindow()
         }
@@ -775,20 +707,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// 窗口内全部 pane（跨所有 tab，树序）：任务管理、跨窗口拖拽等全局操作用。
     func panes() -> [PaneView] {
-        tabs.flatMap(panes(in:))
+        arrangement.panes.compactMap { paneRegistry[$0] }
     }
 
     /// 单个 tab 内的 pane（树序）：分屏导航/关闭等 tab 局部操作用。
-    private func panes(in tab: TerminalTab) -> [PaneView] {
-        tab.layout.panes.compactMap { paneRegistry[$0] }
+    private func panes(inTab id: UUID) -> [PaneView] {
+        arrangement.tab(id)?.layout.panes.compactMap { paneRegistry[$0] } ?? []
     }
 
     private var activeTabPanes: [PaneView] {
-        activeTab.map { panes(in: $0) } ?? []
+        arrangement.activeTabID.map { panes(inTab: $0) } ?? []
     }
 
+    /// 当前 pane：first responder 在活跃标签页里就是它；否则取模型记下的该标签页焦点，
+    /// 没记过取第一个 pane（`WindowArrangement.focusTarget`）。焦点只存在模型里这一处。
     var activePane: PaneView? {
-        // 从 firstResponder 向上找 PaneView；找不到取活跃 tab 的第一个
         var responder: NSResponder? = window?.firstResponder
         while let r = responder {
             if let view = r as? NSView {
@@ -802,20 +735,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             }
             responder = r.nextResponder
         }
-        let inActiveTab = activeTabPanes
-        if let lastFocusedPane, inActiveTab.contains(where: { $0 === lastFocusedPane }) {
-            return lastFocusedPane
-        }
-        return inActiveTab.first
+        return arrangement.focusTarget.flatMap { paneRegistry[$0] }
     }
 
     /// new_split 动作方向（对应 ghostty_action_split_direction_e）
     enum SplitDirection {
         case right, down, left, up
-
-        var isVertical: Bool { self == .right || self == .left }
-        /// 新 pane 落在当前 pane 之后（右/下）还是之前（左/上）
-        var insertsAfter: Bool { self == .right || self == .down }
 
         var edge: PaneEdge {
             switch self {
@@ -835,13 +760,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         direction: SplitDirection,
         surfaceConfiguration: TerminalSurfaceConfiguration = .init()
     ) {
-        guard tab(hosting: active) != nil else { return }
+        guard arrangement.tabID(hosting: active.dragIdentifier) != nil else { return }
         let pane = PaneView(surfaceConfiguration: surfaceConfiguration)
         install(pane: pane)
-        guard let next = TabArrangement.inserting(
-                pane.dragIdentifier, beside: active.dragIdentifier, edge: direction.edge, in: arrangement),
-              commit(next, incoming: [pane]) else { return }
-        pane.focusTerminal()
+        guard let next = arrangement.insertingPane(
+                pane.dragIdentifier, beside: active.dragIdentifier, edge: direction.edge) else { return }
+        commit(next, incoming: [pane], focus: pane.dragIdentifier)
     }
 
     /// 恢复流程「当前 tab 新 pane」：把外部构造好的 pane（已绑定任务）
@@ -849,12 +773,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     func addPaneToActiveTab(_ pane: PaneView) {
         guard let active = activePane else { addTab(initialPane: pane); return }
         install(pane: pane)
-        guard let next = TabArrangement.inserting(
-                pane.dragIdentifier, beside: active.dragIdentifier, edge: .right, in: arrangement),
-              commit(next, incoming: [pane]) else { return }
-        lastFocusedPane = pane
-        pane.focusTerminal()
-        updateWindowTitle(for: pane)
+        guard let next = arrangement.insertingPane(
+                pane.dragIdentifier, beside: active.dragIdentifier, edge: .right) else { return }
+        commit(next, incoming: [pane], focus: pane.dragIdentifier)
     }
 
     // MARK: - 移动与撤销
@@ -864,92 +785,65 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// internal：PaneView 落点与侧栏行落点共用。
     @discardableResult
     func movePane(withID sourceID: UUID, to destination: PaneView, zone: PaneDropZone) -> Bool {
-        guard sourceID != destination.dragIdentifier, tab(hosting: destination) != nil else { return false }
         let target = destination.dragIdentifier
-        guard let pane = transferPane(sourceID, insert: { tabs in
-            TabArrangement.inserting(sourceID, beside: target, edge: zone.edge, in: tabs)
-        }) else { return false }
-        focusMovedPane(pane)
-        return true
+        guard arrangement.tabID(hosting: target) != nil else { return false }
+        return transferPane(sourceID,
+            within: { $0.movingPane(sourceID, beside: target, edge: zone.edge) },
+            into: { $0.insertingPane(sourceID, beside: target, edge: zone.edge) })
     }
 
     /// 侧栏拖拽：把 pane 并进指定标签页，接在它最后一个 pane 右侧。
     /// 不跟随切换标签页——拖动是整理动作，不该把用户从当前上下文拽走。
     @discardableResult
-    func movePane(withID sourceID: UUID, toTabAt index: Int) -> Bool {
-        guard tabs.indices.contains(index) else { return false }
-        let target = tabs[index]
-        // 它本来就独占这个标签页：无事可做
-        guard target.layout != .pane(sourceID) else { return false }
-        let tabID = target.id
-        guard let pane = transferPane(sourceID, insert: { tabs in
-            TabArrangement.inserting(sourceID, intoTab: tabID, in: tabs)
-        }) else { return false }
-        focusMovedPane(pane)
-        return true
+    func movePane(withID sourceID: UUID, intoTabWithID tabID: UUID) -> Bool {
+        transferPane(sourceID,
+            within: { $0.movingPane(sourceID, intoTab: tabID) },
+            into: { $0.insertingPane(sourceID, intoTab: tabID) })
     }
 
-    /// 移动的公共部分：源编排里移除、目标编排里插入，两步都算成功才提交。
-    /// 跨窗口时先让本窗口接收（pane 直接换父视图，一刻也不离开窗口），再让源窗口注销。
-    private func transferPane(_ id: UUID, insert: ([TabLayout]) -> [TabLayout]?) -> PaneView? {
-        guard let location = AppState.shared.runningPanes().first(where: { $0.pane.dragIdentifier == id }),
-              let removed = TabArrangement.removing(id, from: location.controller.arrangement) else { return nil }
+    /// 移动的公共部分。同窗口直接用编排的移动命令；跨窗口是源编排移除、目标编排插入，
+    /// 两步都算成功才提交：先让本窗口接收（pane 直接换父视图，一刻也不离开窗口），
+    /// 再让源窗口注销。源窗口的焦点由它自己的模型在移除时修正。
+    ///
+    /// 被移动的 pane 只在落进活跃标签页时拿到焦点（`commit` 的 focus 规则）：后台标签页的
+    /// pane 成不了 first responder，为此切标签页又违背"拖动是整理动作"。
+    private func transferPane(_ id: UUID,
+                              within: (WindowArrangement) -> WindowArrangement?,
+                              into: (WindowArrangement) -> WindowArrangement?) -> Bool {
+        guard let location = AppState.shared.runningPanes().first(where: { $0.pane.dragIdentifier == id })
+        else { return false }
         let source = location.controller
         let pane = location.pane
-        let sameWindow = source === self
-        guard let inserted = insert(sameWindow ? removed : arrangement) else { return nil }
-        let records = sameWindow
-            ? [(self, arrangementRecord())]
-            : [(source, source.arrangementRecord()), (self, arrangementRecord())]
-        if sameWindow {
-            guard commit(inserted) else { return nil }
+        if source === self {
+            let before = arrangement
+            guard let next = within(arrangement), commit(next, focus: id) else { return false }
+            registerArrangementUndo([(self, before)])
         } else {
-            guard commit(inserted, incoming: [pane]) else { return nil }
-            bind(pane: pane)
+            guard let removed = source.arrangement.removingPane(id),
+                  let inserted = into(arrangement) else { return false }
+            let records = [(source, source.arrangement), (self, arrangement)]
+            // 先接回调再提交：提交里交还焦点时，焦点回调要落到本窗口，而不是还没注销它的源窗口。
+            wireCallbacks(of: pane)
+            guard commit(inserted, incoming: [pane], focus: id) else {
+                source.wireCallbacks(of: pane)
+                return false
+            }
             source.commit(removed)
-            source.lastFocusedPane = source.activePane
-            source.updateWindowTitle(for: source.activePane)
+            registerArrangementUndo(records)
         }
-        registerArrangementUndo(records)
-        return pane
-    }
-
-    /// 只在 pane 落进活跃标签页时交还焦点：后台标签页的 pane 成不了 first responder，
-    /// 为此切标签页又违背"拖动是整理动作"。
-    private func focusMovedPane(_ pane: PaneView) {
-        guard let host = tab(hosting: pane), host === activeTab else { return }
-        lastFocusedPane = pane
-        pane.focusTerminal()
-        updateWindowTitle(for: pane)
-    }
-
-    /// 一个窗口在某一刻的完整编排，撤销时原样恢复。
-    ///
-    /// 对齐 Ghostty 上游用值类型整树快照做 undo。以前的树是活视图层级，只能记
-    /// "原邻居 + 方位"再走一遍移动去近似还原，比例丢失，原邻居一关就失效；
-    /// 现在直接存编排本身。
-    private struct ArrangementRecord {
-        let tabs: [TabLayout]
-        let titles: [UUID: String]
-        let activeTab: UUID?
-
-        var panes: Set<UUID> { Set(tabs.flatMap(\.layout.panes)) }
+        return true
     }
 
     private struct WeakController {
         weak var controller: TerminalWindowController?
     }
 
-    private func arrangementRecord() -> ArrangementRecord {
-        ArrangementRecord(
-            tabs: arrangement,
-            titles: Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.title) }),
-            activeTab: activeTab?.id)
-    }
-
-    /// 注册撤销：把涉及的窗口恢复到操作之前的编排。恢复本身也走 `commit` 并反向注册
-    /// 一次，于是撤销中执行的那次注册自动成为重做（NSUndoManager 语义）。
-    private func registerArrangementUndo(_ records: [(TerminalWindowController, ArrangementRecord)]) {
+    /// 注册撤销：把涉及的窗口恢复到操作之前的编排。
+    ///
+    /// 对齐 Ghostty 上游用值类型整树快照做 undo：记录就是那一刻的 `WindowArrangement`
+    /// 本身。恢复也走 `commit` 并反向注册一次，于是撤销中执行的那次注册自动成为重做
+    /// （NSUndoManager 语义）。
+    private func registerArrangementUndo(_ records: [(TerminalWindowController, WindowArrangement)]) {
         guard let undoManager = window?.undoManager else { return }
         let entries = records.map { (WeakController(controller: $0.0), $0.1) }
         undoManager.registerUndo(withTarget: self) { target in
@@ -961,22 +855,22 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 只在涉及窗口里的 pane 集合与当时一致时生效：期间有 pane 被关掉或新建，按旧编排
     /// 恢复要么指向不存在的视图，要么把新 pane 从树里挤掉（等于关掉它），两者都不能做，
     /// 这种撤销静默作废。
-    private func restoreArrangements(_ entries: [(WeakController, ArrangementRecord)]) {
+    private func restoreArrangements(_ entries: [(WeakController, WindowArrangement)]) {
         let live = entries.compactMap { entry in entry.0.controller.map { ($0, entry.1) } }
         guard live.count == entries.count else { return }
-        let current = live.map { ($0.0, $0.0.arrangementRecord()) }
+        let current = live.map { ($0.0, $0.0.arrangement) }
         let now = current.reduce(into: Set<UUID>()) { $0.formUnion($1.1.panes) }
         let then = live.reduce(into: Set<UUID>()) { $0.formUnion($1.1.panes) }
         guard now == then else { return }
         // 先把视图收拢到手里：逐个窗口提交时，前一个窗口注销的 pane 可能正要被后一个接收。
         let views = live.flatMap { $0.0.panes() }
         for (controller, record) in live {
-            let incoming = views.filter { record.panes.contains($0.dragIdentifier) }
+            let wanted = Set(record.panes)
+            let incoming = views.filter { wanted.contains($0.dragIdentifier) }
             for pane in incoming where controller.paneRegistry[pane.dragIdentifier] == nil {
-                controller.bind(pane: pane)
+                controller.wireCallbacks(of: pane)
             }
-            controller.commit(record.tabs, titles: record.titles, incoming: incoming,
-                              select: record.activeTab.map(TabSelection.tab) ?? .keep)
+            controller.commit(controller.arrangement.restoring(record), incoming: incoming)
         }
         registerArrangementUndo(current)
     }
@@ -984,26 +878,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - 分屏尺寸与放大
 
     /// 只改比例、不改结构的更新：没有 pane 进出、没有标签页增减，不走 commit。
-    private func updateLayout(of tab: TerminalTab, to layout: PaneLayout, persist: Bool = true) {
-        guard layout != tab.layout else { return }
-        tab.layout = layout
+    private func updateLayout(ofTab id: UUID, to layout: PaneLayout, persist: Bool = true) {
+        guard let next = arrangement.resizingLayout(ofTab: id, to: layout), let tab = next.tab(id) else { return }
+        arrangement = next
         render(tab)
         if persist { WorkspaceStore.shared.scheduleSave() }
     }
 
     /// equalize_splits：活跃标签页内全部分屏均分
     func equalizeAllSplits() {
-        guard let tab = activeTab else { return }
-        updateLayout(of: tab, to: tab.layout.equalized())
+        guard let tab = arrangement.activeTab else { return }
+        updateLayout(ofTab: tab.id, to: tab.layout.equalized())
     }
 
     /// Ghostty `toggle_split_zoom`：只放大目标 pane，再次调用原样恢复整棵树。
     /// 其余 pane 只是隐藏、不离开视图层级，IOSurface layer 和 PTY 生命周期不变。
     @discardableResult
     func toggleSplitZoom(_ pane: PaneView) -> Bool {
-        guard let tab = activeTab, panes(in: tab).count > 1,
-              tab.layout.contains(pane.dragIdentifier) else { return false }
-        tab.zoomedPane = tab.zoomedPane == nil ? pane.dragIdentifier : nil
+        guard let active = arrangement.activeTabID, panes(inTab: active).count > 1,
+              let next = arrangement.togglingZoom(pane.dragIdentifier),
+              let tab = next.tab(active) else { return false }
+        arrangement = next
         render(tab)
         pane.focusTerminal()
         return true
@@ -1011,23 +906,41 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// resize_split：把目标 pane 朝 direction 的边界向外推 amount（贴窗口边缘时无操作）
     func resizeSplit(_ pane: PaneView, direction: SplitDirection, amount: CGFloat) {
-        guard let tab = tab(hosting: pane) else { return }
-        let container = tab.container
-        updateLayout(of: tab, to: tab.layout.resizing(
+        guard let id = arrangement.tabID(hosting: pane.dragIdentifier),
+              let tab = arrangement.tab(id), let container = containers[id] else { return }
+        updateLayout(ofTab: id, to: tab.layout.resizing(
             pane.dragIdentifier, toward: direction.edge, by: amount, in: container.bounds,
             dividerThickness: PaneLayoutView.dividerThickness,
             scale: container.window?.backingScaleFactor ?? 2,
             minimumSize: PaneLayoutView.minimumPaneSize))
     }
 
-    /// core close_surface / shell 退出：从树里移除；标签页移空即关（最后一个标签页进空态）。
+    /// core close_surface / shell 退出 / pane ✕：从树里移除；标签页移空即关（最后一个标签页进空态）。
     func close(pane: PaneView) {
-        guard let host = tab(hosting: pane),
-              let next = TabArrangement.removing(pane.dragIdentifier, from: arrangement) else { return }
-        let hostWasActive = host === activeTab
-        commit(next)
-        // 标签页还在：焦点交给同标签页剩下的 pane；标签页没了由 commit 切到邻居。
-        if hostWasActive, host === activeTab { panes(in: host).first?.focusTerminal() }
+        close(panes: [pane.dragIdentifier])
+    }
+
+    /// 关闭的唯一入口：pane ✕、shell 退出、容器行 ✕、close_tab、清空窗口都走这里。
+    ///
+    /// 1. 对每个将被移除的 pane 对账 Agent 进程：退出通知可能还排在主队列里，关掉之后就没有
+    ///    机会再核对了。surface 随 pane 注销释放，这里不负责。
+    /// 2. 用编排算出移除后的样子，一次提交。本窗口没有的身份忽略。
+    /// 3. 焦点交接：当前标签页丢了 pane 但还在时，正在用的 pane 没被关就留在它身上，
+    ///    被关的正是它才交给剩下的第一个 pane；标签页没了由 commit 落到邻居。
+    ///
+    /// 不弹确认：是否确认关闭是产品决定，由调用方（例如 `requestClearTabs`）自己决定。
+    func close(panes ids: Set<UUID>) {
+        guard let next = arrangement.removingPanes(ids) else { return }
+        let doomed = arrangement.panes.filter(ids.contains)
+        doomed.compactMap { paneRegistry[$0] }.forEach { $0.reconcileSessionProcess() }
+        let active = arrangement.activeTabID
+        let hostWasActive = active.flatMap(arrangement.tab)?.layout.panes.contains(where: ids.contains) == true
+        var focus: UUID?
+        if hostWasActive, let remaining = active.flatMap(next.tab)?.layout.panes {
+            let current = activePane?.dragIdentifier
+            focus = current.flatMap { remaining.contains($0) ? $0 : nil } ?? remaining.first
+        }
+        commit(next, focus: focus)
     }
 
     // MARK: - pane 导航
@@ -1412,61 +1325,57 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - 会话快照（重启恢复）
 
-    /// 本窗口的快照；没有标签页（空态）→ nil，不值得恢复。
+    /// 本窗口的快照；没有标签页（空态）→ nil，不值得恢复。比例直接取自模型，不再从视图尺寸反算。
     func snapshot() -> WindowSnapshot? {
-        let tabSnapshots = tabs.compactMap { tab -> TabSnapshot? in
-            guard let node = snapshotNode(tab.layout) else { return nil }
-            return TabSnapshot(title: tab.title, root: node)
-        }
-        guard !tabSnapshots.isEmpty else { return nil }
+        guard let captured = arrangement.snapshot({ tab -> TabSnapshot? in
+            guard let root = SplitNodeSnapshot(tab.layout, leaf: { paneRegistry[$0]?.snapshot() }) else { return nil }
+            return TabSnapshot(title: tab.title.displayed, customTitle: tab.title.isCustom,
+                               titleNumber: tab.title.number, root: root)
+        }) else { return nil }
         return WindowSnapshot(
             frame: window?.frame,
-            activeTabIndex: min(max(activeTabIndex, 0), tabSnapshots.count - 1),
-            tabs: tabSnapshots,
+            activeTabIndex: captured.activeIndex,
+            tabs: captured.tabs,
             taskPanelOpen: taskPanel != nil,
             tabSidebarOpen: tabSidebar != nil,
             primarySidebarMode: primarySidebarMode.rawValue)
     }
 
-    /// 比例直接取自模型，不再从视图尺寸反算。
-    private func snapshotNode(_ layout: PaneLayout) -> SplitNodeSnapshot? {
-        switch layout {
-        case .pane(let id):
-            return paneRegistry[id].map { .pane($0.snapshot()) }
-        case .split(let axis, let branches):
-            let children = branches.compactMap { snapshotNode($0.node) }
-            guard children.count == branches.count else { return nil }
-            // 快照的 vertical 沿用 NSSplitView.isVertical 的含义：分隔线竖着 = 左右并排。
-            return .split(vertical: axis == .horizontal, fractions: branches.map(\.weight), children: children)
-        }
-    }
-
     /// 按快照重建整窗：第一个标签页的树序首叶作 initialPane 走常规 init，其余叶子、
     /// 分屏树与其他标签页算成一份编排一次提交，比例随模型直接落地；
-    /// frame、活跃标签页、侧栏开合在首帧回填。
-    convenience init(restoring snapshot: WindowSnapshot) {
+    /// frame、侧栏开合在首帧回填。默认名的序号随提交占号，新标签页不与恢复出的重名。
+    convenience init(restoring snapshot: WindowSnapshot, tabNumbering: TabNumbering? = nil) {
         let firstTab = snapshot.tabs[0]
-        let initialPane = PaneView.restored(from: firstTab.root.firstLeaf)
-        self.init(initialPane: initialPane)
+        let initialPane = AppState.shared.paneLauncher.restoredPane(from: firstTab.root.firstLeaf)
+        self.init(initialPane: initialPane, tabNumbering: tabNumbering)
         suppressesInitialSize = true
         initialTaskPanelOpen = snapshot.taskPanelOpen
         initialTabSidebarOpen = snapshot.tabSidebarOpen
         primarySidebarMode = snapshot.primarySidebarMode.flatMap(PrimarySidebarMode.init(rawValue:)) ?? .handoff
 
+        // 树序第一个叶子沿用 init 已经建好（且已 install）的 initialPane，其余新建。
         var reuse: PaneView? = initialPane
         var created: [PaneView] = []
-        var next: [TabLayout] = []
-        var titles: [UUID: String] = [:]
+        var restored: [ArrangedTab] = []
         for (index, tabSnapshot) in snapshot.tabs.enumerated() {
-            guard let layout = restoredLayout(tabSnapshot.root, reuse: &reuse, created: &created) else { continue }
+            guard let layout = tabSnapshot.root.layout({ leaf -> UUID? in
+                if let existing = reuse {
+                    reuse = nil
+                    return existing.dragIdentifier
+                }
+                let pane = AppState.shared.paneLauncher.restoredPane(from: leaf)
+                install(pane: pane)
+                created.append(pane)
+                return pane.dragIdentifier
+            }) else { continue }
             // 标签页 0 沿用 init 已经建好的那个，其余新建
-            let id = index == 0 ? tabs[0].id : UUID()
-            next.append(TabLayout(id: id, layout: layout))
-            titles[id] = tabSnapshot.title
+            let id = index == 0 ? arrangement.tabs[0].id : UUID()
+            let title = TabTitle.restored(title: tabSnapshot.title, customTitle: tabSnapshot.customTitle,
+                                          number: tabSnapshot.titleNumber, defaultFormat: L("Tab %d"))
+            restored.append(ArrangedTab(id: id, layout: layout, title: title))
         }
-        commit(next, titles: titles, incoming: created)
-        selectTab(at: min(snapshot.activeTabIndex, tabs.count - 1))
-        seedTabCounter(from: snapshot.tabs.map(\.title))
+        commit(WindowArrangement(restoring: restored, activeIndex: snapshot.activeTabIndex), incoming: created)
+        presentActiveTab()
         let prefix = L("Terminal %d").replacingOccurrences(of: "%d", with: "")
         for leaf in snapshot.tabs.flatMap({ $0.root.leaves }) where leaf.name.hasPrefix(prefix) {
             if let number = Int(leaf.name.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)) {
@@ -1485,26 +1394,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             window.setFrame(frame, display: true)
         }
         revealWindowIfNeeded()  // 恢复窗不等 INITIAL_SIZE
-    }
-
-    /// 快照树 → 排布树。`reuse` 是已经存在（且已 install）的 pane，树序第一个叶子用它。
-    private func restoredLayout(_ node: SplitNodeSnapshot, reuse: inout PaneView?,
-                                created: inout [PaneView]) -> PaneLayout? {
-        switch node {
-        case .pane(let paneSnapshot):
-            if let existing = reuse {
-                reuse = nil
-                return .pane(existing.dragIdentifier)
-            }
-            let pane = PaneView.restored(from: paneSnapshot)
-            install(pane: pane)
-            created.append(pane)
-            return .pane(pane.dragIdentifier)
-        case .split(let vertical, let fractions, let children):
-            let nodes = children.compactMap { restoredLayout($0, reuse: &reuse, created: &created) }
-            let weights = nodes.count == children.count ? fractions : []
-            return PaneLayout.split(vertical ? .horizontal : .vertical, weights: weights, children: nodes)
-        }
     }
 
     // MARK: - 设置页（整窗覆盖）
@@ -1676,8 +1565,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sessionLibrary.removeWindow(sessionWindowID)
         // 主动关掉其中一个窗口 = 不要它了：快照只留其余窗口
         if !others.isEmpty { WorkspaceStore.shared.saveNow() }
-        // 整窗的绑定 pane 一起消失，其他窗口的侧栏活跃态需要跟着退
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        // 整窗消失是一次结构变化：别的窗口的第二侧栏跟上。绑定终端的「活跃」随终端释放
+        // 由 TaskBindings 自己广播，不靠这一条。
+        NotificationCenter.default.post(name: .lighttyWindowArrangementDidChange, object: nil)
     }
 }
 

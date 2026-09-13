@@ -1,24 +1,36 @@
 import Foundation
 import LighttyCore
 
+/// 界面上的「启动什么」：各家 Agent，外加不启动 Agent 的纯终端。
+/// Agent 本身的描述（程序名、显示名）取自 `SessionAgent`，这里只多出纯终端这一项。
 enum LaunchAgent: String, CaseIterable {
     case claudeCode, codex, terminal
 
-    var title: String {
-        switch self {
-        case .claudeCode: return "Claude Code"
-        case .codex: return "Codex"
-        case .terminal: return L("Terminal only")
+    /// 会话侧的同一家。rawValue 已经写进用户偏好（`lightty.agent.selected` 等），
+    /// 所以两个枚举不合并；映射用穷举 switch，多一家 Agent 时是编译错误。
+    init(_ agent: SessionAgent) {
+        switch agent {
+        case .claude: self = .claudeCode
+        case .codex: self = .codex
         }
+    }
+
+    /// nil = 纯终端，不启动 Agent。
+    var sessionAgent: SessionAgent? {
+        switch self {
+        case .claudeCode: return .claude
+        case .codex: return .codex
+        case .terminal: return nil
+        }
+    }
+
+    var title: String {
+        sessionAgent?.launchName ?? L("Terminal only")
     }
 
     /// 程序名而非路径：命令敲进用户自己的 shell，由 PATH 解析。
     var program: String {
-        switch self {
-        case .claudeCode: return "claude"
-        case .codex: return "codex"
-        case .terminal: return ""
-        }
+        sessionAgent?.executableName ?? ""
     }
 
     /// 每家 CLI 表达「跳过权限确认」的原生写法。开关是一个而不是每家一个：
@@ -93,7 +105,7 @@ enum AgentLaunchPreference {
     /// 所以程序名不参与——只有参数需要跟着当前设置走。
     static func launchArguments(for agent: SessionAgent,
                                 in defaults: PreferenceStorage = FilePreferences.shared) -> [String] {
-        let launch: LaunchAgent = agent == .codex ? .codex : .claudeCode
+        let launch = LaunchAgent(agent)
         return (bypassEnabled(in: defaults) ? launch.bypassArguments : [])
             + tokenize(customArguments(for: launch, in: defaults))
     }

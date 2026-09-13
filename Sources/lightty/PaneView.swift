@@ -2,8 +2,13 @@ import AppKit
 import LighttyCore
 
 extension Notification.Name {
-    /// 任务文件集合变化（创建/改名/绑定），已打开的侧边栏收到后 reload。
-    static let lighttyTasksDidChange = Notification.Name("lighttyTasksDidChange")
+    /// 窗口结构变化：`TerminalWindowController` 的 `commit` 收尾（标签页、pane 进出与重排）
+    /// 与 `windowWillClose`。无载荷，收到的一方自己重读。本窗口的第二侧栏由控制器直接刷新，
+    /// 这条广播让别的窗口的第二侧栏跟上，并触发工作区快照保存。
+    ///
+    /// 不承载任务文件或绑定变化：任务「活跃」由 `TaskBindings` 回答，终端释放时它自己发
+    /// `lighttyTaskBindingsDidChange`；任务文件变化是 `lighttyTasksDidChange`（都在 LighttyCore）。
+    static let lighttyWindowArrangementDidChange = Notification.Name("lighttyWindowArrangementDidChange")
 }
 
 /// pane 身份岛的 frame 规划：折叠胶囊与展开岛保持同一水平中点、同一顶边，
@@ -31,6 +36,8 @@ struct PaneIdentityMorphGeometry {
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
     let sessionLibrary: SessionLibrary
+    /// 绑定真值的所有者；本视图只读查询、订阅变更来刷新 header。
+    let taskBindings: TaskBindings
     var sessionState: PaneSessionState {
         guard let state = sessionLibrary.paneState(for: dragIdentifier) else {
             preconditionFailure("A live PaneView must be registered in its session model")
@@ -157,15 +164,9 @@ final class PaneView: NSView {
         applySessionState()
         WorkspaceStore.shared.scheduleSave()
     }
-    enum Binding {
-        case unnamed                 // 灰点「未命名」
-        case bound(fileURL: URL)     // 绿点，任务文件已存在
-    }
-
     let header = PaneHeaderView()
     let terminal: TerminalSurfaceView
     let dragIdentifier: UUID
-    private(set) var binding: Binding = .unnamed
     private var terminalSearchBar: TerminalSearchBar?
     /// 搜索条住在系统气泡里：这一档玻璃是 NSPopover 的私有框架视图自己画的，
     /// 用 NSVisualEffectView 复现不出来（材质、外观、窗口样式都试过）。
@@ -194,8 +195,11 @@ final class PaneView: NSView {
         if let top = numbers.max() { paneCounter = max(paneCounter, top) }
     }
 
-    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init(), sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary) {
+    init(surfaceConfiguration: TerminalSurfaceConfiguration = .init(),
+         sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary,
+         taskBindings: TaskBindings = AppState.shared.taskBindings) {
         self.sessionLibrary = sessionLibrary
+        self.taskBindings = taskBindings
         let paneID = UUID()
         dragIdentifier = paneID
         // pane 身份下发给 shell：agent 的 hook 是 shell 的孙进程，环境变量沿进程树
@@ -247,9 +251,9 @@ final class PaneView: NSView {
         header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
         // ✕ 走内核关闭流程（与 cmd+W 同路），最终回到 close_surface_cb
         header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
+        // 进程对账归窗口控制器的关闭入口，所有关闭路径只做一次。
         terminal.onCloseRequest = { [weak self] in
             guard let self else { return }
-            self.reconcileSessionProcess()
             self.onClose?(self)
         }
         terminal.onCommandFinished = { [weak self] date in self?.shellCommandFinished(at: date) }
@@ -264,76 +268,51 @@ final class PaneView: NSView {
         // 能一网打尽的点；跨窗口拖动时 PaneView 本体存活，不会误触发。
         NotificationCenter.default.addObserver(self, selector: #selector(sessionsDidChange(_:)),
             name: .lighttySessionLibraryDidChange, object: sessionLibrary)
+        NotificationCenter.default.addObserver(self, selector: #selector(taskBindingsDidChange(_:)),
+            name: .lighttyTaskBindingsDidChange, object: taskBindings)
     }
 
     deinit {
         let paneID = dragIdentifier
         NotificationCenter.default.removeObserver(self)
         let library = sessionLibrary
+        let bindings = taskBindings
         // deinit 不保证在主线程；store 是主线程独占的
         if Thread.isMainThread {
             library.removePane(paneID)
+            bindings.removePane(paneID)
         } else {
-            DispatchQueue.main.async { library.removePane(paneID) }
+            DispatchQueue.main.async {
+                library.removePane(paneID)
+                bindings.removePane(paneID)
+            }
         }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     /// 绑定任务：只改 pane 指向与 pill 显示，不动 pane 名（pane 名是独立会话态标签）。
+    /// 指针文件、header 刷新、广播都由 `TaskBindings` 与下面的变更回调完成。
     func bind(to fileURL: URL, name: String) {
-        binding = .bound(fileURL: fileURL)
-        header.setTaskName(name)
-        header.dot = .active
-        syncTaskPointer()
-        refreshIdentityPanel()
-        onMetadataChange?(self)
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
+        taskBindings.bind(dragIdentifier, to: fileURL, name: name)
     }
 
     /// 解除绑定：pane 回到无任务状态，pane 名保持不变。
     func unbind() {
-        binding = .unnamed
-        header.setTaskName(nil)
-        header.dot = .unnamed
-        syncTaskPointer()
+        taskBindings.unbind(dragIdentifier)
+    }
+
+    var boundTask: BoundTask? { taskBindings.task(for: dragIdentifier) }
+    var taskFileURL: URL? { boundTask?.fileURL }
+
+    /// header 的任务名与圆点只从绑定变更派生：绑定、改名、归档、删除从哪里发起都走这一处。
+    @objc private func taskBindingsDidChange(_ notification: Notification) {
+        guard TaskBindingChange.from(notification)?.panes[dragIdentifier] != nil else { return }
+        let task = boundTask
+        header.setTaskName(task?.name)
+        header.dot = task == nil ? .unnamed : .active
         refreshIdentityPanel()
         onMetadataChange?(self)
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-    }
-
-    /// 任务被（本 pane 或他处）重命名后的同步：更新指向与 pill，不发通知
-    /// （由发起方统一广播）。
-    func noteTaskRenamed(to newURL: URL, name: String) {
-        guard case .bound = binding else { return }
-        binding = .bound(fileURL: newURL)
-        header.setTaskName(name)
-        syncTaskPointer()
-        refreshIdentityPanel()
-    }
-
-    /// 把当前绑定的任务文件路径写进 pane 运行时目录，供 agent hook 读取并注入上下文
-    /// （docs/specs/pane-status.md §8）。hook 在 SessionStart 与 UserPromptSubmit 都会查，
-    /// 所以先开 agent 再绑/新建/改名也能拿到。解绑时删掉指针，连同 hook 的去重标记：
-    /// 否则同一会话里解绑再绑回同一任务，hook 会以为已经注过而跳过。
-    ///
-    /// 改名走 TaskStore 的移动语义，路径会变——所以 bind/unbind/rename 三处都要同步，
-    /// 否则 hook 会读到一个已经不存在的路径。
-    private func syncTaskPointer() {
-        let paneID = dragIdentifier.uuidString
-        let pointer = PaneRuntimeDirectory.taskPointerFile(for: paneID)
-        guard let url = taskFileURL else {
-            try? FileManager.default.removeItem(at: pointer)
-            try? FileManager.default.removeItem(at: PaneRuntimeDirectory.handoffMarkerFile(for: paneID))
-            return
-        }
-        try? PaneRuntimeDirectory.create(paneID: paneID)
-        try? PaneRuntimeDirectory.atomicWrite(Data((url.path + "\n").utf8), to: pointer)
-    }
-
-    var taskFileURL: URL? {
-        if case .bound(let url) = binding { return url }
-        return nil
     }
 
     /// 建档写入的 `cwd` = 任务创建现场。首选 shell 的 OSC PWD：agent 全屏期间
@@ -354,22 +333,6 @@ final class PaneView: NSView {
         return FileManager.default.homeDirectoryForCurrentUser.path
     }
 
-    /// 恢复任务用的 pane 工厂：新 shell 直接生在任务的 `cwd`（创建现场），
-    /// agent 起来就在项目里，退出 agent 后 shell 也还在。目录已不存在则不传，
-    /// 回退内核默认目录——不能让 spawn 失败。气泡三目的地与 ⇧⇧ 搜索共用。
-    static func restoring(task: TaskFile, fileURL: URL, command: AgentCommand = .none) -> PaneView {
-        var configuration = TerminalSurfaceConfiguration()
-        configuration.command = command
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: task.workdir, isDirectory: &isDirectory),
-            isDirectory.boolValue {
-            configuration.workingDirectory = task.workdir
-        }
-        let pane = PaneView(surfaceConfiguration: configuration)
-        pane.bind(to: fileURL, name: task.name)
-        return pane
-    }
-
     // MARK: - 会话快照（重启恢复）
 
     /// Project the same association used by navigation; absence of a hook is not an exit.
@@ -388,43 +351,13 @@ final class PaneView: NSView {
             catalogConfiguration: association?.configuration)
     }
 
-    /// 按快照重建 pane：shell 生在原目录；agent 会话还活着就把 `--resume` 作为首段
-    /// 输入敲进去（此时 cwd 取 agent 自报目录——会话按项目目录归档，换目录找不到）；
-    /// 任务文件还在就重新绑定；名字原样回填。恢复依赖缺失时保留意图但不启动 Agent。
-    static func restored(from snapshot: PaneSnapshot, sessionLibrary: SessionLibrary = AppState.shared.sessionLibrary,
-                         locateExecutable: (String) -> String? = HookInstaller.locateExecutable) -> PaneView {
-        var configuration = TerminalSurfaceConfiguration()
-        let association = PaneSessionAssociation(snapshot: snapshot, home: FileManager.default.homeDirectoryForCurrentUser)
-        let preferred = association?.workingDirectory ?? snapshot.workingDirectory
-        if let directory = preferred, Self.isDirectory(directory) {
-            configuration.workingDirectory = directory
-        }
-        var restoredAssociation: PaneSessionAssociation?
-        if let association, Self.isDirectory(association.workingDirectory),
-           let executable = locateExecutable(association.key.agent.rawValue),
-           let plan = try? association.resumePlan(executable: executable) {
-            configuration.command = .resume(plan)
-            restoredAssociation = association
-        }
-        let pane = PaneView(surfaceConfiguration: configuration, sessionLibrary: sessionLibrary)
-        if let restoredAssociation { sessionLibrary.associate(.restoring(restoredAssociation), with: pane.dragIdentifier) }
-        else if let association { sessionLibrary.associate(.unavailable(association), with: pane.dragIdentifier) }
-        sessionLibrary.renamePane(pane.dragIdentifier, to: snapshot.name)
-        pane.needsWindowNumber = false
-        pane.applySessionState()
-        if let path = snapshot.taskFile {
-            let url = URL(fileURLWithPath: path)
-            if let task = try? AppState.shared?.taskStore.load(at: url) {
-                pane.bind(to: url, name: task.name)
-            }
-        }
-        return pane
-    }
-
-    private static func isDirectory(_ path: String) -> Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-            && isDirectory.boolValue
+    /// 重启恢复：装进窗口之前确立恢复意图与原来的终端名。怎么从快照算出这两样归
+    /// `PaneLauncher`；这里只落到模型上。不排保存——恢复途中还没有完整的现场可写。
+    func restore(sessionIntent: PaneSessionState.Binding, name: String) {
+        if sessionIntent != .none { sessionLibrary.associate(sessionIntent, with: dragIdentifier) }
+        sessionLibrary.renamePane(dragIdentifier, to: name)
+        needsWindowNumber = false
+        applySessionState()
     }
 
     // MARK: - 身份面板（灵动岛式展开）
@@ -472,35 +405,32 @@ final class PaneView: NSView {
             if !self.renameSession(to: name) { NSSound.beep() }
         }
         panel.taskProvider = { [weak self] in
-            let running = AppState.shared.runningPanes()
-            let current = self?.taskFileURL?.standardizedFileURL
-            return AppState.shared.taskStore.list().tasks
+            guard let self else { return [] }
+            let current = self.taskFileURL?.standardizedFileURL
+            return self.taskBindings.store.list().tasks
                 .sorted { $0.task.updated > $1.task.updated }
                 .map { entry in
                     PaneIdentityPanel.TaskChoice(
                         name: entry.task.name,
                         fileURL: entry.fileURL,
-                        running: running.contains {
-                            $0.pane !== self && $0.pane.taskFileURL?.standardizedFileURL
-                                == entry.fileURL.standardizedFileURL
-                        },
+                        running: !self.taskBindings.panes(for: entry.fileURL)
+                            .subtracting([self.dragIdentifier]).isEmpty,
                         current: current == entry.fileURL.standardizedFileURL)
                 }
         }
         panel.onBindTask = { [weak self] url in
-            guard let entry = AppState.shared.taskStore.list().tasks.first(where: {
+            guard let self, let entry = self.taskBindings.store.list().tasks.first(where: {
                 $0.fileURL.standardizedFileURL == url.standardizedFileURL
             }) else { return }
-            self?.bind(to: entry.fileURL, name: entry.task.name)
+            self.bind(to: entry.fileURL, name: entry.task.name)
         }
         panel.onCreateTask = { [weak self] name in
             guard let self else { return }
             do {
-                let created = try AppState.shared.taskStore.create(
+                try self.taskBindings.createTask(
                     name: name,
                     workdir: self.taskCreationWorkingDirectory(),
-                    tool: nil)
-                self.bind(to: created.fileURL, name: name)
+                    bindingTo: self.dragIdentifier)
             } catch {
                 NSSound.beep()
                 NSLog("task create failed: \(error)")
@@ -521,10 +451,9 @@ final class PaneView: NSView {
                 : .blocked(reason: L("Busy"))
         }
         panel.onTaskRenameCommit = { [weak self] name in
-            guard let self, case .bound(let url) = self.binding else { return }
+            guard let self, let url = self.taskFileURL else { return }
             do {
-                _ = try AppState.shared.renameTask(at: url, to: name)
-                self.refreshIdentityPanel()
+                try self.taskBindings.renameTask(at: url, to: name)
             } catch {
                 NSSound.beep()
                 NSLog("task rename failed: \(error)")

@@ -18,8 +18,8 @@ enum AgentCommand {
     case start(LaunchAgent)
     /// 续接一段已存在的原生会话。
     case resume(SessionResumePlan)
-    /// 打开 CLI 自带的会话选择器。
-    case sessionPicker(SessionResumePlan)
+    /// 打开 CLI 自带的会话选择器。不指向任何会话，所以计划里没有会话身份。
+    case sessionPicker(SessionPickerPlan)
     /// 让 agent 自己改当前会话的名字。
     ///
     /// lightty 不另存一份「用户改名」：标题的所有权在 agent 那边（claude 写
@@ -53,7 +53,7 @@ enum AgentCommand {
         case .none: return nil
         case .start(let agent): return AgentLaunchPreference.initialInput(for: agent)
         case .resume(let plan): return plan.shellInput
-        case .sessionPicker(let plan): return plan.nativePickerInput
+        case .sessionPicker(let plan): return plan.shellInput
         case .rename(let name):
             // 一行一条命令：名字里的换行会把后面的部分变成发给模型的一句话。
             // 与官方接口那条路共用同一个清洗函数，否则同一个名字两条路会存成两个样子。
@@ -80,12 +80,21 @@ enum AgentCommand {
 
 extension SessionResumePlan {
     /// 续接计划在应用侧的唯一入口：bypass 与附加参数取自当前设置，调用方不必也
-    /// 无从自己拼。核心类型的初始化器没有给 `launchArguments` 默认值——漏传是编译
-    /// 错误，而不是一条悄悄退回默认审批模式的命令。
+    /// 无从自己拼。核心类型（`AgentLaunchContext` 及组合它的两种计划）的初始化器没有给
+    /// `launchArguments` 默认值——漏传是编译错误，而不是一条悄悄退回默认审批模式的命令。
     init(resuming session: AgentSession, executable: String,
          configuration: SessionConfigurationLocation, workingDirectory: String? = nil) throws {
         try self.init(session: session, executable: executable, configuration: configuration,
                       workingDirectory: workingDirectory,
                       launchArguments: AgentLaunchPreference.launchArguments(for: session.key.agent))
+    }
+}
+
+extension SessionPickerPlan {
+    /// 选择器计划在应用侧的唯一入口，参数取自当前设置，理由同上。
+    init(opening source: SessionCatalogSource, workingDirectory: String) throws {
+        try self.init(agent: source.agent, sourceRoot: source.root.path, executable: source.executable,
+                      configuration: source.configuration, workingDirectory: workingDirectory,
+                      launchArguments: AgentLaunchPreference.launchArguments(for: source.agent))
     }
 }

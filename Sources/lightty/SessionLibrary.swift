@@ -47,12 +47,12 @@ final class SessionLibrary {
     private var seen: [Query: Set<AgentSessionKey>] = [:]
     private var visited: [Query: Set<String>] = [:]
     private var activeRequests = 0
-    private var activeProviders: [SessionCatalogProvider] = []
+    private var activeProviders: [AgentSessionProvider] = []
     func hasMore(archived: Bool? = nil) -> Bool { cursors.keys.contains { archived == nil || $0.archived == archived } }
     private(set) var saving = false
     private(set) var loaded = false
     private(set) var organizationReady = false
-    private let providers: [SessionCatalogProvider]?
+    private let providers: [AgentSessionProvider]?
     private let fileURL: URL
     private let diskQueue = DispatchQueue(label: "lightty.session-library.storage")
     private var generation = 0
@@ -67,7 +67,7 @@ final class SessionLibrary {
         refresh()
     }
 
-    init(fileURL: URL, providers: [SessionCatalogProvider]? = nil,
+    init(fileURL: URL, providers: [AgentSessionProvider]? = nil,
          statusStore: PaneStatusStore = .shared, metadataRefreshDelay: TimeInterval = 1.5,
          hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier) {
         self.hostProcessID = hostProcessID
@@ -223,12 +223,17 @@ final class SessionLibrary {
 
     func source(for agent: SessionAgent) -> SessionCatalogSource? {
         if let providers { return providers.first { $0.source.agent == agent }?.source }
-        let command = agent == .codex ? "codex" : "claude"
-        guard let executable = HookInstaller.locateExecutable(command) else { return nil }
+        guard let executable = HookInstaller.locateExecutable(agent.executableName) else { return nil }
         let configuration = SessionConfigurationLocation.resolve(
             agent: agent, environment: ProcessInfo.processInfo.environment)
         let root = configuration.root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser)
         return SessionCatalogSource(agent: agent, root: root, executable: executable, configuration: configuration)
+    }
+
+    /// 改名、删除、占用检测用的 provider。注入了 provider（测试）就只认注入的那几个。
+    func provider(for agent: SessionAgent) -> AgentSessionProvider? {
+        if let providers { return providers.first { $0.source.agent == agent } }
+        return source(for: agent)?.makeProvider()
     }
 
     func refresh(includeArchived: Bool = true) {
@@ -239,10 +244,7 @@ final class SessionLibrary {
         activeRequests = 0
         errors = [:]
         let sources = SessionAgent.allCases.compactMap { source(for: $0) }
-        activeProviders = providers ?? sources.map {
-            $0.agent == .codex ? CodexSessionCatalog(source: $0) as SessionCatalogProvider
-                : ClaudeSessionCatalog(source: $0)
-        }
+        activeProviders = providers ?? sources.map { $0.makeProvider() }
         for agent in SessionAgent.allCases where !sources.contains(where: { $0.agent == agent }) {
             errors[agent] = L("CLI was not found on this Mac.")
         }

@@ -3,7 +3,7 @@ import LighttyCore
 import Testing
 @testable import lightty
 
-private final class RestoredTitleCatalog: SessionCatalogProvider {
+private final class RestoredTitleCatalog: CatalogOnlyProvider {
     let source: SessionCatalogSource
     let record: AgentSession
     private let lock = NSLock()
@@ -45,7 +45,7 @@ extension SessionAssociationTests {
         }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
             providers: records.map { RestoredTitleCatalog(
-                source: .init(agent: $0.key.agent, root: root, executable: "/bin/echo"), record: $0) })
+                source: .init(agent: $0.key.agent, root: root, executable: "/bin/echo", configuration: .custom(root.path)), record: $0) })
         AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false, sessionLibrary: library)
         library.start() // Application startup loads the model before restoring windows.
         let controller = TerminalWindowController(restoring: .init(activeTabIndex: 0,
@@ -54,7 +54,7 @@ extension SessionAssociationTests {
         AppState.shared.windowControllers = [controller]
         defer { controller.window?.close() }
         let panes = records.map { record in
-            PaneView.restored(from: .init(name: "Terminal fallback", agentCWD: root.path,
+            restoredPane(from: .init(name: "Terminal fallback", agentCWD: root.path,
                 agentAlive: true, catalogSession: record.key, catalogConfiguration: .custom(root.path)),
                 locateExecutable: { _ in "/bin/echo" })
         }
@@ -102,7 +102,7 @@ extension SessionAssociationTests {
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "once"),
                                   title: "Once", workingDirectory: nil, updatedAt: nil)
         let provider = RestoredTitleCatalog(
-            source: .init(agent: .claude, root: root, executable: "/bin/echo"), record: record)
+            source: .init(agent: .claude, root: root, executable: "/bin/echo", configuration: .custom(root.path)), record: record)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [provider])
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false, sessionLibrary: library)

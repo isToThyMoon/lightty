@@ -1,18 +1,5 @@
 import Foundation
 
-
-
-/// 关联会话条目，序列化为 `<tool>:<session-id>`
-public struct TaskSession: Equatable, Hashable {
-    public var tool: String
-    public var id: String
-
-    public init(tool: String, id: String) {
-        self.tool = tool
-        self.id = id
-    }
-}
-
 /// 解析错误：line 为 1-based 文件行号
 public struct TaskParseError: Error, Equatable, CustomStringConvertible {
     public let line: Int
@@ -27,19 +14,17 @@ public struct TaskParseError: Error, Equatable, CustomStringConvertible {
 }
 
 /// 单个任务文件的内存表示。格式规范见 docs/task-format.md。
+///
+/// 旧字段 `status` 与 `sessions` 2026-09-13 移除：没有任何一方读它们的语义，
+/// 应用也从不写 `sessions`。旧文件里的这两项读时忽略、写时丢弃——不进
+/// `unknownLines`，否则它们会被当未知键永远搬运下去。
 public struct TaskFile: Equatable {
     public var name: String
-    /// 已弃用字段（docs/task-format.md）：任何一方不读其语义。原为
-    /// active|stuck|done 枚举；agent 手写文件常用 completed 等自然词，
-    /// 为死字段的取值校验把整个文件从列表毙掉不成比例，2026-09-04 起
-    /// 改为原样保留的字符串，读写不校验取值。
-    public var status: String
     /// 任务创建现场的工作目录（规范键 `workdir`；旧键 `cwd` 仅读取兼容，写入不再输出）
     public var workdir: String
     public var tool: String?
     public var created: Date
     public var updated: Date
-    public var sessions: [TaskSession]
     /// 未知键的原始行（不含换行符），保序保真，写回时原样输出
     public var unknownLines: [String]
     /// 正文，读写字节原样保留（包括结尾换行有无）；UTF-8 合法字符串可无损往返
@@ -47,22 +32,18 @@ public struct TaskFile: Equatable {
 
     public init(
         name: String,
-        status: String,
         workdir: String,
         tool: String? = nil,
         created: Date,
         updated: Date,
-        sessions: [TaskSession] = [],
         unknownLines: [String] = [],
         body: String = ""
     ) {
         self.name = name
-        self.status = status
         self.workdir = workdir
         self.tool = tool
         self.created = created
         self.updated = updated
-        self.sessions = sessions
         self.unknownLines = unknownLines
         self.body = body
     }
@@ -116,12 +97,11 @@ public struct TaskFile: Equatable {
 
         // 逐行解析键值
         var name: String?
-        var status: String?
         var workdir: String?
         var tool: String?
         var created: Date?
         var updated: Date?
-        var sessions: [TaskSession] = []
+        // 旧 sessions: 块内。块里的条目行整行跳过、不校验：字段已删，条目写成什么样都不该毙掉整个文件
         var inSessions = false
         var unknownLines: [String] = []
         var seenKeys = Set<String>()
@@ -129,18 +109,8 @@ public struct TaskFile: Equatable {
         for (line, text) in fmLines {
             if text.hasPrefix("  - ") {
                 guard inSessions else {
-                    throw TaskParseError(line: line, message: "列表条目只允许出现在 sessions: 块内")
+                    throw TaskParseError(line: line, message: "列表条目只允许出现在旧 sessions: 块内")
                 }
-                let entry = text.dropFirst(4)
-                guard let colon = entry.firstIndex(of: ":") else {
-                    throw TaskParseError(line: line, message: "会话条目缺少 : 分隔")
-                }
-                let tool = String(entry[..<colon])
-                let id = String(entry[entry.index(after: colon)...])
-                guard !tool.isEmpty, !id.isEmpty else {
-                    throw TaskParseError(line: line, message: "会话条目 tool 与 id 均不得为空")
-                }
-                sessions.append(TaskSession(tool: tool, id: id))
                 continue
             }
             inSessions = false
@@ -178,8 +148,9 @@ public struct TaskFile: Equatable {
             switch key {
             case "name":
                 name = value
-            case "status":
-                status = value
+            case "status", "sessions":
+                // 已移除的旧字段：读时忽略，写时自然丢弃
+                break
             case "workdir":
                 workdir = value
             case "tool":
@@ -200,7 +171,6 @@ public struct TaskFile: Equatable {
         }
 
         guard let name else { throw TaskParseError(line: closingLine, message: "缺少必填键: name") }
-        guard let status else { throw TaskParseError(line: closingLine, message: "缺少必填键: status") }
         guard let workdir else {
             throw TaskParseError(line: closingLine, message: "缺少必填键: workdir")
         }
@@ -208,19 +178,18 @@ public struct TaskFile: Equatable {
         guard let updated else { throw TaskParseError(line: closingLine, message: "缺少必填键: updated") }
 
         return TaskFile(
-            name: name, status: status, workdir: workdir, tool: tool,
+            name: name, workdir: workdir, tool: tool,
             created: created, updated: updated,
-            sessions: sessions, unknownLines: unknownLines, body: body
+            unknownLines: unknownLines, body: body
         )
     }
 
     // MARK: - 序列化
 
-    /// 按规范固定键序输出：name、status、workdir、tool（有值）、created、updated、未知键、sessions（非空）
+    /// 按规范固定键序输出：name、workdir、tool（有值）、created、updated、未知键
     public func serialize() -> Data {
         var s = "---\n"
         s += "name: \(name)\n"
-        s += "status: \(status)\n"
         s += "workdir: \(workdir)\n"
         if let tool {
             s += "tool: \(tool)\n"
@@ -229,12 +198,6 @@ public struct TaskFile: Equatable {
         s += "updated: \(TaskDate.format(updated))\n"
         for line in unknownLines {
             s += line + "\n"
-        }
-        if !sessions.isEmpty {
-            s += "sessions:\n"
-            for session in sessions {
-                s += "  - \(session.tool):\(session.id)\n"
-            }
         }
         s += "---\n"
         s += body

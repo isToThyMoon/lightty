@@ -113,6 +113,40 @@ final class WorkspaceSnapshotTests: XCTestCase {
         AppState.shared.windowControllers.removeAll()
     }
 
+    /// 标签页名的存法：新快照显式存「是否改过名」与默认名序号；还没有这两个字段的旧快照
+    /// 读入时按旧规则迁移一次。恢复出的默认名序号全局占号，别的窗口新开的标签页不撞名。
+    func testTabTitlesPersistExplicitlyAndLegacySnapshotsMigrate() throws {
+        let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("session-titles-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: taskDirectory) }
+        _ = NSApplication.shared
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
+        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        defer { AppState.shared.windowControllers.removeAll() }
+
+        // 旧快照：只有 title 字符串。
+        let legacy = """
+        {"activeTabIndex":0,"taskPanelOpen":false,"tabSidebarOpen":false,"tabs":[
+          {"title":"\(L("Tab %d", 5))","root":{"kind":"pane","pane":{"name":"a","agentAlive":false}}},
+          {"title":"后端","root":{"kind":"pane","pane":{"name":"b","agentAlive":false}}}]}
+        """
+        let window = try JSONDecoder().decode(WindowSnapshot.self, from: Data(legacy.utf8))
+        XCTAssertNil(window.tabs[0].customTitle)
+        let restored = TerminalWindowController(restoring: window)
+        AppState.shared.windowControllers.append(restored)
+        XCTAssertEqual(restored.tabOverview().map(\.hasCustomTitle), [false, true])
+
+        let again = try XCTUnwrap(restored.snapshot())
+        XCTAssertEqual(again.tabs.map(\.customTitle), [false, true])
+        XCTAssertEqual(again.tabs.map(\.titleNumber), [5, nil])
+        XCTAssertEqual(again.tabs.map(\.title), [L("Tab %d", 5), "后端"])
+
+        let other = TerminalWindowController()
+        AppState.shared.windowControllers.append(other)
+        XCTAssertEqual(other.tabOverview().first?.title, L("Tab %d", 6), "恢复出的序号全局占号")
+        for controller in [restored, other] { controller.window?.close() }
+    }
+
     /// 最复杂场景：两个窗口、各两个标签页、**非活跃**标签页里有嵌套分屏（左右套上下），
     /// 整体快照 → 整体恢复 → 再快照，结构、命名、活跃标签页逐窗一致；恢复后新建 pane
     /// 的默认名不与恢复出的重名。

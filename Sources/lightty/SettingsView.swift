@@ -262,7 +262,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         case .appearance: buildAppearance(into: column)
         case .handoff: buildHandoff(into: column)
         case .archive:
-            if let store = AppState.shared?.taskStore {
+            if let store = AppState.shared?.taskBindings.store {
                 let archive = ArchivedTasksView(store: store)
                 column.addArrangedSubview(archive)
                 archive.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
@@ -516,7 +516,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         // 展示的是**裸写法**，不带路径：用户手敲不需要背一长串路径，技能自己会去
         // `~/.lightty/panes/$LIGHTTY_PANE_ID/task` 找回来。按钮发的那一份是带路径的
         // （见 `AgentCommand.handoff`），那是内部形式，不该摆在"你该输入什么"这里。
-        let agents: [(SessionAgent, LaunchAgent)] = [(.claude, .claudeCode), (.codex, .codex)]
+        let agents = SessionAgent.allCases.map { ($0, LaunchAgent($0)) }
         var unavailable: [String] = []
         for (agent, launch) in agents {
             let value = NSTextField(labelWithString:
@@ -590,18 +590,15 @@ final class SettingsView: NSView, NSTextFieldDelegate {
     private static let sampleTaskPath = "<task file path>"
 
     /// 注入的是任务文件**全文**（含 frontmatter）——「只重写结束 `---` 之后」那条
-    /// 指令得让 Agent 对着实物看，所以示意值也带上 frontmatter。`sessions` 要出现：
-    /// 它是唯一的多行键，也正是「别的 frontmatter 键一个都别动」最容易被违反的地方。
+    /// 指令得让 Agent 对着实物看，所以示意值也带上 frontmatter，键与 lightty 实际
+    /// 写出的一致。
     private static let sampleTaskFile = """
         ---
         name: Rewrite the launch composer
-        status: active
         workdir: /Users/me/project/app
         tool: claude
         created: 2026-09-01T09:00:00Z
         updated: 2026-09-08T17:20:00Z
-        sessions:
-          - claude:3551e356-5b15-43d1-86a5-69764b142807
         ---
         ## Next steps
         - …

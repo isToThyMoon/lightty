@@ -16,13 +16,15 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 
 ## 当前实现入口
 
-- TerminalWindowController：窗口、标签页、pane 树与双侧栏布局。
+- TerminalWindowController：窗口、标签页、pane 树与双侧栏布局；窗口的标签页、排布、标题、放大与焦点都在 LighttyCore 的 WindowArrangement 值里，改树只经 `commit`，关闭只经 `close(panes:)`。见 [pane 排布与移动](docs/specs/pane-layout.md)。
 - PrimarySidebar：第一侧栏外壳、模式标题及说明；HandoffSidebarContent / SessionsSidebarContent 分别承载两种内容。
 - LaunchComposer / SearchPalette：共享启动浮层；三个入口（Sessions 新建会话、Handoff 新建任务、任务开始处理）只是它的三组初值。ArchivedTasksView 管理设置中的归档恢复与彻底删除。
-- SessionLibrary / SessionCatalogProvider：分页会话目录、取消、项目持久化；CodexSessionCatalog / ClaudeSessionCatalog 隔离来源协议。
+- SessionLibrary / AgentSessionProvider：分页会话目录、取消、项目持久化；列表、改名、删除、占用检测、存活进程观测都经 provider，Agent 差异只在 CodexSessionProvider / ClaudeSessionProvider 里。调用 Agent CLI 与 node helper 的进程环境（清 LIGHTTY_*、PATH、配置目录变量、arm64 运行时路径）只在 AgentHelperProcess 里拼，只读系统工具（ps、lsof）用固定的最小 PATH 直接调；Agent 的可执行名、配置根、显示名集中在 SessionAgent 的扩展里。
 - Claude 官方 SDK helper：`node scripts/prepare-claude-helper.mjs` 准备 debug 依赖，再运行 `swift build && .build/debug/lightty`。打包脚本自动准备双架构运行时；应用运行时不下载依赖。
-- SessionResumeFlow：原生 CLI 恢复；目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
-- PaneView / TerminalSurfaceView：任务绑定与 libghostty surface。
+- PaneLauncher：由 lightty 发起的新终端（启动浮层、续接会话、原生会话选择器、任务开始处理、重启恢复）都构造启动请求交给它；删除互斥、已打开则聚焦、占用检查、会话关联、任务绑定、放置都在这里，结果交回调用方决定怎么提示。原生 CLI 恢复，目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
+- SessionResumeFlow：续接与原生选择器的呈现层，只按启动器的结果弹目录面板、占用提示和错误框。
+- TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 TaskFolderWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
+- PaneView / TerminalSurfaceView：终端视图与 libghostty surface；任务绑定只读查询 TaskBindings。
 - WorkspaceSnapshot / WorkspaceStore：窗口现场保存与重启恢复；不是全量 Agent 会话目录。
 - UserDataMigration / UserDataSchemas / JSONSchemaMigration：启动升级、各文件规则及纯内存版本转换，先于业务初始化。
 - AgentLaunchPreference：新任务默认 Agent 为 Codex，启动命令可在通用设置修改。
@@ -33,6 +35,11 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 构建依赖及从零安装步骤以 [README](README.md#building-from-source) 为准。
 本地调试运行：swift build && .build/debug/lightty；不要误开旧打包实例验证新代码。
 测试：swift test。终端适配门禁：scripts/check-terminal-adapter-parity.sh。
+全量测试要点：
+- 在 lightty 的 pane 里跑，先 `unset LIGHTTY_PANE_ID LIGHTTY_SOCK`。
+- 测试里不要广播全局偏好变化（例如 `LanguagePreference.set`）：之前测试留下的窗口会跟着重建，曾让进程稳定卡死在 `ghostty_surface_free`。
+- 机器负载高时（例如多个 worktree 同时跑），`PaneIdentityPanelTests` 偶发卡住，或主线程卡在 `ghostty_surface_free`。判断是不是回归，以单机串行重跑的结果为准。
+- `scripts/check-config-parity.sh` 会启动 lightty 二进制，入口会先对真实 `~/.lightty` 跑数据迁移，HOME 覆盖无效，先退出正在使用的 lightty 再跑。
 发布打包：scripts/package-app.sh。
 
 Ghostty 内核使用 lightty-patches 分支。更改内核后重新构建 vendor/ghostty、运行 scripts/sync-ghosttykit.sh，再构建 Swift；仅 swift build 不会重建内核。

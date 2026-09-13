@@ -1,24 +1,35 @@
 import AppKit
 import LighttyCore
 
-/// 全局状态：TaskStore（~/.lightty/tasks，唯一持久语义层）+ 存活窗口。
-/// TaskFolderWatcher 尚未接进壳（HANDOVER 7.4 已知限制）：文件外部更新后 UI 不自动刷新。
+/// 全局状态：任务绑定（连同它持有的 TaskStore，~/.lightty/tasks，唯一持久语义层）+ 存活窗口。
+/// 任务目录的监听也在任务绑定里：Agent 在外部写回任务文件，列表与终端标题自己跟上。
 final class AppState {
     static var shared: AppState!
 
-    let taskStore: TaskStore
+    /// 任务绑定的唯一所有者，也是新建 / 改名 / 归档 / 删除任务的入口（要传导到绑定的终端）。
+    /// 任务存储只经它的 `store` 访问：只读，或不影响绑定终端的写（例如只改 workdir）。
+    let taskBindings: TaskBindings
     let sessionLibrary: SessionLibrary
     var windowControllers: [TerminalWindowController] = []
+    /// 标签页默认名的序号源，全部窗口共用一份。
+    let tabNumbering = TabNumbering()
+    /// 造终端的唯一入口：检查、拼命令、关联、绑定、放置。删除会话期间的互斥也由它持有。
+    private(set) lazy var paneLauncher = PaneLauncher(
+        sessionLibrary: sessionLibrary, taskBindings: taskBindings,
+        runningPanes: { [weak self] in self?.runningPanes() ?? [] },
+        openWindow: { [weak self] pane in self?.newWindow(initialPane: pane) })
 
+    /// - Parameter taskFolderChanges: 任务目录变更源，测试注入手动触发的替身；默认是真实监听。
     init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true,
-         sessionLibrary: SessionLibrary? = nil) {
+         sessionLibrary: SessionLibrary? = nil,
+         taskFolderChanges: TaskFolderChangeSource = TaskFolderWatcher.changeSource) {
         // LIGHTTY_TASK_DIR：调试用的任务目录覆盖（跑一套假任务而不动 ~/.lightty/tasks）
         let override = ProcessInfo.processInfo.environment["LIGHTTY_TASK_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
         let dir = taskDirectory ?? override ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".lightty/tasks", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        self.taskStore = TaskStore(directory: dir)
+        self.taskBindings = TaskBindings(store: TaskStore(directory: dir), folderChanges: taskFolderChanges)
         self.sessionLibrary = sessionLibrary ?? SessionLibrary(fileURL: (taskDirectory != nil || override != nil ? dir : dir.deletingLastPathComponent())
             .appendingPathComponent(PersistenceFormat.organization.fileName), providers: taskDirectory != nil ? [] : nil)
         // 上次崩溃/强杀留下的 pane 运行时目录在这里回收（按 owner.pid 判活，
@@ -61,16 +72,11 @@ final class AppState {
         windowControllers.flatMap { c in c.panes().map { (c, $0) } }
     }
 
-    /// 任务重命名的唯一入口：移动文件 + 同步所有绑定该任务的 pane + 广播刷新。
-    /// pane 端 pill 菜单与侧栏详情页都走这里，避免两处各自为政漏同步。
-    @discardableResult
-    func renameTask(at url: URL, to name: String) throws -> URL {
-        let newURL = try taskStore.rename(at: url, to: name)
-        for (_, pane) in runningPanes()
-        where pane.taskFileURL?.standardizedFileURL == url.standardizedFileURL {
-            pane.noteTaskRenamed(to: newURL, name: name)
-        }
-        NotificationCenter.default.post(name: .lighttyTasksDidChange, object: nil)
-        return newURL
+    /// 绑着该任务、且此刻挂在窗口里的终端，按窗口树遍历序。谁绑着它由 `taskBindings`
+    /// 回答；这里只把终端身份落到可跳转的窗口位置上。
+    func boundPanes(of fileURL: URL) -> [(controller: TerminalWindowController, pane: PaneView)] {
+        let ids = taskBindings.panes(for: fileURL)
+        guard !ids.isEmpty else { return [] }
+        return runningPanes().filter { ids.contains($0.pane.dragIdentifier) }
     }
 }

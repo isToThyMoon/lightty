@@ -29,10 +29,26 @@ final class LeafTabRowTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    func testDefaultTitleDetection() {
-        XCTAssertEqual(TerminalTab.defaultTitleNumber(L("Tab %d", 7)), 7)
-        XCTAssertNil(TerminalTab.defaultTitleNumber("skills"))
-        XCTAssertNil(TerminalTab.defaultTitleNumber(""))
+    /// 标签页默认名是全局身份：侧栏跳转行直接拿它当位置说明，两个窗口不能各有一个「标签页 1」。
+    func testASecondWindowDoesNotRepeatTheFirstWindowsDefaultTabName() throws {
+        let other = TerminalWindowController()
+        defer { other.window?.close() }
+        XCTAssertNotEqual(other.tabOverview().first?.title, controller.tabOverview().first?.title)
+    }
+
+    /// 「用户改过名」是存下来的事实，不是拿标题去匹配当前语言的默认名格式反推出来的。
+    /// 以前的反推两头都错：切一次语言，默认名全被当成改过名；用户亲手起名「标签页 7」，
+    /// 又被当成默认名。这里验后一半——前一半不再有「反推」可言（`TabTitle` 只存序号，
+    /// 见 `WindowArrangementTests.testTitleParsingAndSnapshotMigration`）。
+    ///
+    /// 刻意不在测试里调 `LanguagePreference.set`：它广播全局的语言切换，全量运行时之前
+    /// 测试留下的每个窗口都跟着重建，曾稳定地让测试进程卡死在释放终端上。
+    func testCustomTitleIsStoredRatherThanInferredFromTheTitleText() throws {
+        XCTAssertEqual(controller.tabOverview().first?.hasCustomTitle, false)
+        let tabID = try XCTUnwrap(controller.tabOverview().first?.id)
+        controller.renameTab(withID: tabID, to: L("Tab %d", 7))
+        XCTAssertEqual(controller.tabOverview().first?.hasCustomTitle, true,
+                       "用户起的名字恰好长得像默认名，也仍是用户起的名字")
     }
 
     func testSinglePaneTabShowsPaneTitleWithoutContainerRow() throws {

@@ -51,7 +51,29 @@
 pane 行，不重建标签页树，也不改变选中项、滚动位置或输入焦点。
 
 底层 hook 通知仍供系统通知和状态菜单使用，但两个侧栏、pane/身份面板不直接订阅它。
-`lighttyTasksDidChange` 仅保留任务/现场结构相关用途，不再承载会话标题或 Agent 关联变化。
+
+会话之外，任务绑定、任务文件与窗口结构各有一条通知，都不承载会话标题或 Agent 关联变化：
+
+- `lighttyTaskBindingsDidChange`：`object` 是发出变更的 `TaskBindings`，载荷由
+  `TaskBindingChange.from(_:)` 读取——`cause`（绑定、解绑、终端释放，以及经 `TaskBindings`
+  发起的建档、改名、归档、删除）、每个受影响终端的 before / after 任务、涉及的任务文件。
+  操作完成时同步发出。终端标题、Handoff 列表、第二侧栏的任务名都订阅它；查询绑定一律问
+  `TaskBindings`，不各自扫窗口比对 URL。外部改了已绑定任务的 `name`，也以 `rename` 发出（见下条）。
+- `lighttyTasksDidChange`（定义在 LighttyCore）：`object` 是 `TaskBindings`，无载荷，收到的一方
+  自己重读。含义是「任务目录里的文件变了」，谁写的都算——lightty 自己的写入与 Agent 按交接协议
+  写回一视同仁。只有 `TaskBindings` 发：它持有任务目录的监听（生产用 `TaskFolderWatcher`，
+  创建时开始、释放时结束，目录打不开时不监听、记一条日志），目录事件防抖约 0.2 秒后在主线程
+  处理：先重读已绑定任务的名字，变了就发 `rename` 绑定变更；文件读不出来（不存在、内容写坏）
+  不算改名、不解绑，保留现状；然后发本通知。Handoff 列表订阅它，只认
+  `AppState.shared.taskBindings` 发出的那条。
+  自己写入也要等这一拍：需要立刻看到结果的视图自己重读（设置里的归档列表、启动浮层的目录
+  展示），不另发通知。归档子目录内的永久删除不触发它，Handoff 列表本就不显示归档任务。
+- `lighttyWindowArrangementDidChange`：无载荷。`TerminalWindowController` 在 `commit` 收尾与
+  `windowWillClose` 里发出，让别的窗口的第二侧栏跟上。任务「活跃」不靠它：只问 `TaskBindings`，
+  挪动终端、关窗不改绑定，终端释放时由 `TaskBindings` 发 `paneRemoved`。Handoff 列表不订阅它。
+
+窗口结构通知、任务绑定通知和 pane 状态通知会触发工作区快照的节流保存。快照只记任务文件路径，
+`lighttyTasksDidChange` 不触发保存。
 
 ## 验证
 
@@ -59,6 +81,7 @@ pane 行，不重建标签页树，也不改变选中项、滚动位置或输入
 - `RestoredSessionTitleTests` 覆盖 Handoff 模式冷启动、前后台 pane 和重复启动。
 - `SessionSurfaceConsistencyTests` 验证一个模型更新两个侧栏和 pane，且保留物化行身份。
 - `SessionRestorationTests`、`AgentProcessLifecycleTests` 保留快照兼容、真实进程退出与任务独立性的验证。
+- `TaskBindingsTests`（Core）验证每种操作发出的载荷与指针文件，以及任务目录变更：手动触发的变更源验证一次事件一条列表通知、外部改名同步到已绑定终端、文件消失或读不出不解绑、跨线程回到主线程、释放即停止监听；另有一条用真实 `TaskFolderWatcher` 验证「临时文件加 mv」到达一次。`PaneTaskBindingsTests` 用真实终端验证改名（含外部改名）、归档、删除传导到每个绑定终端，以及终端释放后任务不再算已打开。`HandoffSidebarReloadTests` 验证列表跟随外部写入与归档恢复，且不再随窗口结构变化重读。
 - `SessionPresenceTests` 覆盖真实关闭标签入口、多个本地窗口与外部进程并存、退出后的侧栏原地更新、PID 复用。
 
 本重构不改变工作区快照、任务文件、组织文件或 hook 报文的持久化格式。

@@ -28,8 +28,8 @@ final class ClaudeSessionCatalogTests: XCTestCase {
             if index == 1 { data.append(Data("{\"partial\":".utf8)) }
             try data.write(to: paths[index % 2].appendingPathComponent("\(id).jsonl"))
         }
-        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude")
-        let provider = ClaudeSessionCatalog(source: source, helperDirectory: helper)
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude", configuration: .custom(root.path))
+        let provider = ClaudeSessionProvider(source: source, helperDirectory: helper)
         let first = try provider.page(archived: false, cursor: nil, cancelled: { false })
         XCTAssertEqual(first.sessions.count, 100)
         XCTAssertEqual(first.nextCursor, "100")
@@ -43,18 +43,18 @@ final class ClaudeSessionCatalogTests: XCTestCase {
     }
 
     func testMetadataContractRejectsMalformedResponsesAndUsesMilliseconds() throws {
-        let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude")
+        let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude", configuration: .custom("/fixture"))
         let id = UUID().uuidString
         let data = Data("{\"version\":1,\"sessions\":[{\"id\":\"\(id)\",\"title\":\"name\",\"cwd\":null,\"updatedAt\":1700000000000}],\"nextCursor\":null}".utf8)
-        let page = try ClaudeSessionCatalog.decode(data, source: source, offset: 0)
+        let page = try ClaudeSessionProvider.decode(data, source: source, offset: 0)
         XCTAssertEqual(page.sessions.first?.updatedAt?.timeIntervalSince1970, 1700000000)
-        XCTAssertThrowsError(try ClaudeSessionCatalog.decode(Data("{\"version\":2,\"sessions\":[]}".utf8), source: source, offset: 0))
-        XCTAssertThrowsError(try ClaudeSessionCatalog.decode(Data("{\"version\":1,\"sessions\":[],\"nextCursor\":\"0\"}".utf8), source: source, offset: 0))
+        XCTAssertThrowsError(try ClaudeSessionProvider.decode(Data("{\"version\":2,\"sessions\":[]}".utf8), source: source, offset: 0))
+        XCTAssertThrowsError(try ClaudeSessionProvider.decode(Data("{\"version\":1,\"sessions\":[],\"nextCursor\":\"0\"}".utf8), source: source, offset: 0))
     }
 
     func testMissingHelperDoesNotFallBackToUserNodeOrPrivateParser() {
-        let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude")
-        let provider = ClaudeSessionCatalog(source: source, helperDirectory: URL(fileURLWithPath: "/missing-helper"))
+        let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude", configuration: .custom("/fixture"))
+        let provider = ClaudeSessionProvider(source: source, helperDirectory: URL(fileURLWithPath: "/missing-helper"))
         XCTAssertThrowsError(try provider.page(archived: false, cursor: nil, cancelled: { false }))
     }
 
@@ -116,8 +116,8 @@ final class ClaudeSessionCatalogTests: XCTestCase {
             "message": ["role": "assistant", "content": "好的"]]))
         try file.write(to: project.appendingPathComponent("\(id).jsonl"))
 
-        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude")
-        let provider = ClaudeSessionCatalog(source: source, helperDirectory: helper)
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude", configuration: .custom(root.path))
+        let provider = ClaudeSessionProvider(source: source, helperDirectory: helper)
         let page = try provider.page(archived: false, cursor: nil, cancelled: { false })
         let session = try XCTUnwrap(page.sessions.first { $0.key.nativeID == id })
         XCTAssertEqual(session.workingDirectory, directory)
@@ -131,10 +131,10 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         let file = existing.appendingPathComponent("not-a-folder")
         try Data().write(to: file)
 
-        XCTAssertNil(SessionResumeFlow.folderPromptMessage(for: existing.path))
-        let unrecorded = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: nil))
-        let missing = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: existing.path + "/gone"))
-        let notAFolder = try XCTUnwrap(SessionResumeFlow.folderPromptMessage(for: file.path))
+        XCTAssertNil(PaneLauncher.folderPromptMessage(for: existing.path))
+        let unrecorded = try XCTUnwrap(PaneLauncher.folderPromptMessage(for: nil))
+        let missing = try XCTUnwrap(PaneLauncher.folderPromptMessage(for: existing.path + "/gone"))
+        let notAFolder = try XCTUnwrap(PaneLauncher.folderPromptMessage(for: file.path))
         XCTAssertEqual(missing, notAFolder)
         XCTAssertNotEqual(unrecorded, missing, "没读出目录不能说成目录不存在")
     }
@@ -195,10 +195,10 @@ final class SessionLibraryPagingTests: XCTestCase {
     }
 }
 
-private struct PagedFixture: SessionCatalogProvider {
+private struct PagedFixture: CatalogOnlyProvider {
     var delay: TimeInterval = 0
     var failSecond = false
-    let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude")
+    let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/claude", configuration: .custom("/fixture"))
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if archived { return SessionCatalogPage(sessions: [], nextCursor: nil) }
         Thread.sleep(forTimeInterval: delay) // Deliberately returns late to exercise generation guard.

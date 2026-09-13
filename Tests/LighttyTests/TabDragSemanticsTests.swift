@@ -25,51 +25,51 @@ final class TabDragSemanticsTests: XCTestCase {
 
     func testALeafLandingBetweenTabsIsATopLevelReorder() {
         // [叶子A] [叶子B] [叶子C]，A 拖到最后。
-        let rows: [TabRowKind] = [.leaf(tab: 1, pane: b), .leaf(tab: 2, pane: c), .leaf(tab: 0, pane: a)]
-        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 2), .betweenTabs(2))
+        let rows: [TabRowKind] = [.leaf(tab: t1, pane: b), .leaf(tab: t2, pane: c), .leaf(tab: t0, pane: a)]
+        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 2), .betweenTabs(after: t2))
         XCTAssertEqual(
-            TabColumnView.dropSlot(in: [.leaf(tab: 0, pane: a), .leaf(tab: 1, pane: b)], sourceIndex: 0),
-            .betweenTabs(0), "拖回原位也要算得出原位次，才判得了空动")
+            TabColumnView.dropSlot(in: [.leaf(tab: t0, pane: a), .leaf(tab: t1, pane: b)], sourceIndex: 0),
+            .betweenTabs(after: nil), "拖回原位也要算得出原位置，才判得了空动")
     }
 
     func testALeafLandingInsideAnExpandedTabJoinsThatSplitTree() {
         // [容器] [pane b] [叶子A] [pane c]：A 落在 b 与 c 之间，也就是容器标签页块内。
         let rows: [TabRowKind] = [
-            .tab(index: 0, id: t0), .pane(tab: 0, pane: b), .leaf(tab: 1, pane: a), .pane(tab: 0, pane: c),
+            .tab(t0), .pane(tab: t0, pane: b), .leaf(tab: t1, pane: a), .pane(tab: t0, pane: c),
         ]
         XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 2), .insideTab(next: c, previous: nil))
     }
 
     func testAPaneLandingAtATopLevelSlotBecomesItsOwnTab() {
         // [叶子B] [pane a] [叶子C]：a 落在两条叶子之间 = 顶层位，不该再并进谁。
-        let rows: [TabRowKind] = [.leaf(tab: 0, pane: b), .pane(tab: 1, pane: a), .leaf(tab: 2, pane: c)]
-        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 1), .betweenTabs(1))
+        let rows: [TabRowKind] = [.leaf(tab: t0, pane: b), .pane(tab: t1, pane: a), .leaf(tab: t2, pane: c)]
+        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 1), .betweenTabs(after: t0))
     }
 
     func testAPaneStaysInItsTabWhenItLandsAtTheEndOfThatTabsBlock() {
         // [容器] [pane b] [pane a] [叶子C]：a 在块尾，上方紧邻仍是同块的 pane。
         let rows: [TabRowKind] = [
-            .tab(index: 0, id: t0), .pane(tab: 0, pane: b), .pane(tab: 0, pane: a), .leaf(tab: 1, pane: c),
+            .tab(t0), .pane(tab: t0, pane: b), .pane(tab: t0, pane: a), .leaf(tab: t1, pane: c),
         ]
         XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 2), .insideTab(next: nil, previous: b))
     }
 
     func testACollapsedTabIsOpaqueSoTheSlotUnderItIsATopLevelSlot() {
         // 折叠的标签页在列表里只有一行，它下面那一格属于标签页之间。
-        let rows: [TabRowKind] = [.tab(index: 0, id: t0), .leaf(tab: 1, pane: a)]
-        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 1), .betweenTabs(1))
+        let rows: [TabRowKind] = [.tab(t0), .leaf(tab: t1, pane: a)]
+        XCTAssertEqual(TabColumnView.dropSlot(in: rows, sourceIndex: 1), .betweenTabs(after: t0))
     }
 
-    func testTopLevelIndexCountsTabsNotRows() {
+    func testPrecedingTabSkipsPaneRowsInsideBlocks() {
         // [容器0] [pane] [pane] [叶子1] [容器2]
         let rows: [TabRowKind] = [
-            .tab(index: 0, id: t0), .pane(tab: 0, pane: a), .pane(tab: 0, pane: b), .leaf(tab: 1, pane: c), .tab(index: 2, id: t2),
+            .tab(t0), .pane(tab: t0, pane: a), .pane(tab: t0, pane: b), .leaf(tab: t1, pane: c), .tab(t2),
         ]
-        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 0), 0)
-        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 2), 1, "块内的 pane 行不计位次")
-        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 3), 1)
-        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: 4), 2)
-        XCTAssertEqual(TabColumnView.topLevelIndex(in: rows, before: rows.count), 3)
+        XCTAssertNil(TabColumnView.precedingTab(in: rows, before: 0))
+        XCTAssertEqual(TabColumnView.precedingTab(in: rows, before: 2), t0, "块内的 pane 行不算标签页")
+        XCTAssertEqual(TabColumnView.precedingTab(in: rows, before: 3), t0)
+        XCTAssertEqual(TabColumnView.precedingTab(in: rows, before: 4), t1)
+        XCTAssertEqual(TabColumnView.precedingTab(in: rows, before: rows.count), t2)
     }
 
     // MARK: - 落点对应的真实移动
@@ -84,12 +84,13 @@ final class TabDragSemanticsTests: XCTestCase {
         let titles = controller.tabOverview().map(\.title)
         XCTAssertEqual(controller.tabOverview().first(where: \.isActive)?.title, titles[0])
 
-        XCTAssertTrue(controller.moveTab(from: 0, to: 2))
+        let ids = controller.tabOverview().map(\.id)
+        XCTAssertTrue(controller.moveTab(withID: ids[0], after: ids[2]))
         XCTAssertEqual(controller.tabOverview().map(\.title), [titles[1], titles[2], titles[0]])
         XCTAssertEqual(controller.tabOverview().first(where: \.isActive)?.title, titles[0],
                        "重排不该顺手换走当前上下文")
         XCTAssertTrue(controller.panes().contains { $0 === first })
-        XCTAssertFalse(controller.moveTab(from: 2, to: 2), "原地不动不算一次移动")
+        XCTAssertFalse(controller.moveTab(withID: ids[0], after: ids[2]), "原地不动不算一次移动")
     }
 
     func testDetachingAPaneMakesANewTabAtThatPosition() throws {
@@ -102,7 +103,7 @@ final class TabDragSemanticsTests: XCTestCase {
         let extra = try XCTUnwrap(controller.panes().first { $0 !== first })
         XCTAssertEqual(controller.tabOverview().count, 2)
 
-        XCTAssertTrue(controller.detachPane(withID: extra.dragIdentifier, toNewTabAt: 0))
+        XCTAssertTrue(controller.detachPane(withID: extra.dragIdentifier, toNewTabAfter: nil))
         let overview = controller.tabOverview()
         XCTAssertEqual(overview.count, 3)
         XCTAssertEqual(overview[0].panes.map(\.dragIdentifier), [extra.dragIdentifier],
@@ -114,7 +115,7 @@ final class TabDragSemanticsTests: XCTestCase {
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
         let only = try XCTUnwrap(controller.activePane)
-        XCTAssertFalse(controller.detachPane(withID: only.dragIdentifier, toNewTabAt: 0),
+        XCTAssertFalse(controller.detachPane(withID: only.dragIdentifier, toNewTabAfter: nil),
                        "单 pane 标签页拆不出东西，这种落点该走 moveTab")
         XCTAssertEqual(controller.tabOverview().count, 1)
     }
@@ -122,42 +123,42 @@ final class TabDragSemanticsTests: XCTestCase {
     // MARK: - 显示行推导与命令映射
 
     func testTheSessionOnlyReordersTheDisplayNeverTheModel() {
-        let rows: [TabRowKind] = [.leaf(tab: 0, pane: a), .leaf(tab: 1, pane: b), .leaf(tab: 2, pane: c)]
+        let rows: [TabRowKind] = [.leaf(tab: t0, pane: a), .leaf(tab: t1, pane: b), .leaf(tab: t2, pane: c)]
         XCTAssertEqual(TabColumnView.arrangement(of: rows, source: .pane(a), insertion: nil), [0, 1, 2],
                        "还没离开原位")
         XCTAssertEqual(TabColumnView.arrangement(of: rows, source: .pane(a), insertion: 2), [1, 2, 0])
         XCTAssertEqual(TabColumnView.arrangement(of: rows, source: .pane(UUID()), insertion: 0), [0, 1, 2],
                        "源行已经不在模型里（被关掉）：显示回到模型原样")
-        let tabs: [TabRowKind] = [.tab(index: 0, id: t0), .leaf(tab: 1, pane: a)]
+        let tabs: [TabRowKind] = [.tab(t0), .leaf(tab: t1, pane: a)]
         XCTAssertEqual(TabColumnView.arrangement(of: tabs, source: .tab(t0), insertion: 1), [1, 0])
     }
 
     func testDropsTranslateIntoControllerCommands() {
         // 叶子行落在标签页之间 = 换位次；分屏 pane 落在标签页之间 = 拆成新标签页
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.leaf(tab: 1, pane: b), .leaf(tab: 0, pane: a)], sourceIndex: 1, merge: nil),
-            .moveTab(from: 0, to: 1))
+            rows: [.leaf(tab: t1, pane: b), .leaf(tab: t0, pane: a)], sourceIndex: 1, merge: nil),
+            .moveTab(t0, after: t1))
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.pane(tab: 1, pane: a), .leaf(tab: 0, pane: b)], sourceIndex: 0, merge: nil),
-            .detachPane(a, toNewTabAt: 0))
+            rows: [.pane(tab: t1, pane: a), .leaf(tab: t0, pane: b)], sourceIndex: 0, merge: nil),
+            .detachPane(a, after: nil))
         // 落在块内：插到下一个 pane 左侧，没有下一个就插到上一个右侧
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.tab(index: 0, id: t0), .leaf(tab: 1, pane: a), .pane(tab: 0, pane: c)], sourceIndex: 1, merge: nil),
+            rows: [.tab(t0), .leaf(tab: t1, pane: a), .pane(tab: t0, pane: c)], sourceIndex: 1, merge: nil),
             .movePaneBeside(a, target: c, zone: .left))
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.tab(index: 0, id: t0), .pane(tab: 0, pane: c), .leaf(tab: 1, pane: a)], sourceIndex: 2, merge: nil),
+            rows: [.tab(t0), .pane(tab: t0, pane: c), .leaf(tab: t1, pane: a)], sourceIndex: 2, merge: nil),
             .movePaneBeside(a, target: c, zone: .right))
         // 合并优先
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.leaf(tab: 0, pane: a), .tab(index: 1, id: t1)], sourceIndex: 0, merge: .tab(index: 1, id: t1)),
-            .movePaneIntoTab(a, tabIndex: 1))
+            rows: [.leaf(tab: t0, pane: a), .tab(t1)], sourceIndex: 0, merge: .tab(t1)),
+            .movePaneIntoTab(a, tab: t1))
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.leaf(tab: 0, pane: a), .leaf(tab: 1, pane: b)], sourceIndex: 0, merge: .leaf(tab: 1, pane: b)),
+            rows: [.leaf(tab: t0, pane: a), .leaf(tab: t1, pane: b)], sourceIndex: 0, merge: .leaf(tab: t1, pane: b)),
             .movePaneBeside(a, target: b, zone: .right))
         // 容器行只排序，合并目标对它无效
         XCTAssertEqual(TabColumnView.dropCommand(
-            rows: [.leaf(tab: 1, pane: a), .tab(index: 0, id: t0)], sourceIndex: 1, merge: .leaf(tab: 1, pane: a)),
-            .moveTab(from: 0, to: 1))
+            rows: [.leaf(tab: t1, pane: a), .tab(t0)], sourceIndex: 1, merge: .leaf(tab: t1, pane: a)),
+            .moveTab(t0, after: t1))
     }
 
     // MARK: - 拖拽会话
@@ -214,6 +215,56 @@ final class TabDragSemanticsTests: XCTestCase {
         await settle()
         XCTAssertEqual(controller.tabOverview().map(\.panes.count), [1, 1, 1])
         XCTAssertEqual(controller.tabOverview().last?.panes.first, extra)
+    }
+
+    /// 松手只定下命令，执行在下一拍。这一拍之间关掉一个标签页（快捷键、shell 退出都可能），
+    /// 命令必须仍然落在用户松手时指的那个位置上，不能因为序号整体前移而落错。
+    func testClosingATabBetweenReleaseAndExecutionStillLandsWhereTheUserDropped() async throws {
+        let controller = TerminalWindowController()
+        AppState.shared.windowControllers = [controller]
+        defer { controller.window?.close(); AppState.shared.windowControllers = [] }
+        let a = try XCTUnwrap(controller.activePane)
+        let b = PaneView(), c = PaneView(), d = PaneView()
+        for pane in [b, c, d] { controller.addTab(initialPane: pane) }
+        let (column, table) = try mountedColumn(controller)
+        XCTAssertEqual(column.displayedRows.count, 4)
+
+        // 把 a 拖到 c 下面：意图是「排在 c 所在标签页之后」。
+        XCTAssertTrue(column.startDrag(source: .pane(a.dragIdentifier), card: NSView()))
+        column.moveDrag(to: gap(below: 2, in: column, table: table))
+        column.finishDrag()
+        // 命令执行之前，b 的标签页被关掉了。
+        let doomed = try XCTUnwrap(controller.tabOverview().first { $0.panes.first === b }?.id)
+        controller.closeTab(withID: doomed)
+        await settle()
+        XCTAssertEqual(controller.tabOverview().map { $0.panes.map(\.dragIdentifier) },
+                       [[c.dragIdentifier], [a.dragIdentifier], [d.dragIdentifier]])
+    }
+
+    func testMergingIntoATabSurvivesAnEarlierTabClosingBeforeExecution() async throws {
+        let controller = TerminalWindowController()
+        AppState.shared.windowControllers = [controller]
+        defer { controller.window?.close(); AppState.shared.windowControllers = [] }
+        let first = try XCTUnwrap(controller.activePane)
+        let target = PaneView(), loose = PaneView()
+        controller.addTab(initialPane: target)
+        controller.split(target, direction: .right)   // 标签页 1：容器 + 两条 pane 行
+        controller.addTab(initialPane: loose)           // 标签页 2：叶子行
+        let (column, table) = try mountedColumn(controller)
+        let containerIndex = try XCTUnwrap(column.displayedRows.firstIndex {
+            if case .tab = $0 { return true } else { return false }
+        })
+
+        XCTAssertTrue(column.startDrag(source: .pane(loose.dragIdentifier), card: NSView()))
+        let containerRow = column.convert(table.rect(ofRow: containerIndex), from: table)
+        column.moveDrag(to: NSPoint(x: containerRow.midX, y: containerRow.midY))
+        column.finishDrag()
+        let doomed = try XCTUnwrap(controller.tabOverview().first { $0.panes.first === first }?.id)
+        controller.closeTab(withID: doomed)
+        await settle()
+        let overview = controller.tabOverview()
+        XCTAssertEqual(overview.count, 1, "并进了容器标签页，而不是序号前移后的别人")
+        XCTAssertEqual(overview.first?.panes.last, loose)
     }
 
     func testDroppingBackWhereItStartedChangesNothing() async throws {

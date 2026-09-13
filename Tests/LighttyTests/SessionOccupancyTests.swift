@@ -43,24 +43,26 @@ final class SessionOccupancyTests: XCTestCase {
         try ready.fileHandleForWriting.close()
         XCTAssertEqual(ready.fileHandleForReading.availableData, Data("ready\n".utf8))
         let key = AgentSessionKey(agent: .codex, sourceRoot: directory.path, nativeID: id)
-        let result = SessionOccupancy.check(key)
+        let provider = CodexSessionProvider(source: .init(agent: .codex, root: directory,
+            executable: executable.path, configuration: .custom(directory.path)))
+        let result = provider.occupancy(of: key)
         XCTAssertEqual(result, .inUse(pid: process.processIdentifier))
         XCTAssertTrue(process.isRunning, "The probe must not terminate the writer")
         XCTAssertEqual(try Data(contentsOf: transcript), original)
         process.terminate() // Only the fake writer created by this test.
         process.waitUntilExit()
-        XCTAssertEqual(SessionOccupancy.check(key), .unknown, "A history file alone is not occupancy evidence")
+        XCTAssertEqual(provider.occupancy(of: key), .unknown, "A history file alone is not occupancy evidence")
     }
 
     func testExactWritableCodexTranscriptIsPositiveEvidence() {
         let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
         for directory in ["sessions/2026/09/06", "archived_sessions"] {
             let path = "/fixture/.codex/\(directory)/rollout-date-\(id).jsonl"
-            XCTAssertEqual(SessionOccupancy.inspect(output(path: path), for: key), .inUse(pid: 123))
-            XCTAssertEqual(SessionOccupancy.inspect(output(access: "w", path: path), for: key), .inUse(pid: 123))
-            XCTAssertEqual(SessionOccupancy.inspect(output(access: "r", path: path), for: key), .unknown)
-            XCTAssertEqual(SessionOccupancy.inspect(output(command: "cat", path: path), for: key), .unknown)
-            XCTAssertEqual(SessionOccupancy.inspect(output(command: "codex-other", path: path), for: key), .unknown)
+            XCTAssertEqual(CodexSessionProvider.inspect(output(path: path), for: key), .inUse(pid: 123))
+            XCTAssertEqual(CodexSessionProvider.inspect(output(access: "w", path: path), for: key), .inUse(pid: 123))
+            XCTAssertEqual(CodexSessionProvider.inspect(output(access: "r", path: path), for: key), .unknown)
+            XCTAssertEqual(CodexSessionProvider.inspect(output(command: "cat", path: path), for: key), .unknown)
+            XCTAssertEqual(CodexSessionProvider.inspect(output(command: "codex-other", path: path), for: key), .unknown)
         }
     }
 
@@ -70,21 +72,21 @@ final class SessionOccupancyTests: XCTestCase {
                      "/fixture/.codex-other/sessions/rollout-date-\(id).jsonl",
                      "/fixture/.codex/sessions/rollout-date-other.jsonl",
                      "/fixture/.codex/config.toml", "/fixture/.codex/sessions/rollout-date-\(id).jsonl.bak"] {
-            XCTAssertEqual(SessionOccupancy.inspect(output(path: path), for: key), .unknown)
+            XCTAssertEqual(CodexSessionProvider.inspect(output(path: path), for: key), .unknown)
         }
-        XCTAssertEqual(SessionOccupancy.inspect(Data(), for: key), .unknown)
-        XCTAssertEqual(SessionOccupancy.inspect(Data("permission denied".utf8), for: key), .unknown)
+        XCTAssertEqual(CodexSessionProvider.inspect(Data(), for: key), .unknown)
+        XCTAssertEqual(CodexSessionProvider.inspect(Data("permission denied".utf8), for: key), .unknown)
     }
 
     func testClaudeAndDescriptorStateDoNotLeakBetweenRecords() {
         let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture/.claude", nativeID: id)
         let path = "/fixture/.claude/projects/project/\(id).jsonl"
-        XCTAssertEqual(SessionOccupancy.inspect(output(command: "claude", path: path), for: key), .inUse(pid: 123))
-        XCTAssertEqual(SessionOccupancy.inspect(output(command: "node", path: path), for: key), .unknown)
+        XCTAssertEqual(ClaudeSessionProvider.inspect(output(command: "claude", path: path), for: key), .inUse(pid: 123))
+        XCTAssertEqual(ClaudeSessionProvider.inspect(output(command: "node", path: path), for: key), .unknown)
         let records = Data("p123\0cclaude\0\nf3\0au\0n/tmp/other\0\nf4\0n\(path)\0\n".utf8)
-        XCTAssertEqual(SessionOccupancy.inspect(records, for: key), .unknown)
+        XCTAssertEqual(ClaudeSessionProvider.inspect(records, for: key), .unknown)
         let differentProcess = Data("p123\0cclaude\0\nf3\0au\0n/tmp/other\0\np456\0ccat\0\nf4\0au\0n\(path)\0\n".utf8)
-        XCTAssertEqual(SessionOccupancy.inspect(differentProcess, for: key), .unknown)
+        XCTAssertEqual(ClaudeSessionProvider.inspect(differentProcess, for: key), .unknown)
     }
 
     func testClaudeLiveRegistryIsReadAsPidToSession() {
@@ -93,15 +95,15 @@ final class SessionOccupancyTests: XCTestCase {
         [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
          {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
         """.utf8)
-        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeSessions(data),
-                       [51228: id, 51233: other])
-        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeSessions(Data("[]".utf8)), [:])
+        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(data)?.map { [String($0.pid), $0.sessionID] },
+                       [["51228", id], ["51233", other]])
+        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(Data("[]".utf8)), [])
         // cwd 也要读出来：官方开发包偶尔给不出会话目录，靠这张表补空。
-        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeRows(data)?.map(\.cwd), ["/w", "/w"])
+        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(data)?.map(\.cwd), ["/w", "/w"])
         // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信。
         let noCWD = Data("[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]".utf8)
-        XCTAssertEqual(SessionOccupancy.decodeLiveClaudeRows(noCWD)?.count, 1)
-        XCTAssertNil(SessionOccupancy.decodeLiveClaudeRows(noCWD)?.first?.cwd)
+        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(noCWD)?.count, 1)
+        XCTAssertNil(ClaudeSessionProvider.decodeLiveSessions(noCWD)?.first?.cwd)
     }
 
     /// 认不出来必须是「问不出来」（nil），不能是空表——空表会被读成「一个都没在跑」，
@@ -113,7 +115,7 @@ final class SessionOccupancyTests: XCTestCase {
                      "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]",
                      "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]",
                      "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]"] {
-            XCTAssertNil(SessionOccupancy.decodeLiveClaudeSessions(Data(text.utf8)), text)
+            XCTAssertNil(ClaudeSessionProvider.decodeLiveSessions(Data(text.utf8)), text)
         }
     }
 
@@ -126,16 +128,18 @@ final class SessionOccupancyTests: XCTestCase {
         // 只读打开不算证据；别的命令打开也不算。
         text += "p3\0ccodex\0\nf5\0ar\0n\(root)/sessions/rollout-y-11111111-1111-1111-1111-111111111111.jsonl\0\n"
         text += "p4\0ccat\0\nf6\0au\0n\(root)/sessions/rollout-z-22222222-2222-2222-2222-222222222222.jsonl\0\n"
-        XCTAssertEqual(SessionOccupancy.decodeOpenSessionPIDs(Data(text.utf8), agent: .codex, root: root),
+        XCTAssertEqual(CodexSessionProvider.decodeOpenSessionPIDs(Data(text.utf8), root: root),
                        [id: [1], other: [2]])
         // 不是会话记录的文件不算。
         let noise = "p1\0ccodex\0\nf3\0au\0n\(root)/config.toml\0\n"
-        XCTAssertTrue(SessionOccupancy.decodeOpenSessionPIDs(Data(noise.utf8), agent: .codex, root: root).isEmpty)
+        XCTAssertTrue(CodexSessionProvider.decodeOpenSessionPIDs(Data(noise.utf8), root: root).isEmpty)
     }
 
     /// codex 没有活会话表，所以就算传了可执行文件路径也只能走文件表那条路。
     func testCodexIgnoresTheClaudeOnlyRegistryPath() {
         let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
-        XCTAssertEqual(SessionOccupancy.check(key, executable: "/nonexistent/codex"), .unknown)
+        let provider = CodexSessionProvider(source: .init(agent: .codex, root: URL(fileURLWithPath: "/fixture/.codex"),
+            executable: "/nonexistent/codex", configuration: .custom("/fixture/.codex")))
+        XCTAssertEqual(provider.occupancy(of: key), .unknown)
     }
 }

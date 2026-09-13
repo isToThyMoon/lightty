@@ -4,12 +4,12 @@ import LighttyCore
 extension Notification.Name {
     /// pane 活动状态变化（收到一发 hook 报文，或本地标记已读）。
     ///
-    /// 刻意**不复用** `lighttyTasksDidChange`：后者会让侧栏把每一行拆掉重建，
+    /// 刻意**不复用** `lighttyWindowArrangementDidChange`：后者会让侧栏把每一行拆掉重建，
     /// 而状态更新是高频的（一次工具调用就有 PreToolUse + PostToolUse 两发），
     /// 走那条路必然闪。观察者收到本通知后做行内原地更新。
     ///
     /// **`object` 是变化的 pane UUID（`NSUUID`），可能为 nil。**
-    /// 与 `lighttyTasksDidChange` 的「不带 payload」不同：状态是**定向**的，
+    /// 与 `lighttyWindowArrangementDidChange` 的「不带 payload」不同：状态是**定向**的，
     /// 一发报文只影响一个 pane，广播式的「谁变了自己查」会让 N 个 pane 的场景
     /// 退化成每发报文 N 次全量遍历。`nil` 表示「多个/全部 pane 变了」
     /// （`markAllRead`），观察者应走全量分支。

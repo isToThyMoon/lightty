@@ -62,17 +62,195 @@ struct SessionDeletionTests {
     @Test func unrelatedClaudeDoesNotBlockDeletion() throws {
         let target = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: UUID().uuidString)
         let other = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: UUID().uuidString)
-        try SessionDeletion.inspectClaudeProcesses(Data("42 claude\n".utf8), target: target, known: [42: other])
+        try ClaudeSessionProvider.inspectProcesses(Data("42 claude\n".utf8), target: target, known: [42: other])
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.inspectClaudeProcesses(Data("42 claude\n".utf8), target: target, known: [42: target])
+            try ClaudeSessionProvider.inspectProcesses(Data("42 claude\n".utf8), target: target, known: [42: target])
         }
         do {
-            try SessionDeletion.inspectClaudeProcesses(Data("42 claude\n".utf8), target: target, known: [:])
+            try ClaudeSessionProvider.inspectProcesses(Data("42 claude\n".utf8), target: target, known: [:])
             Issue.record("Unidentified Claude must not be treated as safe")
         } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 42) }
         let otherRoot = AgentSessionKey(agent: .claude, sourceRoot: "/other", nativeID: target.nativeID)
-        try SessionDeletion.inspectClaudeProcesses(Data("42 /bin/claude\n".utf8), target: target, known: [42: otherRoot])
-        try SessionDeletion.inspectClaudeProcesses(Data("42 /bin/zsh\n".utf8), target: target, known: [:])
+        try ClaudeSessionProvider.inspectProcesses(Data("42 /bin/claude\n".utf8), target: target, known: [42: otherRoot])
+        try ClaudeSessionProvider.inspectProcesses(Data("42 /bin/zsh\n".utf8), target: target, known: [:])
+    }
+
+    // MARK: 刚启动的 claude 的登记窗口
+
+    /// 编排好的删除核查环境：进程表固定，活会话表按次序返回，时钟固定，等待只记账。
+    private final class ProbeScript {
+        static let now = Date(timeIntervalSince1970: 1_000_000)
+        let target = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: UUID().uuidString)
+        var processTable: Data? = Data("42 claude\n".utf8)
+        var liveTables: [[ClaudeSessionProvider.LiveSession]?] = []
+        var starts: [Int32: TimeInterval] = [:]
+        private(set) var liveReads = 0
+        private(set) var waits: [TimeInterval] = []
+
+        func start(_ pid: Int32, secondsAgo: TimeInterval) {
+            starts[pid] = Self.now.timeIntervalSince1970 - secondsAgo
+        }
+        func row(_ pid: Int32, _ id: String) -> ClaudeSessionProvider.LiveSession {
+            .init(pid: pid, sessionID: id, cwd: nil)
+        }
+        var probe: ClaudeSessionProvider.DeletionProbe {
+            .init(processTable: { self.processTable },
+                  liveSessions: {
+                      defer { self.liveReads += 1 }
+                      return self.liveReads < self.liveTables.count ? self.liveTables[self.liveReads] : nil
+                  },
+                  identity: { pid in
+                      self.starts[pid].map { start in
+                          AgentProcessIdentity(pid: pid, startedSeconds: UInt64(start.rounded(.down)),
+                              startedMicroseconds: UInt64((start - start.rounded(.down)) * 1_000_000))
+                      }
+                  },
+                  now: { Self.now },
+                  wait: { self.waits.append($0) })
+        }
+        func check() throws {
+            try ClaudeSessionProvider.checkDeletable(target, known: [:], probe: probe)
+        }
+    }
+
+    @Test func youngClaudeThatRegistersOnTheSecondLookIsDeletable() throws {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [[], [script.row(42, UUID().uuidString)]]
+        try script.check()
+        #expect(script.waits == [ClaudeSessionProvider.registrationWait])
+        #expect(script.liveReads == 2)
+    }
+
+    @Test func youngClaudeStillUnregisteredAfterTheWaitIsUnknown() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [[], []]
+        do {
+            try script.check()
+            Issue.record("A still-unregistered Claude must not be treated as idle")
+        } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 42) }
+        catch { Issue.record("Unexpected \(error)") }
+        // 只重读一次，不轮询。
+        #expect(script.waits.count == 1)
+        #expect(script.liveReads == 2)
+    }
+
+    @Test func oldUnregisteredClaudeIsUnknownWithoutWaiting() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: ClaudeSessionProvider.registrationWindow + 1)
+        script.liveTables = [[], [script.row(42, UUID().uuidString)]]
+        do {
+            try script.check()
+            Issue.record("An old unregistered Claude must stay unknown")
+        } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 42) }
+        catch { Issue.record("Unexpected \(error)") }
+        #expect(script.waits.isEmpty)
+        #expect(script.liveReads == 1)
+    }
+
+    /// 一个老的身份不明就已经注定要问用户，不值得为同时在场的年轻进程再等。
+    /// 老的身份不明进程让结论注定是「说不清」，但仍要等年轻的登记：用户随后点「仍然删除」
+    /// 只压身份不明，若年轻的那个跑的正是目标，必须以确认占用拒绝，而不是被一并压掉。
+    @Test func oldUnregisteredClaudeStillWaitsForYoungOnesAndStaysUnknown() {
+        let script = ProbeScript()
+        script.processTable = Data("42 claude\n43 claude\n".utf8)
+        script.start(42, secondsAgo: 1)
+        script.start(43, secondsAgo: 600)
+        script.liveTables = [[], [script.row(42, UUID().uuidString)]]
+        do {
+            try script.check()
+            Issue.record("An old unidentified Claude keeps the verdict unknown")
+        } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 43) }
+        catch { Issue.record("Unexpected \(error)") }
+        #expect(script.waits.count == 1)
+    }
+
+    @Test func consentDoesNotOverrideAYoungTargetBesideAnOldUnknownClaude() {
+        let script = ProbeScript()
+        script.processTable = Data("42 claude\n43 claude\n".utf8)
+        script.start(42, secondsAgo: 1)
+        script.start(43, secondsAgo: 600)
+        script.liveTables = [[], [script.row(42, script.target.nativeID)]]
+        let provider = FakeSessionProvider(root: "/fixture")
+        let adapter = DeletionCheckOverride(base: provider, check: { try script.check() })
+        let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: script.target.nativeID)
+        do {
+            try SessionDeletion.delete(key, provider: adapter, acceptingUnknownOccupancy: true)
+            Issue.record("A young Claude running the target must block deletion despite consent")
+        } catch SessionDeletion.Failure.occupiedProcess(let pid) { #expect(pid == 42) }
+        catch { Issue.record("Unexpected \(error)") }
+        #expect(!provider.calls.contains(.delete(key)))
+    }
+
+    @Test func youngClaudeThatRegistersTheTargetIsOccupied() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [[], [script.row(42, script.target.nativeID)]]
+        do {
+            try script.check()
+            Issue.record("A Claude that turns out to run the target must block deletion")
+        } catch SessionDeletion.Failure.occupiedProcess(let pid) { #expect(pid == 42) }
+        catch { Issue.record("Unexpected \(error)") }
+    }
+
+    /// 同意「仍然删除」只压身份不明；等出来的确认占用照样拒绝。
+    @Test func consentDoesNotOverrideATargetRegisteredDuringTheWait() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [[], [script.row(42, script.target.nativeID)]]
+        let provider = FakeSessionProvider(root: "/fixture")
+        let adapter = DeletionCheckOverride(base: provider, check: { try script.check() })
+        let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: script.target.nativeID)
+        #expect(throws: SessionDeletion.Failure.self) {
+            try SessionDeletion.delete(key, provider: adapter, acceptingUnknownOccupancy: true)
+        }
+        #expect(!provider.calls.contains(.delete(key)))
+    }
+
+    @Test func unreadableLiveTableIsUnknownWithoutWaiting() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [nil, [script.row(42, UUID().uuidString)]]
+        do {
+            try script.check()
+            Issue.record("An unreadable live table must not become idle")
+        } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 42) }
+        catch { Issue.record("Unexpected \(error)") }
+        #expect(script.waits.isEmpty)
+    }
+
+    @Test func liveTableFailingOnTheSecondLookIsUnknown() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        script.liveTables = [[], nil]
+        #expect(throws: SessionDeletion.Failure.self) { try script.check() }
+        #expect(script.liveReads == 2)
+    }
+
+    /// 等的这一会儿里 PID 被别的进程复用，新进程的登记不能算到原来那个头上。
+    @Test func pidReusedDuringTheWaitStaysUnknown() {
+        let script = ProbeScript()
+        script.start(42, secondsAgo: 1)
+        let probe = script.probe
+        var reused = probe
+        var looks = 0
+        reused.identity = { pid in
+            looks += 1
+            return looks == 1 ? probe.identity(pid)
+                : AgentProcessIdentity(pid: pid, startedSeconds: 1_000_000, startedMicroseconds: 500_000)
+        }
+        script.liveTables = [[], [script.row(42, UUID().uuidString)]]
+        #expect(throws: SessionDeletion.Failure.self) {
+            try ClaudeSessionProvider.checkDeletable(script.target, known: [:], probe: reused)
+        }
+    }
+
+    @Test func unreadableProcessTableIsUnknownWithoutAskingTheLiveTable() {
+        let script = ProbeScript()
+        script.processTable = nil
+        #expect(throws: SessionDeletion.Failure.self) { try script.check() }
+        #expect(script.liveReads == 0)
     }
     @Test func codexNativeDeletionUpdatesCatalog() throws {
         let executable = try #require(HookInstaller.locateExecutable("codex"))
@@ -93,10 +271,11 @@ struct SessionDeletionTests {
             try data.write(to: directory.appendingPathComponent("rollout-2026-09-08T00-00-00-\(id).jsonl"),
                 atomically: true, encoding: .utf8)
         }
-        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable)
-        let provider = CodexSessionCatalog(source: source)
+        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable,
+                                          configuration: .custom(root.path))
+        let provider = CodexSessionProvider(source: source)
         #expect(try provider.sessions(archived: false, cancelled: { false }).count == 2)
-        try SessionDeletion.delete(.init(agent: .codex, sourceRoot: root.path, nativeID: ids[0]), source: source)
+        try SessionDeletion.delete(.init(agent: .codex, sourceRoot: root.path, nativeID: ids[0]), provider: provider)
         #expect(try provider.sessions(archived: false, cancelled: { false }).map(\.key.nativeID) == [ids[1]])
     }
 
@@ -124,43 +303,45 @@ struct SessionDeletionTests {
         try Data("child".utf8).write(to: child.appendingPathComponent("agent-fixture.jsonl"))
         let task = root.appendingPathComponent("task.md")
         try Data("keep".utf8).write(to: task)
-        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude")
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude",
+                                          configuration: .custom(root.path))
+        let adapter = ClaudeSessionProvider(source: source, helperDirectory: helper)
         let key = AgentSessionKey(agent: .claude, sourceRoot: root.path, nativeID: id)
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(key, source: source, helperDirectory: helper,
-                acceptingUnknownOccupancy: true,
-                checkProcesses: { throw SessionDeletion.Failure.occupied })
+            try SessionDeletion.delete(key, provider: DeletionCheckOverride(base: adapter,
+                check: { throw SessionDeletion.Failure.occupied }), acceptingUnknownOccupancy: true)
         }
         #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent(id + ".jsonl").path))
+        let unknown = DeletionCheckOverride(base: adapter, check: { throw SessionDeletion.Failure.unknownOccupancy(42) })
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(key, source: source, helperDirectory: helper,
-                checkProcesses: { throw SessionDeletion.Failure.unknownOccupancy(42) })
+            try SessionDeletion.delete(key, provider: unknown)
         }
         #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent(id + ".jsonl").path))
-        try SessionDeletion.delete(key, source: source, helperDirectory: helper,
-            acceptingUnknownOccupancy: true,
-            checkProcesses: { throw SessionDeletion.Failure.unknownOccupancy(42) })
+        try SessionDeletion.delete(key, provider: unknown, acceptingUnknownOccupancy: true)
         #expect(!FileManager.default.fileExists(atPath: project.appendingPathComponent(id + ".jsonl").path))
         #expect(!FileManager.default.fileExists(atPath: child.path))
         #expect(try Data(contentsOf: task) == Data("keep".utf8))
-        let remaining = try ClaudeSessionCatalog(source: source, helperDirectory: helper)
+        let remaining = try ClaudeSessionProvider(source: source, helperDirectory: helper)
             .sessions(archived: false, cancelled: { false })
         #expect(remaining.map(\.key.nativeID) == [otherID])
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(key, source: source, helperDirectory: helper, checkProcesses: {})
+            try SessionDeletion.delete(key, provider: DeletionCheckOverride(base: adapter, check: {}))
         }
     }
 
     @Test func invalidDeletionIdentityFailsBeforeMutation() {
-        let source = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture"), executable: "/missing")
+        let provider = FakeSessionProvider(agent: .claude, root: "/fixture")
         for id in ["../other", "--all", ""] {
             #expect(throws: SessionDeletion.Failure.self) {
-                try SessionDeletion.delete(.init(agent: .claude, sourceRoot: source.root.path, nativeID: id), source: source)
+                try SessionDeletion.delete(.init(agent: .claude, sourceRoot: provider.source.root.path, nativeID: id),
+                                           provider: provider)
             }
         }
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(.init(agent: .claude, sourceRoot: "/other", nativeID: UUID().uuidString), source: source)
+            try SessionDeletion.delete(.init(agent: .claude, sourceRoot: "/other", nativeID: UUID().uuidString),
+                                       provider: provider)
         }
+        #expect(provider.calls.isEmpty, "Identity mismatch must not reach the provider")
     }
 
     @Test func organizationForgetsOnlyDeletedKeys() {

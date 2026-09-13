@@ -3,8 +3,15 @@ import LighttyCore
 import Darwin
 
 
-struct CodexSessionCatalog: SessionCatalogProvider {
+/// codex 的会话操作都走它自己的 CLI：列表与改名用 `codex app-server`（stdio JSON-RPC），
+/// 删除用 `codex delete --force`。占用与存活进程没有官方接口，只能读操作系统的文件表。
+struct CodexSessionProvider: AgentSessionProvider {
     let source: SessionCatalogSource
+
+    /// 会话记录文件所在的目录（相对配置根）。
+    private static let transcriptDirectories = ["sessions", "archived_sessions"]
+
+    // MARK: - 列表
 
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if cancelled() { throw CancellationError() }
@@ -15,29 +22,8 @@ struct CodexSessionCatalog: SessionCatalogProvider {
         if let cursor { params["cursor"] = cursor }
         let response = try rpc.request("thread/list", params: params, cancelled: cancelled)
         let sessions = try Self.decode(response, source: source, archived: archived)
-        return SessionCatalogPage(sessions: Self.observeProcesses(sessions, root: source.root.path),
-                                  nextCursor: response["nextCursor"] as? String)
-    }
-
-    /// 保留当前写入会话的进程身份。是否属于本应用、是否已经退出由 SessionLibrary
-    /// 统一归并；来源不能把某次读取的进程证据压成永久的“在其他终端中打开”布尔值。
-    ///
-    /// codex 没有 Claude 那样的活会话表（那要先连上共用的后台服务），只能读操作系统
-    /// 的文件表。一次 `lsof -c codex` 实测 0.01 秒、4KB 输出，挂在刷新上不算负担。
-    ///
-    /// 问不出来就原样返回：这是锦上添花，不能因为它失败而让列表读不出来。
-    /// 因此「没有标记」只意味着没有证据，不代表一定没开着——那个提示框仍然是最后一道防线。
-    static func observeProcesses(_ sessions: [AgentSession], root: String) -> [AgentSession] {
-        guard !sessions.isEmpty,
-              let open = SessionOccupancy.openSessionProcesses(agent: .codex, root: root),
-              !open.isEmpty else { return sessions }
-        return sessions.map { session in
-            guard let processes = open[session.key.nativeID], !processes.isEmpty else { return session }
-            return AgentSession(key: session.key, title: session.title,
-                                workingDirectory: session.workingDirectory,
-                                updatedAt: session.updatedAt,
-                                sourceArchived: session.sourceArchived, sourceProcesses: processes)
-        }
+        return annotatingLiveSessions(SessionCatalogPage(sessions: sessions,
+                                                         nextCursor: response["nextCursor"] as? String))
     }
 
     static func decode(_ page: [String: Any], source: SessionCatalogSource,
@@ -57,10 +43,73 @@ struct CodexSessionCatalog: SessionCatalogProvider {
                 sourceArchived: archived)
         }
     }
+
+    // MARK: - 改名、删除
+
+    /// app-server 的 `thread/name/set`。
+    func rename(_ key: AgentSessionKey, to title: String) throws {
+        let rpc = try CatalogJSONRPC.connected(to: source, cancelled: { false })
+        defer { rpc.close() }
+        _ = try rpc.request("thread/name/set", params: ["threadId": key.nativeID, "name": title],
+                            cancelled: { false })
+    }
+
+    /// 连同派生的子会话一起永久删除；写锁冲突由 CLI 自己拒绝。
+    func delete(_ key: AgentSessionKey) throws {
+        _ = try AgentHelperProcess.agentCLI(source, arguments: ["delete", "--force", key.nativeID],
+                                            directory: source.root).output(timeout: 45)
+    }
+
+    // MARK: - 占用与存活进程
+
+    func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result {
+        guard let data = SessionOccupancy.openFiles(command: SessionAgent.codex.executableName, timeout: 2)
+        else { return .unknown }
+        return Self.inspect(data, for: key)
+    }
+
+    /// 没有 Claude 那样的进程表核查：codex 自己的写锁拒绝（含被占用的子会话）是权威。
+    func checkDeletable(_ key: AgentSessionKey, known: [AgentProcessIdentity: AgentSessionKey]) throws {}
+
+    /// 保留当前写入会话的进程身份。是否属于本应用、是否已经退出由 SessionLibrary
+    /// 统一归并；来源不能把某次读取的进程证据压成永久的“在其他终端中打开”布尔值。
+    ///
+    /// codex 没有 Claude 那样的活会话表（那要先连上共用的后台服务），只能读操作系统
+    /// 的文件表。一次 `lsof -c codex` 实测 0.01 秒、4KB 输出，挂在刷新上不算负担。
+    func observeLiveSessions() -> LiveSessionObservation? {
+        guard let data = SessionOccupancy.openFiles(command: SessionAgent.codex.executableName, timeout: 4)
+        else { return nil }
+        return LiveSessionObservation(processes: Self.decodeOpenSessionPIDs(data, root: source.root.path)
+            .mapValues { pids in Set(pids.compactMap(AgentProcessIdentity.read)) })
+    }
+
+    static func inspect(_ data: Data, for key: AgentSessionKey) -> SessionOccupancy.Result {
+        guard UUID(uuidString: key.nativeID) != nil else { return .unknown }
+        return SessionOccupancy.firstWriter(data, command: SessionAgent.codex.executableName,
+                                            root: key.sourceRoot, directories: transcriptDirectories) {
+            $0.hasPrefix("rollout-") && $0.hasSuffix("-" + key.nativeID + ".jsonl")
+        }
+    }
+
+    /// 单独拆出来是为了能用固定样本测。文件名里的会话 id 是最后 36 个字符，
+    /// 前面还带着时间戳（`rollout-<时间>-<id>.jsonl`）。
+    static func decodeOpenSessionPIDs(_ data: Data, root: String) -> [String: Set<Int32>] {
+        var processes: [String: Set<Int32>] = [:]
+        SessionOccupancy.forEachWritableSessionFile(data, command: SessionAgent.codex.executableName,
+                                                    root: root, directories: transcriptDirectories) { pid, name in
+            guard name.hasSuffix(".jsonl"), name.hasPrefix("rollout-") else { return }
+            let stem = String(name.dropLast(".jsonl".count))
+            guard stem.count >= 36 else { return }
+            let id = String(stem.suffix(36))
+            guard UUID(uuidString: id) != nil else { return }
+            processes[id, default: []].insert(pid)
+        }
+        return processes
+    }
 }
 
 /// Bounded stdio client for one `codex app-server` conversation; not an app-wide RPC
-/// framework. Only the catalog and `SessionRename` use it, and both open a child, ask
+/// framework. Only the provider's list and rename use it, and both open a child, ask
 /// one question, and close it.
 /// Reads are nonblocking so cancellation/deadlines also work when a CLI stops responding.
 final class CatalogJSONRPC {
@@ -72,16 +121,11 @@ final class CatalogJSONRPC {
     private var closed = false
     private let deadline = Date().addingTimeInterval(45)
 
-    init(executable: String, root: URL) throws {
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["app-server", "--listen", "stdio://"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["CODEX_HOME"] = root.path
-        environment["PATH"] = HookInstaller.searchPath().joined(separator: ":")
-        // A catalog process is not a pane and must never inherit its hook routing.
-        for key in environment.keys where key.hasPrefix("LIGHTTY_") { environment.removeValue(forKey: key) }
-        process.environment = environment
-        process.currentDirectoryURL = root
+    init(_ spec: AgentHelperProcess) throws {
+        process.executableURL = spec.executable
+        process.arguments = spec.arguments
+        process.environment = spec.environment
+        process.currentDirectoryURL = spec.directory
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice // Never log private provider diagnostics.
@@ -93,7 +137,8 @@ final class CatalogJSONRPC {
     /// 握手：app-server 在 `initialize` 有回应、`initialized` 发出去之前不接别的方法。
     /// 两个调用方（列表、改名）都要走这一步，所以放在这里而不是各写一遍。
     static func connected(to source: SessionCatalogSource, cancelled: () -> Bool) throws -> CatalogJSONRPC {
-        let rpc = try CatalogJSONRPC(executable: source.executable, root: source.root)
+        let rpc = try CatalogJSONRPC(.agentCLI(source, arguments: ["app-server", "--listen", "stdio://"],
+                                               directory: source.root))
         do {
             _ = try rpc.request("initialize", params: [
                 "clientInfo": ["name": "lightty_session_catalog", "version": "0.1.0"],

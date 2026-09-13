@@ -48,7 +48,7 @@ extension SessionAssociationTests {
         let editor = NSTextView()
         #expect(controller.control(controller.nameField, textView: editor,
                                    doCommandBy: #selector(NSResponder.insertNewline(_:))))
-        #expect(AppState.shared.taskStore.list().tasks.first?.task.workdir == workdir.path)
+        #expect(AppState.shared.taskBindings.store.list().tasks.first?.task.workdir == workdir.path)
         #expect(window.tabCount == 2)
         #expect(!controller.control(controller.nameField, textView: editor,
                                     doCommandBy: #selector(NSResponder.insertTab(_:))))
@@ -215,7 +215,7 @@ extension SessionAssociationTests {
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-        let task = TaskFile(name: "Fixture", status: "active", workdir: root.path,
+        let task = TaskFile(name: "Fixture", workdir: root.path,
                             created: Date(), updated: Date())
         let subjects: [LaunchSubject] = [
             .session, .newTask, .task(fileURL: root.appendingPathComponent("fixture.md"), task: task),
@@ -251,7 +251,7 @@ extension SessionAssociationTests {
         let pane = try #require(controller.makePane())
         #expect(pane.terminal.launchConfiguration.workingDirectory == chosen.path)
         #expect(pane.taskFileURL == nil)
-        #expect(AppState.shared.taskStore.list().tasks.isEmpty)
+        #expect(AppState.shared.taskBindings.store.list().tasks.isEmpty)
 
         controller.directory.path = root.appendingPathComponent("missing").path
         #expect(controller.makePane() == nil)
@@ -267,7 +267,7 @@ extension SessionAssociationTests {
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-        let store = AppState.shared.taskStore
+        let store = AppState.shared.taskBindings.store
 
         let onlyCreate = LaunchComposerController(subject: .newTask, controller: nil)
         _ = onlyCreate.view
@@ -312,7 +312,7 @@ extension SessionAssociationTests {
         creator.nameField.stringValue = "Directory fixture"
         creator.directory.path = original.path
         creator.createOnly()
-        let store = AppState.shared.taskStore
+        let store = AppState.shared.taskBindings.store
         let file = try #require(store.list().tasks.first)
         #expect(file.task.workdir == original.path)
 

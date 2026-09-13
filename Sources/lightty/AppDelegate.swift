@@ -67,8 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // agent --resume）。没有快照或快照为空才开默认窗口。
         let restored = WorkspaceStore.shared.load().map(WorkspaceRestorer.restore) ?? []
         let first = restored.first ?? AppState.shared.newWindow()
-        // 之后任何结构/命名/状态变化都刷快照（节流合并）
-        for name in [Notification.Name.lighttyTasksDidChange, .lighttyPaneStatusDidChange] {
+        // 之后任何结构/绑定/状态变化都刷快照（节流合并）。快照只记任务文件路径，
+        // 任务文件内容变化（lighttyTasksDidChange）不影响它。
+        for name in [Notification.Name.lighttyWindowArrangementDidChange, .lighttyTaskBindingsDidChange, .lighttyPaneStatusDidChange] {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(scheduleSessionSave), name: name, object: nil)
         }

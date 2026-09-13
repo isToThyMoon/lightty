@@ -286,7 +286,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// keybind 处理，菜单抢一个就少一个终端快捷键。
     private func paneItem(for pane: PaneView, indent: Int) -> NSMenuItem {
         let status = PaneStatusStore.shared.status(for: pane.dragIdentifier)
-        let bound = !(pane.header.titleOfBoundTask ?? "").isEmpty
+        let bound = !(pane.boundTask?.name ?? "").isEmpty
         let item = NSMenuItem(title: "", action: #selector(focusPane(_:)), keyEquivalent: "")
         item.target = self
         // 存 UUID 而不是 PaneView：菜单不该让一个已经关掉的 pane 续命
@@ -314,7 +314,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     .foregroundColor: ShellStyle.statusColor(for: status.state),
                 ]))
         }
-        if let task = pane.header.titleOfBoundTask, !task.isEmpty {
+        if let task = pane.boundTask?.name, !task.isEmpty {
             title.append(NSAttributedString(
                 string: "  \(task)",
                 attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))

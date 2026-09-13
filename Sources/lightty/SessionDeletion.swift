@@ -2,20 +2,23 @@ import AppKit
 import LighttyCore
 
 /// Provider-owned permanent deletion. No transcript paths or database schemas live here.
+///
+/// 这里只有确认界面、应用内占用复核；原生删除、外部占用与各家特有的进程核查都在
+/// `AgentSessionProvider` 里。删除期间的互斥由 `PaneLauncher` 持有：确认框开着时，
+/// 同家的续接与原生选择器由它拦下（它们可能碰到正被删的会话）；新会话写的是另一段会话，放行。
 enum SessionDeletion {
-    // Main-thread exclusion also covers resume/picker launches while confirmation is open.
-    private(set) static var busyAgents = Set<SessionAgent>()
+    private static var launcher: PaneLauncher { AppState.shared.paneLauncher }
 
     static func confirm(_ session: AgentSession, library: SessionLibrary, window: NSWindow) {
-        guard !busyAgents.contains(session.key.agent), !library.saving,
+        guard !launcher.isDeleting(session.key.agent), !library.saving,
               library.organizationReady, library.storageError == nil,
-              let source = library.source(for: session.key.agent) else { return }
+              let provider = library.provider(for: session.key.agent) else { return }
         for entry in AppState.shared.runningPanes() { entry.pane.reconcileSessionProcess() }
-        guard library.openPaneIDs(for: session.key).isEmpty, !SessionResumeFlow.isStarting(session.key) else {
+        guard library.openPaneIDs(for: session.key).isEmpty, !launcher.isStarting(session.key) else {
             show(Failure.occupied.localizedDescription, window: window)
             return
         }
-        busyAgents.insert(session.key.agent)
+        launcher.beginDeleting(session.key.agent)
         let alert = SessionDeletionConfirmation()
         alert.messageText = L("Permanently delete this session?")
         alert.informativeText = session.title + "\n\n" + L("Includes child conversations. This cannot be undone.")
@@ -23,20 +26,20 @@ enum SessionDeletion {
         alert.addButton(withTitle: L("Permanently delete"))
         alert.beginSheetModal(for: window) { response in
             guard response == .alertSecondButtonReturn else {
-                busyAgents.remove(session.key.agent); return
+                launcher.endDeleting(session.key.agent); return
             }
-            perform(session, source: source, library: library, window: window)
+            perform(session, provider: provider, library: library, window: window)
         }
     }
 
-    private static func perform(_ session: AgentSession, source: SessionCatalogSource,
+    private static func perform(_ session: AgentSession, provider: AgentSessionProvider,
                                 library: SessionLibrary, window: NSWindow,
                                 acceptingUnknownOccupancy: Bool = false) {
             // Recheck after either confirmation; consent never overrides a known active session.
             for entry in AppState.shared.runningPanes() { entry.pane.reconcileSessionProcess() }
             guard library.openPaneIDs(for: session.key).isEmpty,
-                  !SessionResumeFlow.isStarting(session.key) else {
-                busyAgents.remove(session.key.agent)
+                  !launcher.isStarting(session.key) else {
+                launcher.endDeleting(session.key.agent)
                 show(Failure.occupied.localizedDescription, window: window)
                 return
             }
@@ -50,26 +53,24 @@ enum SessionDeletion {
             }
             let associations = known
             DispatchQueue.global(qos: .userInitiated).async {
-                let result = Result { try delete(session.key, source: source,
-                    acceptingUnknownOccupancy: acceptingUnknownOccupancy,
-                    checkProcesses: { try requireClaudeSessionAvailable(session.key, known: associations,
-                                                                       executable: source.executable) }) }
+                let result = Result { try delete(session.key, provider: provider,
+                    acceptingUnknownOccupancy: acceptingUnknownOccupancy, known: associations) }
                 DispatchQueue.main.async {
                     switch result {
                     case .success:
-                        busyAgents.remove(session.key.agent)
+                        launcher.endDeleting(session.key.agent)
                         library.didDelete(session.key)
                     case .failure(Failure.unknownOccupancy(let pid)):
                         let alert = unknownOccupancyAlert(session: session, pid: pid)
                         alert.beginSheetModal(for: window) { response in
                             guard response == .alertSecondButtonReturn else {
-                                busyAgents.remove(session.key.agent); return
+                                launcher.endDeleting(session.key.agent); return
                             }
-                            perform(session, source: source, library: library, window: window,
+                            perform(session, provider: provider, library: library, window: window,
                                     acceptingUnknownOccupancy: true)
                         }
                     case .failure(let error):
-                        busyAgents.remove(session.key.agent)
+                        launcher.endDeleting(session.key.agent)
                         // Native operations may fail after a partial mutation. Always reconcile.
                         library.refresh()
                         show(error.localizedDescription, window: window)
@@ -88,91 +89,24 @@ enum SessionDeletion {
         return alert
     }
 
-    static func delete(_ key: AgentSessionKey, source: SessionCatalogSource,
-                       helperDirectory: URL = ClaudeSessionCatalog.installedHelper,
+    /// 删除一段会话：身份核对 → 外部占用 → 该 Agent 的额外核查 → 原生删除。
+    /// 用户对「说不清谁在用」的明确同意只压掉 `unknownOccupancy`，确认有人在用、
+    /// 原生写锁拒绝照样失败。
+    static func delete(_ key: AgentSessionKey, provider: AgentSessionProvider,
                        acceptingUnknownOccupancy: Bool = false,
-                       checkProcesses: (() throws -> Void)? = nil) throws {
-        guard UUID(uuidString: key.nativeID) != nil, key.agent == source.agent,
-              source.root.standardizedFileURL.path == key.sourceRoot,
-              source.root.path != "/" else { throw Failure.invalidSource }
-        if case .inUse(let pid) = SessionOccupancy.check(key, executable: source.executable) {
+                       known: [AgentProcessIdentity: AgentSessionKey] = [:]) throws {
+        guard provider.source.owns(key) else { throw Failure.invalidSource }
+        if case .inUse(let pid) = provider.occupancy(of: key) {
             throw Failure.occupiedProcess(pid)
         }
-        var environment = ProcessInfo.processInfo.environment
-        for name in environment.keys where name.hasPrefix("LIGHTTY_") { environment.removeValue(forKey: name) }
-        environment["PATH"] = HookInstaller.searchPath().joined(separator: ":")
         do {
-            switch key.agent {
-            case .codex:
-                environment["CODEX_HOME"] = source.root.path
-                _ = try SessionHelperProcess.readPage(executable: URL(fileURLWithPath: source.executable),
-                    arguments: ["delete", "--force", key.nativeID], directory: source.root,
-                    environment: environment, cancelled: { false }, timeout: 45)
-            case .claude:
-                do {
-                    if let checkProcesses { try checkProcesses() }
-                    else { try requireClaudeSessionAvailable(key, known: [:], executable: source.executable) }
-                } catch Failure.unknownOccupancy where acceptingUnknownOccupancy {
-                    // Explicit consent for this request only. Occupied and other failures still throw.
-                }
-                #if arch(arm64)
-                let runtime = "runtime-arm64/node"
-                #else
-                let runtime = "runtime-x64/node"
-                #endif
-                // SDK helper is a local filesystem operation, not a Claude Agent invocation.
-                let data = try SessionHelperProcess.readPage(executable: helperDirectory.appendingPathComponent(runtime),
-                    arguments: [helperDirectory.appendingPathComponent("delete-session.mjs").path, key.nativeID],
-                    directory: helperDirectory,
-                    environment: ["PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": source.root.path],
-                    cancelled: { false })
-                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      value["deleted"] as? String == key.nativeID else { throw Failure.failed }
+            do { try provider.checkDeletable(key, known: known) }
+            catch Failure.unknownOccupancy where acceptingUnknownOccupancy {
+                // Explicit consent for this request only. Occupied and other failures still throw.
             }
+            try provider.delete(key)
         } catch let error as Failure { throw error }
         catch { throw Failure.failed }
-    }
-
-    static func requireClaudeSessionAvailable(_ target: AgentSessionKey,
-                                              known: [AgentProcessIdentity: AgentSessionKey],
-                                              executable: String? = nil) throws {
-        // lsof alone misses Claude, which need not keep its transcript descriptor open.
-        guard let data = try? SessionHelperProcess.readPage(executable: URL(fileURLWithPath: "/bin/ps"),
-            arguments: ["-axo", "pid=,comm="], directory: URL(fileURLWithPath: "/"),
-            environment: ["PATH": "/usr/bin:/bin"], cancelled: { false }, timeout: 3) else {
-            throw Failure.unknownOccupancy(nil)
-        }
-        var live: [Int32: AgentSessionKey] = [:]
-        // Claude 自己就知道每个活着的进程在跑哪段会话。以前只认 lightty 自己开的 pane，
-        // 用户在别处开着的 claude 一律算「说不清」，于是删除几乎每次都要弹一次警告。
-        if let executable,
-           let registry = SessionOccupancy.liveClaudeSessions(executable: executable, root: target.sourceRoot) {
-            for (pid, id) in registry {
-                live[pid] = AgentSessionKey(agent: .claude, sourceRoot: target.sourceRoot, nativeID: id)
-            }
-        }
-        // PID reuse must never inherit the previous process's session identity.
-        // 自己的 pane 后合并：这份身份是核对过进程标识的，比问来的更可信。
-        for (identity, key) in known where AgentProcessIdentity.read(identity.pid) == identity {
-            live[identity.pid] = key
-        }
-        try inspectClaudeProcesses(data, target: target, known: live)
-    }
-
-    static func inspectClaudeProcesses(_ data: Data, target: AgentSessionKey,
-                                      known: [Int32: AgentSessionKey]) throws {
-        guard !data.isEmpty else { throw Failure.unknownOccupancy(nil) }
-        var unknown: Int32?
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-            let fields = line.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
-            guard fields.count == 2, let pid = Int32(fields[0]) else { throw Failure.unknownOccupancy(nil) }
-            let name = fields[1].trimmingCharacters(in: .whitespaces)
-            guard name == "claude" || name.hasSuffix("/claude") else { continue }
-            guard let key = known[pid] else { unknown = pid; continue }
-            // Native IDs alone are not enough: custom configuration roots are independent.
-            if key == target { throw Failure.occupiedProcess(pid) }
-        }
-        if let unknown { throw Failure.unknownOccupancy(unknown) }
     }
 
     enum Failure: LocalizedError {

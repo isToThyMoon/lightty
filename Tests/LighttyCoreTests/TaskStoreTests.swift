@@ -59,7 +59,6 @@ final class TaskStoreTests: XCTestCase {
         let created = try store.create(name: "修 a/b: 会话  管理", workdir: "/Users/me/p", tool: "claude")
         XCTAssertEqual(created.fileURL.lastPathComponent, "修 ab 会话 管理.md")
         XCTAssertEqual(created.task.name, "修 a/b: 会话  管理")
-        XCTAssertEqual(created.task.status, "active")
         XCTAssertEqual(created.task.tool, "claude")
         XCTAssertEqual(created.task.created, now)
         XCTAssertEqual(created.task.updated, now)
@@ -116,11 +115,10 @@ final class TaskStoreTests: XCTestCase {
         let store = makeStore()
         let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
-        task.status = "done"
         task.body = "收工记录\n"
         now = utc("2026-08-22T12:00:00Z")
         let updated = try store.update(at: created.fileURL, task: task)
-        XCTAssertEqual(updated.status, "done")
+        XCTAssertEqual(updated.body, "收工记录\n")
         XCTAssertEqual(updated.updated, utc("2026-08-22T12:00:00Z"))
         XCTAssertEqual(updated.created, utc("2026-08-22T10:00:00Z"))
         let onDisk = try store.load(at: created.fileURL)
@@ -134,12 +132,31 @@ final class TaskStoreTests: XCTestCase {
         let url = store.directory.appendingPathComponent("外部.md")
         let raw = "---\nname: 外部\nstatus: active\ncwd: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T09:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
         try td(raw).write(to: url)
-        var task = try store.load(at: url)
-        task.status = "stuck"
+        let task = try store.load(at: url)
         let updated = try store.update(at: url, task: task)
         XCTAssertEqual(updated.unknownLines, ["x-hook: v1"])
         XCTAssertEqual(updated.body, "正文无换行结尾")
-        let expected = "---\nname: 外部\nstatus: stuck\nworkdir: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
+        let expected = "---\nname: 外部\nworkdir: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-hook: v1\n---\n正文无换行结尾"
+        XCTAssertEqual(try Data(contentsOf: url), td(expected))
+    }
+
+    func testCreateDoesNotWriteStatus() throws {
+        let store = makeStore()
+        let created = try store.create(name: "a", workdir: "/x", tool: "claude")
+        let expected = "---\nname: a\nworkdir: /x\ntool: claude\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        XCTAssertEqual(try Data(contentsOf: created.fileURL), td(expected))
+    }
+
+    func testUpdateDropsLegacyStatusAndSessions() throws {
+        // 用户机器上的旧文件都带 status，更早的还可能带 sessions 块；
+        // lightty 回写后两者消失，未知键与正文照旧
+        let store = makeStore()
+        let url = store.directory.appendingPathComponent("旧.md")
+        let raw = "---\nname: 旧\nstatus: active\nworkdir: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T09:00:00Z\nx-hook: v1\nsessions:\n  - claude:s1\n---\n## Next steps\n- 继续\n"
+        try td(raw).write(to: url)
+        let task = try store.load(at: url)
+        try store.update(at: url, task: task)
+        let expected = "---\nname: 旧\nworkdir: /x\ncreated: 2026-08-22T09:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-hook: v1\n---\n## Next steps\n- 继续\n"
         XCTAssertEqual(try Data(contentsOf: url), td(expected))
     }
 
@@ -176,38 +193,14 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(try store.load(at: newURL).name, "同名:")
     }
 
-    // MARK: - appendSession
-
-    func testAppendSessionAppendsAndDedupes() throws {
-        let store = makeStore()
-        let created = try store.create(name: "a", workdir: "/x")
-        now = utc("2026-08-22T11:00:00Z")
-        let one = try store.appendSession(at: created.fileURL, tool: "claude", id: "s1")
-        XCTAssertEqual(one.sessions, [TaskSession(tool: "claude", id: "s1")])
-        XCTAssertEqual(one.updated, utc("2026-08-22T11:00:00Z"))
-        // tool+id 相同：去重，不重复写入、不刷新 updated
-        now = utc("2026-08-22T12:00:00Z")
-        let dup = try store.appendSession(at: created.fileURL, tool: "claude", id: "s1")
-        XCTAssertEqual(dup.sessions.count, 1)
-        XCTAssertEqual(dup.updated, utc("2026-08-22T11:00:00Z"))
-        // 不同 id 追加
-        let two = try store.appendSession(at: created.fileURL, tool: "claude", id: "s2")
-        XCTAssertEqual(two.sessions, [
-            TaskSession(tool: "claude", id: "s1"),
-            TaskSession(tool: "claude", id: "s2"),
-        ])
-        XCTAssertEqual(try store.load(at: created.fileURL).sessions, two.sessions)
-    }
-
     // MARK: - 原子写与符号链接
 
     func testNoTempFileResidue() throws {
         let store = makeStore()
         let created = try store.create(name: "a", workdir: "/x")
         var task = created.task
-        task.status = "done"
+        task.body = "收工记录\n"
         try store.update(at: created.fileURL, task: task)
-        try store.appendSession(at: created.fileURL, tool: "t", id: "i")
         try store.rename(at: created.fileURL, to: "b")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
             .filter { $0.hasPrefix(".") || $0.hasSuffix(".tmp") }

@@ -1,0 +1,118 @@
+import Foundation
+import LighttyCore
+import Darwin
+
+/// 会话操作起的工具进程怎么启动：可执行文件、参数、目录、环境。全 app 只在这里拼。
+///
+/// 两种进程，环境规则不同：
+///
+/// - **打包的 Claude SDK helper**（node 运行时 + mjs 脚本）：不继承 app 的环境，PATH
+///   只给系统目录，只带配置根变量。它是本地文件操作，不是一次 Agent 调用，用不着
+///   用户 shell 里的任何东西。
+/// - **用户装的 Agent CLI**（`codex app-server`、`codex delete`、`claude agents`）：继承
+///   app 的环境（CLI 可能依赖用户自己的变量），PATH 换成 `HookInstaller.searchPath()`
+///   ——`claude` 是 node 包装脚本，Finder 启动的 PATH 里没有 node；配置根变量显式
+///   设成来源根，不依赖默认值。
+///
+/// 两种都没有 `LIGHTTY_` 开头的变量：那是 pane 的 hook 路由，工具进程不是 pane，绝不能继承。
+struct AgentHelperProcess: Equatable {
+    let executable: URL
+    let arguments: [String]
+    let directory: URL
+    let environment: [String: String]
+
+    /// helper 目录里当前架构的 node 运行时。打包脚本两种架构都放，只挑自己这一份。
+    static func nodeRuntime(in helperDirectory: URL) -> URL {
+        #if arch(arm64)
+        let architecture = "arm64"
+        #else
+        let architecture = "x64"
+        #endif
+        return helperDirectory.appendingPathComponent("runtime-\(architecture)/node")
+    }
+
+    /// 跑打包 helper 里的一个脚本。参数直接交给进程，不经过 shell，所以不需要引号规则。
+    static func sdkScript(_ script: String, arguments: [String], helperDirectory: URL,
+                          source: SessionCatalogSource) -> AgentHelperProcess {
+        AgentHelperProcess(
+            executable: nodeRuntime(in: helperDirectory),
+            arguments: [helperDirectory.appendingPathComponent(script).path] + arguments,
+            directory: helperDirectory,
+            environment: ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8",
+                          source.agent.configurationVariable: source.root.path])
+    }
+
+    /// 跑来源配置的那个 CLI。
+    static func agentCLI(_ agent: SessionAgent, executable: String, root: String,
+                         arguments: [String], directory: URL,
+                         inherited: [String: String] = ProcessInfo.processInfo.environment,
+                         searchPath: [String] = HookInstaller.searchPath()) -> AgentHelperProcess {
+        var environment = inherited.filter { !$0.key.hasPrefix("LIGHTTY_") }
+        environment["PATH"] = searchPath.joined(separator: ":")
+        environment[agent.configurationVariable] = root
+        return AgentHelperProcess(executable: URL(fileURLWithPath: executable), arguments: arguments,
+                                  directory: directory, environment: environment)
+    }
+
+    static func agentCLI(_ source: SessionCatalogSource, arguments: [String], directory: URL) -> AgentHelperProcess {
+        agentCLI(source.agent, executable: source.executable, root: source.root.path,
+                 arguments: arguments, directory: directory)
+    }
+
+    /// 一问一答：跑完读回 stdout。长连接（`codex app-server`）见 `CatalogJSONRPC`。
+    func output(cancelled: () -> Bool = { false }, timeout: TimeInterval = 15,
+                maximumBytes: Int = 1024 * 1024) throws -> Data {
+        try SessionHelperProcess.readPage(executable: executable, arguments: arguments, directory: directory,
+                                          environment: environment, cancelled: cancelled,
+                                          timeout: timeout, maximumBytes: maximumBytes)
+    }
+}
+
+/// One-shot child lifecycle, bounded output and deadline. No credentials or hook routing inherited.
+enum SessionHelperProcess {
+    static func readPage(executable: URL, arguments: [String], directory: URL,
+                         environment: [String: String], cancelled: () -> Bool,
+                         timeout: TimeInterval = 15, maximumBytes: Int = 1024 * 1024) throws -> Data {
+        if cancelled() { throw CancellationError() }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        process.currentDirectoryURL = directory
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        try? pipe.fileHandleForWriting.close()
+        defer {
+            if process.isRunning { process.terminate() }
+            let deadline = Date().addingTimeInterval(0.2)
+            while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            try? pipe.fileHandleForReading.close()
+        }
+        let fd = pipe.fileHandleForReading.fileDescriptor
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var result = Data()
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if cancelled() { throw CancellationError() }
+            var buffer = [UInt8](repeating: 0, count: 16384)
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count > 0 {
+                result.append(contentsOf: buffer.prefix(count))
+                if result.count > maximumBytes { throw SessionCatalogError.tooLarge }
+            } else if count == 0 {
+                if !process.isRunning {
+                    guard process.terminationStatus == 0 else { throw SessionCatalogError.protocolFailure }
+                    return result
+                }
+                Thread.sleep(forTimeInterval: 0.005)
+            } else if errno == EAGAIN || errno == EINTR { Thread.sleep(forTimeInterval: 0.005) }
+            else { throw SessionCatalogError.protocolFailure }
+        }
+        throw SessionCatalogError.timeout
+    }
+}

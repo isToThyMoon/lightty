@@ -21,8 +21,9 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     private struct Entry {
         let fileURL: URL
         let task: TaskFile
-        /// 有 pane 绑着 = 活跃（派生态，仅存在于 UI 层，不落盘）
-        let running: (controller: TerminalWindowController, pane: PaneView)?
+        /// 有终端绑着 = 活跃（派生态，由 TaskBindings 回答，不落盘）。
+        /// 只存布尔、不存终端引用：列表缓存不该让关掉的终端续命，跳转时再现查。
+        let running: Bool
     }
 
     private struct HandoffState: Equatable {
@@ -38,8 +39,8 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         HandoffRowSnapshot(
             id: entry.fileURL.lastPathComponent,
             name: entry.task.name,
-            subtitle: "\(entry.running != nil ? L("Active") : L("Dormant"))  ·  \(relativeTime(entry.task.updated))",
-            running: entry.running != nil)
+            subtitle: "\(entry.running ? L("Active") : L("Dormant"))  ·  \(relativeTime(entry.task.updated))",
+            running: entry.running)
     }
 
     // MARK: - 列表页
@@ -69,10 +70,17 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         ])
         reload()
 
-        // pane 命名/绑定落盘后实时刷新列表。
+        // 绑定变化（含经 TaskBindings 的新建 / 改名 / 归档 / 删除、终端释放）带载荷同步到达；
+        // 任务目录里的文件变化（谁写的都算）由 TaskBindings 的目录监听发 lighttyTasksDidChange。
+        // 「活跃」只问 TaskBindings，不订阅窗口结构变化。
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(tasksDidChange),
+            selector: #selector(taskBindingsDidChange),
+            name: .lighttyTaskBindingsDidChange,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(tasksDidChange(_:)),
             name: .lighttyTasksDidChange,
             object: nil)
     }
@@ -83,21 +91,24 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// 合并到下一个 runloop tick：bind() 在 pane 挂进视图树之前发通知，
-    /// 同步 reload 会读到「已绑定但还不在树上」的中间态，误判为休眠。
-    private lazy var reloads = Coalescer(.nextTick) { [weak self] in self?.reload() }
-    @objc private func tasksDidChange() { reloads.schedule() }
+    /// 同步重算，不再合流到下一拍：「活跃」问的是 TaskBindings，不是窗口树，
+    /// 终端还没挂进视图树时绑定就已经是新值，不存在「已绑定但还不在树上」的误判。
+    @objc private func taskBindingsDidChange() { reload() }
+
+    /// 只认列表背后的那份任务绑定：别的 `TaskBindings`（测试夹具）的目录事件与本列表无关。
+    @objc private func tasksDidChange(_ notification: Notification) {
+        guard let bindings = notification.object as? TaskBindings,
+              bindings === AppState.shared?.taskBindings else { return }
+        reload()
+    }
 
     // MARK: - 数据
 
     func reload() {
-        let running = AppState.shared.runningPanes()
-        allEntries = AppState.shared.taskStore.list().tasks
+        let bindings = AppState.shared.taskBindings
+        allEntries = bindings.store.list().tasks
             .map { entry in
-                let bound = running.first {
-                    $0.pane.taskFileURL?.standardizedFileURL == entry.fileURL.standardizedFileURL
-                }
-                return Entry(fileURL: entry.fileURL, task: entry.task, running: bound)
+                Entry(fileURL: entry.fileURL, task: entry.task, running: bindings.isOpen(entry.fileURL))
             }
             .sorted(by: entryOrdering())
         applyFilter("")
@@ -112,7 +123,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
                 .map { ($1, $0) })
         if rank.isEmpty {
             return {
-                if ($0.running != nil) != ($1.running != nil) { return $0.running != nil }
+                if $0.running != $1.running { return $0.running }
                 return $0.task.updated > $1.task.updated
             }
         }
@@ -254,10 +265,6 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         ])
     }
 
-    func openSearchPalette() {
-        (window?.windowController as? TerminalWindowController)?.toggleSearchPalette()
-    }
-
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
     // MARK: - 拖拽排序（手动跟手循环，机件见 ReorderDrag / ReorderingTableView）
@@ -327,7 +334,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
                     initial: entry.task.name, confirmLabel: L("Rename")
                 ) { name in
                     do {
-                        try AppState.shared.renameTask(at: entry.fileURL, to: name)
+                        try AppState.shared.taskBindings.renameTask(at: entry.fileURL, to: name)
                     } catch {
                         NSSound.beep()
                         NSLog("task rename failed: \(error)")
@@ -375,15 +382,8 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         items.append(.separator)
         items.append(.action(L("Archive task")) {
             do {
-                // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的 pane 解绑。
-                try AppState.shared.taskStore.archive(at: entry.fileURL)
-                for (_, pane) in AppState.shared.runningPanes()
-                where pane.taskFileURL?.standardizedFileURL
-                    == entry.fileURL.standardizedFileURL {
-                    pane.unbind()
-                }
-                NotificationCenter.default.post(
-                    name: .lighttyTasksDidChange, object: nil)
+                // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的终端全部解绑。
+                try AppState.shared.taskBindings.archiveTask(at: entry.fileURL)
                 if !FilePreferences.shared.bool(forKey: "handoffArchiveNoticeShown") {
                     FilePreferences.shared.set(true, forKey: "handoffArchiveNoticeShown")
                     let alert = AppBranding.makeAlert()
@@ -399,16 +399,8 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         })
         items.append(.action(L("Delete task (move to Trash)"), destructive: true) {
             do {
-                // 移到废纸篓（可恢复）；绑定中的 pane 解除绑定。
-                try FileManager.default.trashItem(
-                    at: entry.fileURL, resultingItemURL: nil)
-                for (_, pane) in AppState.shared.runningPanes()
-                where pane.taskFileURL?.standardizedFileURL
-                    == entry.fileURL.standardizedFileURL {
-                    pane.unbind()
-                }
-                NotificationCenter.default.post(
-                    name: .lighttyTasksDidChange, object: nil)
+                // 移到废纸篓（可恢复）；绑定中的终端全部解绑。
+                try AppState.shared.taskBindings.deleteTask(at: entry.fileURL)
             } catch {
                 NSSound.beep()
                 NSLog("task delete failed: \(error)")
@@ -424,7 +416,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     /// 双击/Enter：运行中直接跳最近绑定 pane；休眠弹恢复气泡。
     private func jumpOrRestoreSelected() {
         guard let entry = selectedEntry else { return }
-        if let running = entry.running {
+        if let running = AppState.shared.boundPanes(of: entry.fileURL).first {
             running.controller.window?.makeKeyAndOrderFront(nil)
             running.controller.reveal(pane: running.pane)
             running.pane.flashReveal()

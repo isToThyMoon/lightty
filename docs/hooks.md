@@ -143,4 +143,4 @@ codex  plugin remove    lightty@lightty
 ## 相关文档
 
 - `docs/specs/pane-status.md` —— 当前状态传输、展示与 Handoff 注入契约
-- `docs/task-format.md` —— 任务文件格式（其中的 `status` 字段与本机制**无关**，已弃用）
+- `docs/task-format.md` —— 任务文件格式（旧文件里的 `status` 字段与本机制**无关**，已移除）

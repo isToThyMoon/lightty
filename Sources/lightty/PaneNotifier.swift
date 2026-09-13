@@ -219,7 +219,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private static func displayName(for pane: PaneView) -> String {
         let name = pane.header.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = name.isEmpty ? L("Pane") : name
-        guard let task = pane.header.titleOfBoundTask, !task.isEmpty else { return base }
+        guard let task = pane.boundTask?.name, !task.isEmpty else { return base }
         return "\(base) · \(task)"
     }
 

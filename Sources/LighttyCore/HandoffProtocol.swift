@@ -51,8 +51,8 @@ public enum HandoffProtocol {
     /// - `## Suggested commands & skills` 留着是因为**模型稳定会漏**——总结时
     ///   往"我做了什么"偏，"你接手会需要什么"最先被挤掉
     ///
-    /// "which commands or skills do it"里技能名只是途径：任务文件的 `sessions`
-    /// 允许 claude 和 codex 并存，而两家的技能库是分开的，光写名字对换了一家的
+    /// "which commands or skills do it"里技能名只是途径：同一个任务可以先后交给
+    /// claude 和 codex 接手，而两家的技能库是分开的，光写名字对换了一家的
     /// 接手者是条死线索。
     ///
     /// 全部用正面陈述，不用禁令：禁令会把被禁的行为拽进上下文，反而更容易发生。

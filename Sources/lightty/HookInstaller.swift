@@ -426,13 +426,15 @@ enum HookInstaller {
 
 // MARK: - Agent
 
-/// 支持的 agent 及其插件注册约定。
+/// 支持的 agent 及其插件注册约定。只放 hook 安装特有的部分（事件表、声明解析、
+/// 插件命令）；可执行名、配置根等 Agent 描述取自 `SessionAgent`。
+/// rawValue 已经落盘（`~/.lightty/hook-plugins/<agent>.version`、忽略更新的偏好键），
+/// 所以不与 `SessionAgent` 合并。
 enum HookAgent: String, CaseIterable, Sendable {
     case claudeCode
     case codex
 
-    /// 会话侧的 agent 身份 → 插件安装侧的同一家。两个枚举分开是因为两侧的取值
-    /// 来源不同（会话来自各家的归档目录，安装来自我们自己的注册表），但家数一样。
+    /// 会话侧的 agent 身份 → 插件安装侧的同一家。
     /// 用 switch 而不是 `agent == .codex ? … : …`：这个映射的全部意义就是「映错了
     /// 是静默失败」，将来多一家 agent 时必须是编译错误，而不是默默被当成 Claude Code。
     init(_ agent: SessionAgent) {
@@ -442,30 +444,29 @@ enum HookAgent: String, CaseIterable, Sendable {
         }
     }
 
-    /// PATH 上的可执行文件名
-    var executableName: String {
+    var sessionAgent: SessionAgent {
         switch self {
-        case .claudeCode: return "claude"
-        case .codex: return "codex"
+        case .claudeCode: return .claude
+        case .codex: return .codex
         }
     }
 
+    /// PATH 上的可执行文件名
+    var executableName: String { sessionAgent.executableName }
+
     /// 配置目录。两家都支持用环境变量改写位置，跟着走才能和 CLI 看到同一份配置。
     var configDirectory: URL {
-        let environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        switch self {
-        case .claudeCode:
-            if let override = environment["CLAUDE_CONFIG_DIR"], !override.isEmpty {
-                return URL(fileURLWithPath: override, isDirectory: true)
-            }
-            return home.appendingPathComponent(".claude", isDirectory: true)
-        case .codex:
-            if let override = environment["CODEX_HOME"], !override.isEmpty {
-                return URL(fileURLWithPath: override, isDirectory: true)
-            }
-            return home.appendingPathComponent(".codex", isDirectory: true)
-        }
+        configDirectory(environment: ProcessInfo.processInfo.environment,
+                        home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// 解析只走 `SessionConfigurationLocation`。与会话侧唯一的不同：这里把**空字符串**
+    /// 覆盖当作没设（一直如此），会话侧则按显式的自定义根记录。先滤掉空值再解析，
+    /// 两边各自的既有行为都不变。
+    func configDirectory(environment: [String: String], home: URL) -> URL {
+        SessionConfigurationLocation.resolve(agent: sessionAgent,
+                                             environment: environment.filter { !$0.value.isEmpty })
+            .root(for: sessionAgent, home: home)
     }
 
     /// CLI 会往里写声明的那份文件。我们**只读**它，用来判断装没装。

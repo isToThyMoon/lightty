@@ -24,17 +24,18 @@ public enum PaneRuntimeDirectory {
             .appendingPathComponent(".lightty/panes", isDirectory: true)
     }
 
-    public static func directory(for paneID: String) -> URL {
+    /// `root` 只给测试换成临时目录；生产与 hook 一律用默认的 `~/.lightty/panes`。
+    public static func directory(for paneID: String, root: URL = PaneRuntimeDirectory.root) -> URL {
         root.appendingPathComponent(paneID, isDirectory: true)
     }
 
     /// handoff 指针：内容是任务文件的绝对路径（单行，可含尾随换行）
-    public static func taskPointerFile(for paneID: String) -> URL {
-        directory(for: paneID).appendingPathComponent("task")
+    public static func taskPointerFile(for paneID: String, root: URL = PaneRuntimeDirectory.root) -> URL {
+        directory(for: paneID, root: root).appendingPathComponent("task")
     }
 
-    public static func ownerPIDFile(for paneID: String) -> URL {
-        directory(for: paneID).appendingPathComponent("owner.pid")
+    public static func ownerPIDFile(for paneID: String, root: URL = PaneRuntimeDirectory.root) -> URL {
+        directory(for: paneID, root: root).appendingPathComponent("owner.pid")
     }
 
     /// handoff 去重标记：hook 上次把哪个任务文件注入给了哪个会话。
@@ -42,8 +43,8 @@ public enum PaneRuntimeDirectory {
     /// 注入不只发生在 `SessionStart`——用户完全可能先开 agent 再绑任务（或新建、
     /// 改名），所以 `UserPromptSubmit` 也要查指针。没有这个标记，每次提问都会
     /// 把整篇 handoff 再塞一遍。内容两行：`<session_id>` 和 `<path>`，任一变了才重注。
-    public static func handoffMarkerFile(for paneID: String) -> URL {
-        directory(for: paneID).appendingPathComponent("handoff.injected")
+    public static func handoffMarkerFile(for paneID: String, root: URL = PaneRuntimeDirectory.root) -> URL {
+        directory(for: paneID, root: root).appendingPathComponent("handoff.injected")
     }
 
     // MARK: - 状态 socket
@@ -67,10 +68,11 @@ public enum PaneRuntimeDirectory {
     // MARK: - 生命周期
 
     /// 建目录并落 owner.pid。pane 创建时调用；已存在则只刷新 pid。
-    public static func create(paneID: String, ownerPID: pid_t = getpid()) throws {
-        let dir = directory(for: paneID)
+    public static func create(paneID: String, ownerPID: pid_t = getpid(),
+                              root: URL = PaneRuntimeDirectory.root) throws {
+        let dir = directory(for: paneID, root: root)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try atomicWrite(Data("\(ownerPID)\n".utf8), to: ownerPIDFile(for: paneID))
+        try atomicWrite(Data("\(ownerPID)\n".utf8), to: ownerPIDFile(for: paneID, root: root))
     }
 
     /// pane 关闭时调用。失败静默——残留交给 sweepStale。

@@ -48,12 +48,12 @@ import Testing
         let association = try #require(PaneSessionAssociation.resolve(status: status, fallback: nil,
             processExited: false, candidates: [], home: home))
         #expect(association.configuration == location)
-        #expect(try association.resumePlan(executable: "/bin/echo").environment[agent.configurationVariable] == key.sourceRoot)
+        #expect(try association.resumePlan(executable: "/bin/echo").context.environment[agent.configurationVariable] == key.sourceRoot)
         let legacy = PaneSnapshot(name: "v1", agent: agent.rawValue, sessionID: key.nativeID,
                                   agentCWD: home.path, agentAlive: true)
         let restored = try #require(PaneSessionAssociation(snapshot: legacy, home: home))
         #expect(restored.key == key)
         #expect(restored.configuration == .standard)
-        #expect(try restored.resumePlan(executable: "/bin/echo").unsetEnvironment == [agent.configurationVariable])
+        #expect(try restored.resumePlan(executable: "/bin/echo").context.unsetEnvironment == [agent.configurationVariable])
     }
 }

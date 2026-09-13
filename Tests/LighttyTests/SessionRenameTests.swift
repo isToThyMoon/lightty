@@ -28,10 +28,11 @@ final class CodexSessionRenameIntegrationTests: XCTestCase {
             .joined(separator: "\n") + "\n"
         try text.write(to: directory.appendingPathComponent("rollout-2026-09-07T00-00-00-\(id).jsonl"),
                        atomically: true, encoding: .utf8)
-        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable)
+        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable,
+                                          configuration: .custom(root.path))
         let key = AgentSessionKey(agent: .codex, sourceRoot: root.path, nativeID: id)
-        try SessionRename.rename(key, to: "改过的名字", source: source)
-        let records = try CodexSessionCatalog(source: source).sessions(archived: false, cancelled: { false })
+        try SessionRename.rename(key, to: "改过的名字", provider: CodexSessionProvider(source: source))
+        let records = try CodexSessionProvider(source: source).sessions(archived: false, cancelled: { false })
         XCTAssertEqual(records.first(where: { $0.key.nativeID == id })?.title, "改过的名字")
     }
 
@@ -42,12 +43,7 @@ final class CodexSessionRenameIntegrationTests: XCTestCase {
         let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/claude-session-helper")
-        #if arch(arm64)
-        let runtime = "runtime-arm64/node"
-        #else
-        let runtime = "runtime-x64/node"
-        #endif
-        guard FileManager.default.isExecutableFile(atPath: helper.appendingPathComponent(runtime).path),
+        guard FileManager.default.isExecutableFile(atPath: AgentHelperProcess.nodeRuntime(in: helper).path),
               FileManager.default.isReadableFile(atPath: helper.appendingPathComponent("rename-session.mjs").path)
         else { throw XCTSkip("Claude session helper not prepared") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rename-test-\(UUID())")
@@ -65,10 +61,12 @@ final class CodexSessionRenameIntegrationTests: XCTestCase {
         let text = try lines.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
             .joined(separator: "\n") + "\n"
         try text.write(to: project.appendingPathComponent("\(id).jsonl"), atomically: true, encoding: .utf8)
-        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/nonexistent/claude")
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/nonexistent/claude",
+                                          configuration: .custom(root.path))
         let key = AgentSessionKey(agent: .claude, sourceRoot: root.path, nativeID: id)
-        try SessionRename.rename(key, to: "改过的名字", source: source, helperDirectory: helper)
-        let records = try ClaudeSessionCatalog(source: source, helperDirectory: helper)
+        try SessionRename.rename(key, to: "改过的名字",
+                                 provider: ClaudeSessionProvider(source: source, helperDirectory: helper))
+        let records = try ClaudeSessionProvider(source: source, helperDirectory: helper)
             .sessions(archived: false, cancelled: { false })
         XCTAssertEqual(records.first(where: { $0.key.nativeID == id })?.title, "改过的名字")
     }
@@ -98,24 +96,22 @@ struct SessionRenameTests {
     /// 来源对不上就不能动。
     @Test func mismatchedSourceIsRejectedBeforeAnyProcessStarts() {
         let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
-        let elsewhere = SessionCatalogSource(agent: .codex, root: URL(fileURLWithPath: "/other/.codex"),
-                                             executable: "/nonexistent/codex")
+        let elsewhere = FakeSessionProvider(agent: .codex, root: "/other/.codex")
         #expect(throws: SessionRename.Failure.invalidSource) {
-            try SessionRename.rename(key, to: "新名字", source: elsewhere)
+            try SessionRename.rename(key, to: "新名字", provider: elsewhere)
         }
-        let wrongAgent = SessionCatalogSource(agent: .claude, root: URL(fileURLWithPath: "/fixture/.codex"),
-                                              executable: "/nonexistent/claude")
+        let wrongAgent = FakeSessionProvider(agent: .claude, root: "/fixture/.codex")
         #expect(throws: SessionRename.Failure.invalidSource) {
-            try SessionRename.rename(key, to: "新名字", source: wrongAgent)
+            try SessionRename.rename(key, to: "新名字", provider: wrongAgent)
         }
         let notAUUID = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: "../escape")
-        let source = SessionCatalogSource(agent: .codex, root: URL(fileURLWithPath: "/fixture/.codex"),
-                                          executable: "/nonexistent/codex")
+        let provider = FakeSessionProvider(agent: .codex, root: "/fixture/.codex")
         #expect(throws: SessionRename.Failure.invalidSource) {
-            try SessionRename.rename(notAUUID, to: "新名字", source: source)
+            try SessionRename.rename(notAUUID, to: "新名字", provider: provider)
         }
         #expect(throws: SessionRename.Failure.invalidName) {
-            try SessionRename.rename(key, to: "  \n ", source: source)
+            try SessionRename.rename(key, to: "  \n ", provider: provider)
         }
+        #expect(elsewhere.calls.isEmpty && wrongAgent.calls.isEmpty && provider.calls.isEmpty)
     }
 }

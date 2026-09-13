@@ -3,12 +3,13 @@ import LighttyCore
 
 /// 侧栏一行的身份。每一项都记住所属标签页：拖拽落点要分辨"落在某个标签页的
 /// pane 块里"还是"落在两个标签页之间"，没有归属就分辨不了。
-/// 容器行同时带着标签页的身份：拖拽途中列表随时可能刷新，下标会变，身份不会。
+/// 全部按身份记，不记下标：拖拽途中列表随时可能刷新、松手到执行之间标签页随时可能
+/// 被关掉，下标会变，身份不会。
 /// `leaf` = 单 pane 标签页的合并行：它既是可拖走的 pane，本身又是一个标签页。
 enum TabRowKind: Equatable {
-    case tab(index: Int, id: UUID)
-    case pane(tab: Int, pane: UUID)
-    case leaf(tab: Int, pane: UUID)
+    case tab(UUID)
+    case pane(tab: UUID, pane: UUID)
+    case leaf(tab: UUID, pane: UUID)
 }
 
 /// 双栏侧栏的左栏：标签页 › pane 两级树（cmux 形态的窗口活地图）。
@@ -137,11 +138,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         ])
 
-        // Handoff 任务绑定/改名/解绑经 lighttyTasksDidChange 广播；标签页结构变化
-        // 由 TerminalWindowController.refreshTabStrip 直接调 reload。
+        // 行上的任务名随 TaskBindings 的变更刷新；本窗口的结构变化由
+        // TerminalWindowController.refreshTabSidebar 直接调 reload，别的窗口的 commit
+        // 与关窗经无载荷的 lighttyWindowArrangementDidChange 广播过来。行上不显示任务文件
+        // 内容，不订阅 lighttyTasksDidChange。
         NotificationCenter.default.addObserver(
             self, selector: #selector(scheduleReload),
-            name: .lighttyTasksDidChange, object: nil)
+            name: .lighttyTaskBindingsDidChange, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scheduleReload),
+            name: .lighttyWindowArrangementDidChange, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -204,13 +210,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard let state = controller.sessionLibrary.paneState(for: id) else { continue }
             paneRows.object(forKey: id as NSUUID)?.applySession(state)
         }
+        // 控制器每次改焦点都会同步一次窗口选中项，这条变更就是焦点变了的信号；
+        // 高亮本身仍只从 activePane 派生。
         if change.windows.contains(controller.sessionWindowID) {
-            applyActivePane(controller.sessionLibrary.selectedPane(in: controller.sessionWindowID))
+            applyActivePane(controller.activePane?.dragIdentifier)
         }
     }
 
     /// pane 焦点变化只原地切换行底色，不拆建标签页树。
-    func applyActivePane(_ paneID: UUID?) {
+    private func applyActivePane(_ paneID: UUID?) {
         for case let row as PaneRowView in paneRows.objectEnumerator() ?? NSEnumerator() {
             row.setActive(row.paneID == paneID)
         }
@@ -251,10 +259,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     typealias OverviewEntry = (
-        id: UUID, index: Int, title: String, hasCustomTitle: Bool, isActive: Bool, panes: [PaneView])
+        id: UUID, title: String, hasCustomTitle: Bool, isActive: Bool, panes: [PaneView])
     private struct TabPresentation {
         let id: UUID
-        let index: Int
         let title: String
         let isActive: Bool
         let count: Int
@@ -267,27 +274,27 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         for entry in overview {
             if entry.panes.count == 1, !entry.hasCustomTitle, let pane = entry.panes.first {
                 // 叶子标签页：折叠对它无意义，折叠集合里的残留不影响它。
-                let index = entry.index
+                let tabID = entry.id
                 let title = entry.title
-                rowItems.append(RowItem(kind: .leaf(tab: index, pane: pane.dragIdentifier),
+                rowItems.append(RowItem(kind: .leaf(tab: tabID, pane: pane.dragIdentifier),
                     makeView: { [weak self, weak pane] existing in
                         guard let self, let pane else { return NSView() }
-                        return self.makeLeafRow(for: pane, tabIndex: index, tabTitle: title,
+                        return self.makeLeafRow(for: pane, tabID: tabID, tabTitle: title,
                             reusing: existing as? PaneRowView)
                     }))
                 continue
             }
             // 拖容器行时它临时折叠：只影响这次显示，不写进用户的折叠状态。
             let isCollapsed = collapsedTabIDs.contains(entry.id) || drag?.collapsedForDrag == entry.id
-            let presentation = TabPresentation(id: entry.id, index: entry.index, title: entry.title,
+            let presentation = TabPresentation(id: entry.id, title: entry.title,
                 isActive: entry.isActive, count: entry.panes.count)
-            rowItems.append(RowItem(kind: .tab(index: entry.index, id: entry.id), makeView: { [weak self] existing in
+            rowItems.append(RowItem(kind: .tab(entry.id), makeView: { [weak self] existing in
                 self?.makeTabRow(presentation, isCollapsed: isCollapsed, reusing: existing as? TabRowView) ?? NSView()
             }))
 
             guard !isCollapsed else { continue }
             for pane in entry.panes {
-                rowItems.append(RowItem(kind: .pane(tab: entry.index, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
+                rowItems.append(RowItem(kind: .pane(tab: entry.id, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
                     guard let self, let pane else { return NSView() }
                     return self.makePaneRow(for: pane, leading: .nested,
                         isActive: pane.dragIdentifier == self.controller?.activePane?.dragIdentifier,
@@ -302,7 +309,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func makeTabRow(_ entry: TabPresentation, isCollapsed: Bool, reusing existing: TabRowView?) -> TabRowView {
-        let index = entry.index
         let tabID = entry.id
         let wasActive = entry.isActive
         let row = existing ?? TabRowView(
@@ -311,7 +317,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             isActive: entry.isActive,
             isCollapsed: isCollapsed)
         row.configure(title: entry.title, count: entry.count, isActive: entry.isActive, isCollapsed: isCollapsed)
-        row.tabIndex = index
         row.onSelect = { [weak self] in
             guard let self else { return }
             if wasActive {
@@ -319,21 +324,21 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             } else {
                 // 切到一个折叠着的标签页时顺手展开：选中它就是要看它的 pane
                 self.collapsedTabIDs.remove(tabID)
-                self.controller?.selectTab(at: index)
+                self.controller?.selectTab(withID: tabID)
             }
         }
         row.onToggleCollapse = { [weak self] in
             self?.toggleTabCollapse(tabID)
         }
         row.onPaneDrop = { [weak self] paneID in
-            self?.controller?.movePane(withID: paneID, toTabAt: index) ?? false
+            self?.controller?.movePane(withID: paneID, intoTabWithID: tabID) ?? false
         }
         row.onRename = { [weak self, weak row] in
             guard let self, let anchor = row, let controller = self.controller else { return }
             NameEditorPopover.present(
                 from: anchor, title: L("Rename tab"),
                 initial: entry.title, confirmLabel: L("Rename")
-            ) { name in controller.renameTab(at: index, to: name) }
+            ) { name in controller.renameTab(withID: tabID, to: name) }
         }
         row.onMenu = { [weak self, weak row] in
             guard let self, let anchor = row else { return }
@@ -343,11 +348,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                     NameEditorPopover.present(
                         from: anchor, title: L("Rename tab"),
                         initial: entry.title, confirmLabel: L("Rename")
-                    ) { name in controller.renameTab(at: index, to: name) }
+                    ) { name in controller.renameTab(withID: tabID, to: name) }
                 },
             ])
         }
-        row.onClose = { [weak self] in self?.controller?.closeTab(at: index) }
+        row.onClose = { [weak self] in self?.controller?.closeTab(withID: tabID) }
         row.onBeginDrag = { [weak self, weak row] event in
             guard let self, let row else { return }
             self.beginRowDrag(source: .tab(tabID), from: row, event: event)
@@ -367,7 +372,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 单 pane 标签页的合并行：pane 行的皮、标签页的骨。
     private func makeLeafRow(
         for pane: PaneView,
-        tabIndex: Int,
+        tabID: UUID,
         tabTitle: String,
         reusing existing: PaneRowView?
     ) -> PaneRowView {
@@ -376,14 +381,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             reusing: existing)
         // 落点语义换成标签页的：拖进来 = 移入该标签页（内核会把它排到这个 pane 旁边）。
         row.onPaneDrop = { [weak self] sourceID in
-            self?.controller?.movePane(withID: sourceID, toTabAt: tabIndex) ?? false
+            self?.controller?.movePane(withID: sourceID, intoTabWithID: tabID) ?? false
         }
         let rename: () -> Void = { [weak self, weak row] in
             guard let self, let anchor = row, let controller = self.controller else { return }
             NameEditorPopover.present(
                 from: anchor, title: L("Rename tab"),
                 initial: tabTitle, confirmLabel: L("Rename")
-            ) { name in controller.renameTab(at: tabIndex, to: name) }
+            ) { name in controller.renameTab(withID: tabID, to: name) }
         }
         row.onRename = rename
         row.onMenu = { [weak row] in
@@ -400,27 +405,28 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         reusing existing: PaneRowView? = nil
     ) -> PaneRowView {
         let state = pane.sessionState
+        let taskName = pane.boundTask?.name
         if let existing, paneRows.object(forKey: existing.paneID as NSUUID) === existing {
             paneRows.removeObject(forKey: existing.paneID as NSUUID)
         }
         let paneRow = existing ?? PaneRowView(
             paneID: pane.dragIdentifier,
             name: state.title,
-            taskName: pane.header.titleOfBoundTask,
-            bound: pane.header.titleOfBoundTask != nil,
+            taskName: taskName,
+            bound: taskName != nil,
             leading: leading,
             isActive: isActive,
             workingDirectory: state.workingDirectory)
         paneRow.configure(paneID: pane.dragIdentifier, name: state.title,
-            taskName: pane.header.titleOfBoundTask, isActive: isActive,
+            taskName: taskName, isActive: isActive,
             workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent)
         // 标签页语义的回调只有叶子行会装；普通 pane 行复用时必须清掉。
         paneRow.onMenu = nil
         paneRow.onRename = nil
         paneRow.onSelect = { [weak self, weak pane] in
             guard let self, let pane else { return }
+            // 只发命令：高亮随控制器同步的焦点变更回来，不在这里直接改。
             self.controller?.reveal(pane: pane)
-            self.applyActivePane(pane.dragIdentifier)
             // 落点提示：跳转可能伴随标签页切换，多分屏下必须告诉视线去哪
             pane.flashReveal()
         }
@@ -450,12 +456,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case tab(UUID)
     }
 
-    /// 松手后交给控制器执行的命令。
+    /// 松手后交给控制器执行的命令。命令在下一拍才执行，所以全部按身份表达：
+    /// 顶层落点记成「排在哪个标签页之后」（nil = 最前），而不是第几位——这一拍之间
+    /// 关掉一个标签页，位次会整体前移，邻居不会变。
     enum RowDropCommand: Equatable {
-        case moveTab(from: Int, to: Int)
-        case detachPane(UUID, toNewTabAt: Int)
+        case moveTab(UUID, after: UUID?)
+        case detachPane(UUID, after: UUID?)
         case movePaneBeside(UUID, target: UUID, zone: PaneDropZone)
-        case movePaneIntoTab(UUID, tabIndex: Int)
+        case movePaneIntoTab(UUID, tab: UUID)
     }
 
     /// 拖拽落点只有两种语义，因为列表只有两级：
@@ -468,7 +476,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 对它而言"块内"不存在——要并进去得把行压到它的中央带上（合并）。
     enum DropSlot: Equatable {
         case insideTab(next: UUID?, previous: UUID?)
-        case betweenTabs(Int)
+        /// 排在这个标签页之后；nil = 最前。
+        case betweenTabs(after: UUID?)
     }
 
     /// 一次行拖拽的全部状态。
@@ -499,11 +508,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// 当前显示出来的行序（测试与诊断用）。
     var displayedRows: [TabRowKind] { rowItems.map(\.kind) }
+    /// 已建出的 pane 行里被高亮的那些（测试读）。
+    var highlightedPaneIDs: [UUID] {
+        (paneRows.objectEnumerator()?.allObjects as? [PaneRowView] ?? []).filter(\.isActive).map(\.paneID)
+    }
 
     static func matches(_ row: TabRowKind, _ source: RowDragSource) -> Bool {
         switch (row, source) {
         case (.pane(_, let id), .pane(let pane)), (.leaf(_, let id), .pane(let pane)): return id == pane
-        case (.tab(_, let id), .tab(let tab)): return id == tab
+        case (.tab(let id), .tab(let tab)): return id == tab
         default: return false
         }
     }
@@ -530,12 +543,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static func dropCommand(rows: [TabRowKind], sourceIndex si: Int, merge: TabRowKind?) -> RowDropCommand? {
         guard rows.indices.contains(si) else { return nil }
         switch rows[si] {
-        case .tab(let index, _):
-            return .moveTab(from: index, to: topLevelIndex(in: rows, before: si))
+        case .tab(let id):
+            return .moveTab(id, after: precedingTab(in: rows, before: si))
         case .pane(_, let pane), .leaf(_, let pane):
             switch merge {
-            case .tab(let index, _)?:
-                return .movePaneIntoTab(pane, tabIndex: index)
+            case .tab(let tab)?:
+                return .movePaneIntoTab(pane, tab: tab)
             case .pane(_, let target)?, .leaf(_, let target)?:
                 return .movePaneBeside(pane, target: target, zone: .right)
             case nil:
@@ -546,9 +559,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 return .movePaneBeside(pane, target: next, zone: .left)
             case .insideTab(nil, let previous?)?:
                 return .movePaneBeside(pane, target: previous, zone: .right)
-            case .betweenTabs(let index)?:
-                if case .leaf(let tab, _) = rows[si] { return .moveTab(from: tab, to: index) }
-                return .detachPane(pane, toNewTabAt: index)
+            case .betweenTabs(let anchor)?:
+                if case .leaf(let tab, _) = rows[si] { return .moveTab(tab, after: anchor) }
+                return .detachPane(pane, after: anchor)
             case .insideTab(nil, nil)?, nil:
                 return nil
             }
@@ -565,19 +578,19 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         if si > 0, case .pane(_, let id) = rows[si - 1] {
             return .insideTab(next: nil, previous: id)
         }
-        return .betweenTabs(topLevelIndex(in: rows, before: si))
+        return .betweenTabs(after: precedingTab(in: rows, before: si))
     }
 
-    /// 顶层位次 = 该行上方还有几个标签页（容器行 + 叶子行各算一个，源行自己不算）。
-    static func topLevelIndex(in rows: [TabRowKind], before row: Int) -> Int {
-        var index = 0
-        for item in rows[..<min(row, rows.count)] {
+    /// 顶层落点的邻居 = 该行上方最近的一个标签页（容器行或叶子行；块内的 pane 行不算）。
+    /// 上方没有标签页返回 nil，即排在最前。
+    static func precedingTab(in rows: [TabRowKind], before row: Int) -> UUID? {
+        for item in rows[..<min(row, rows.count)].reversed() {
             switch item {
-            case .tab, .leaf: index += 1
+            case .tab(let id), .leaf(let id, _): return id
             case .pane: continue
             }
         }
-        return index
+        return nil
     }
 
     /// 接管一行的拖拽。跟手循环只是薄适配层：开始、移动、松手落在下面三个方法上，
@@ -673,15 +686,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func perform(_ command: RowDropCommand) -> Bool {
         guard let controller else { return false }
         switch command {
-        case .moveTab(let from, let to):
-            return controller.moveTab(from: from, to: to)
-        case .detachPane(let pane, let index):
-            return controller.detachPane(withID: pane, toNewTabAt: index)
+        case .moveTab(let tab, let anchor):
+            return controller.moveTab(withID: tab, after: anchor)
+        case .detachPane(let pane, let anchor):
+            return controller.detachPane(withID: pane, toNewTabAfter: anchor)
         case .movePaneBeside(let pane, let target, let zone):
             guard let destination = controller.panes().first(where: { $0.dragIdentifier == target }) else { return false }
             return controller.movePane(withID: pane, to: destination, zone: zone)
-        case .movePaneIntoTab(let pane, let index):
-            return controller.movePane(withID: pane, toTabAt: index)
+        case .movePaneIntoTab(let pane, let tab):
+            return controller.movePane(withID: pane, intoTabWithID: tab)
         }
     }
 
@@ -752,16 +765,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
 }
 
-/// 标签页行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
-/// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
-/// 关闭不在菜单里重复出现。
-///
-/// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
-/// 侧栏里可接收 pane 拖拽落点的行（标签页行 + pane 行）。手动拖拽循环
-/// （见 ReorderDrag）据此统一命中与高亮，与任务列表同一套跟手机件。
+/// 侧栏里可作为合并落点的行（标签页行 + pane 行）。手动拖拽循环（见 ReorderDrag）
+/// 据此给合并目标描边，与任务列表同一套跟手机件。
 private protocol SidebarPaneDropRow: NSView {
-    func acceptsPaneDrop(_ id: UUID) -> Bool
-    func performPaneDrop(_ id: UUID) -> Bool
     func setDropHighlighted(_ on: Bool)
 }
 
@@ -781,9 +787,12 @@ private final class TabRowContainer: NSView {
     }
 }
 
+/// 标签页行（容器级）：未激活时单击切换；已激活时单击折叠/展开 panes；
+/// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
+/// 关闭不在菜单里重复出现。
+///
+/// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
 private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
-    /// 拖拽落点映射用：空区落到本标签页时按此 index 走 movePane(toTabAt:)。
-    var tabIndex = 0
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
@@ -997,10 +1006,6 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         }
     }
 
-    // MARK: - SidebarPaneDropRow
-    func acceptsPaneDrop(_ id: UUID) -> Bool { true }   // 任何 pane 都能移进标签页
-    func performPaneDrop(_ id: UUID) -> Bool { onPaneDrop?(id) ?? false }
-
     // MARK: - pane 落点
 
     private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {
@@ -1113,7 +1118,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private var isUnread = false
     private var terminalWorkingDirectory: String?
     private var activity: PaneActivity? { status?.state }
-    private var isActive: Bool
+    private(set) var isActive: Bool
     private var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
@@ -1501,10 +1506,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             }
         }
     }
-
-    // MARK: - SidebarPaneDropRow
-    func acceptsPaneDrop(_ id: UUID) -> Bool { id != paneID }
-    func performPaneDrop(_ id: UUID) -> Bool { onPaneDrop?(id) ?? false }
 
     // 落点：把别的 pane 拖到本行 = 移到本 pane 所在处（右侧分屏）
     private func acceptedPaneID(_ sender: NSDraggingInfo) -> UUID? {

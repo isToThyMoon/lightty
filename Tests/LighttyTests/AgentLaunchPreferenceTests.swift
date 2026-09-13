@@ -11,7 +11,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-        try AppState.shared.taskStore.create(name: "Search fixture", workdir: directory.path)
+        try AppState.shared.taskBindings.store.create(name: "Search fixture", workdir: directory.path)
         let controller = TerminalWindowController()
         let palette = SearchPaletteView(controller: controller)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
@@ -44,7 +44,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
         let controller = TerminalWindowController()
         let body = "## Current state\n" + String(repeating: "Long handoff preview text. ", count: 150)
-        let task = TaskFile(name: "Preview", status: "todo", workdir: directory.path,
+        let task = TaskFile(name: "Preview", workdir: directory.path,
                             created: Date(), updated: Date(), body: body)
         let popover = LaunchComposerController(
             subject: .task(fileURL: directory.appendingPathComponent("task.md"), task: task),
@@ -70,14 +70,15 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
         if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-        let task = TaskFile(name: "Launch test", status: "todo", workdir: directory.path,
+        let task = TaskFile(name: "Launch test", workdir: directory.path,
                             created: Date(), updated: Date())
         let file = directory.appendingPathComponent("task.md")
         let marker = directory.appendingPathComponent("launch-marker")
         // 绝对路径落点：断言看的是 pwd 的**内容**，所以即使 pane 没拿到任务目录、
         // 退回内核默认 cwd（跑测试时是仓库根），也只会写进临时目录而不是污染仓库。
-        let pane = PaneView.restoring(task: task, fileURL: file,
-                                      command: .shell("pwd > '\(marker.path)'"))
+        let pane = try AppState.shared.paneLauncher.makePane(for: .init(
+            .shell(command: "pwd > '\(marker.path)'"), workingDirectory: task.workdir,
+            task: BoundTask(fileURL: file, name: task.name)))
         XCTAssertNil(pane.terminal.surface)
         XCTAssertEqual(pane.taskFileURL, file)
         XCTAssertEqual(pane.terminal.launchConfiguration.workingDirectory, directory.path)
@@ -197,7 +198,7 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         }
         AgentLaunchPreference.select(.claudeCode)
         let controller = TerminalWindowController()
-        let task = TaskFile(name: "Example", status: "todo", workdir: taskDirectory.path,
+        let task = TaskFile(name: "Example", workdir: taskDirectory.path,
                             created: Date(), updated: Date())
         let popover = LaunchComposerController(
             subject: .task(fileURL: taskDirectory.appendingPathComponent("task.md"), task: task),
@@ -236,9 +237,9 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         }
         AgentLaunchPreference.select(.codex)
         let controller = TerminalWindowController()
-        try AppState.shared.taskStore.create(name: "Handoff launch", workdir: taskDirectory.path)
+        try AppState.shared.taskBindings.store.create(name: "Handoff launch", workdir: taskDirectory.path)
         let file = taskDirectory.appendingPathComponent("Handoff launch.md")
-        let task = try AppState.shared.taskStore.load(at: file)
+        let task = try AppState.shared.taskBindings.store.load(at: file)
         let popover = LaunchComposerController(subject: .task(fileURL: file, task: task),
                                                controller: controller)
         _ = popover.view
@@ -279,8 +280,11 @@ final class AgentLaunchPreferenceTests: XCTestCase {
                                    title: "", workingDirectory: "/tmp", updatedAt: nil)
         func commands() throws -> [String] {
             let plan = try SessionResumePlan(resuming: session, executable: "/bin/echo", configuration: .standard)
+            let picker = try SessionPickerPlan(opening: .init(agent: .codex, root: root, executable: "/bin/echo",
+                                                              configuration: .standard),
+                                               workingDirectory: "/tmp")
             // 新建与 handoff 共用 .start；恢复与重启恢复共用 .resume。
-            return try [AgentCommand.start(.codex), .resume(plan), .sessionPicker(plan)]
+            return try [AgentCommand.start(.codex), .resume(plan), .sessionPicker(picker)]
                 .map { try XCTUnwrap($0.shellInput) }
         }
         AgentLaunchPreference.setBypass(true)

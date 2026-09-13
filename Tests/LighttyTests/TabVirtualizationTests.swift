@@ -54,7 +54,7 @@ final class TabVirtualizationTests: XCTestCase {
         let column = TabColumnView()
         window.contentView = column
         column.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
-        column.reload(overview: (0..<count).map { (UUID(), $0, "Tab \($0)", false, false, []) })
+        column.reload(overview: (0..<count).map { (UUID(), "Tab \($0)", false, false, []) })
         column.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }

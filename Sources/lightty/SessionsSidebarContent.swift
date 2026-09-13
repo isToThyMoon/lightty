@@ -296,7 +296,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     /// （刷新在标题行上的按钮里）。
     func managementItems() -> [ShellMenuPopover.Item] {
         var items: [ShellMenuPopover.Item] = [.header(L("Filter sessions"))]
-        for (index, title) in [L("All agents"), "Codex CLI", "Claude Code"].enumerated() {
+        for (index, title) in [L("All agents"), SessionAgent.codex.sourceName, SessionAgent.claude.sourceName].enumerated() {
             items.append(.action(title, checked: agentFilter == index) { [weak self] in
                 self?.agentFilter = index; self?.reload()
             })
@@ -311,7 +311,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             .header(L("Native resume picker…"))]
         for agent in SessionAgent.allCases {
             guard let source = library.source(for: agent) else { continue }
-            items.append(.action(agent == .codex ? "Codex CLI" : "Claude Code") { [weak self] in
+            items.append(.action(agent.sourceName) { [weak self] in
                 guard let controller = self?.window?.windowController as? TerminalWindowController else { return }
                 SessionResumeFlow.nativePicker(source: source, in: controller)
             })
@@ -350,7 +350,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             let archived = organization.archivedSessions.contains(record.key)
                 || projectID.map { organization.archivedProjects.contains($0) } == true
             return providerMatches && (searchMode || archived == showingArchived)
-                && (query.isEmpty || [record.title, record.workingDirectory ?? "", record.key.agent == .codex ? "Codex CLI" : "Claude Code", projectName]
+                && (query.isEmpty || [record.title, record.workingDirectory ?? "", record.key.agent.sourceName, projectName]
                     .contains { $0.localizedCaseInsensitiveContains(query) })
         }.sorted {
             if sortByTitle, $0.title != $1.title { return $0.title.localizedStandardCompare($1.title) == .orderedAscending }
@@ -385,7 +385,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             messages.append(L("Archived in lightty only. Original Agent sessions are unchanged."))
         }
         for agent in SessionAgent.allCases {
-            if let error = library.errors[agent] { messages.append("\(agent == .codex ? "Codex CLI" : "Claude Code"): \(error)") }
+            if let error = library.errors[agent] { messages.append("\(agent.sourceName): \(error)") }
         }
         if let error = library.storageError { messages.append(error) }
         return SidebarState(
@@ -540,7 +540,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if searchMode, case .session(let record, _) = rows[row] {
-            let agent = record.key.agent == .codex ? "Codex CLI" : "Claude Code"
+            let agent = record.key.agent.sourceName
             let date = record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: Date()) } ?? ""
             let snippet = NSAttributedString(string: [date, record.workingDirectory ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: ShellStyle.secondaryText])
@@ -809,7 +809,7 @@ private final class SessionListCell: NSTableCellView {
     func setAgent(_ agent: SessionAgent?) {
         agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
         agentIcon.isHidden = agent == nil
-        agentIcon.toolTip = agent.map { $0 == .claude ? "Claude Code" : "OpenAI Codex" }
+        agentIcon.toolTip = agent?.iconToolTip
         detailLeading.constant = agent == nil ? 0 : 16
     }
     let location = SessionTruncatingLabel(labelWithString: "")

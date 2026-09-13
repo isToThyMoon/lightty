@@ -33,15 +33,11 @@ final class TaskFileParseTests: XCTestCase {
     let fullSample = """
     ---
     name: 修会话管理方案
-    status: active
     workdir: /Users/me/project/foo
     tool: claude
     created: 2026-08-22T10:00:00Z
     updated: 2026-08-22T12:30:00Z
     x-extra: 保留我
-    sessions:
-      - claude:3551e356-5b15-43d1-86a5-69764b142807
-      - codex:abc
     ---
     正文第一行
 
@@ -51,16 +47,11 @@ final class TaskFileParseTests: XCTestCase {
     func testParseFullFile() throws {
         let file = try TaskFile.parse(td(fullSample))
         XCTAssertEqual(file.name, "修会话管理方案")
-        XCTAssertEqual(file.status, "active")
         XCTAssertEqual(file.workdir, "/Users/me/project/foo")
         XCTAssertEqual(file.tool, "claude")
         XCTAssertEqual(file.created, utc("2026-08-22T10:00:00Z"))
         XCTAssertEqual(file.updated, utc("2026-08-22T12:30:00Z"))
         XCTAssertEqual(file.unknownLines, ["x-extra: 保留我"])
-        XCTAssertEqual(file.sessions, [
-            TaskSession(tool: "claude", id: "3551e356-5b15-43d1-86a5-69764b142807"),
-            TaskSession(tool: "codex", id: "abc"),
-        ])
         XCTAssertEqual(file.body, "正文第一行\n\n第二行无结尾换行")
     }
 
@@ -68,7 +59,6 @@ final class TaskFileParseTests: XCTestCase {
         let input = """
         ---
         name: a
-        status: done
         cwd: /tmp
         created: 2026-08-22T10:00:00Z
         updated: 2026-08-22T10:00:00Z
@@ -77,9 +67,7 @@ final class TaskFileParseTests: XCTestCase {
         """
         let file = try TaskFile.parse(td(input))
         XCTAssertNil(file.tool)
-        XCTAssertEqual(file.sessions, [])
         XCTAssertEqual(file.unknownLines, [])
-        XCTAssertEqual(file.status, "done")
         // 多行字面量闭合前的末尾空行只贡献闭合 --- 的换行，正文为空
         XCTAssertEqual(file.body, "")
     }
@@ -96,6 +84,28 @@ final class TaskFileParseTests: XCTestCase {
         let input = "---\nname: a\nstatus: active\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---"
         let file = try TaskFile.parse(td(input))
         XCTAssertEqual(file.body, "")
+    }
+
+    // MARK: - 旧字段 status / sessions（2026-09-13 移除：读时忽略、写时丢弃）
+
+    func testFileWithoutStatusParses() throws {
+        let input = "---\nname: a\nworkdir: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.name, "a")
+        XCTAssertEqual(file.workdir, "/x")
+    }
+
+    func testLegacyStatusAndSessionsBlockAreIgnoredOnRead() throws {
+        // 旧文件都带 status；sessions 块的条目不再校验——字段已删，条目写成什么样都不该毙掉整个文件
+        let input = "---\nname: a\nstatus: completed\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\nx-extra: 保留我\nsessions:\n  - claude:s1\n  - nocolon\n---\n正文"
+        let file = try TaskFile.parse(td(input))
+        XCTAssertEqual(file.workdir, "/x")
+        XCTAssertEqual(file.unknownLines, ["x-extra: 保留我"])
+        XCTAssertEqual(file.body, "正文")
+        let text = String(decoding: file.serialize(), as: UTF8.self)
+        XCTAssertFalse(text.contains("status"))
+        XCTAssertFalse(text.contains("sessions"))
+        XCTAssertFalse(text.contains("  - "))
     }
 
     // MARK: - 非法输入
@@ -124,34 +134,20 @@ final class TaskFileParseTests: XCTestCase {
         assertParseError(input, line: 4, messageContains: "重复")
     }
 
-    func testArbitraryStatusValueIsPreserved() throws {
-        // status 已弃用：agent 手写的 completed/paused 等值不再毙掉整个文件，
-        // 读写原样保留
-        let input = "---\nname: a\nstatus: completed\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n---\n"
-        let file = try TaskFile.parse(td(input))
-        XCTAssertEqual(file.status, "completed")
-        XCTAssertTrue(String(data: file.serialize(), encoding: .utf8)!.contains("status: completed"))
-    }
-
     func testErrorBadTimestamp() {
         let input = "---\nname: a\nstatus: active\ncwd: /x\ncreated: 2026-08-22 10:00\nupdated: 2026-08-22T10:00:00Z\n---\n"
         assertParseError(input, line: 5)
     }
 
-    func testErrorSessionEntryOutsideBlock() {
+    func testErrorListEntryOutsideLegacySessionsBlock() {
         let input = "---\nname: a\nstatus: active\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\n  - claude:x\n---\n"
         assertParseError(input, line: 7)
     }
 
-    func testErrorSessionEntryAfterBlockClosed() {
-        // sessions 块被普通键打断后再出现条目行
+    func testErrorListEntryAfterLegacySessionsBlockClosed() {
+        // 旧 sessions 块被普通键打断后再出现条目行
         let input = "---\nname: a\nstatus: active\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nsessions:\n  - claude:x\nupdated: 2026-08-22T10:00:00Z\n  - claude:y\n---\n"
         assertParseError(input, line: 9)
-    }
-
-    func testErrorSessionEntryMissingColon() {
-        let input = "---\nname: a\nstatus: active\ncwd: /x\ncreated: 2026-08-22T10:00:00Z\nupdated: 2026-08-22T10:00:00Z\nsessions:\n  - nocolon\n---\n"
-        assertParseError(input, line: 8)
     }
 
     func testErrorMissingRequiredKey() {

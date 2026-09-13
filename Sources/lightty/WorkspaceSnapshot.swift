@@ -27,67 +27,18 @@ struct WindowSnapshot: Codable, Equatable {
 }
 
 struct TabSnapshot: Codable, Equatable {
+    /// 显示出来的标签页名（默认名按存盘时的语言格式化）。
     var title: String
+    /// 用户亲手改过名。旧快照没有这个字段：读入时按「默认名格式」反推一次（见 `TabTitle.restored`）。
+    var customTitle: Bool? = nil
+    /// 默认名的序号；只有 `customTitle == false` 时才有。存序号而不是只存字符串，
+    /// 切换语言后默认名仍认得出来。
+    var titleNumber: Int? = nil
     var root: SplitNodeSnapshot
 }
 
-/// 分屏树：叶 = pane；节点 = 一个 NSSplitView（方向 + 各子项占比）。
-indirect enum SplitNodeSnapshot: Codable, Equatable {
-    case pane(PaneSnapshot)
-    case split(vertical: Bool, fractions: [Double], children: [SplitNodeSnapshot])
-
-    /// 树序第一个叶子（恢复时它就是窗口的 initialPane）
-    var firstLeaf: PaneSnapshot {
-        switch self {
-        case .pane(let pane): return pane
-        case .split(_, _, let children): return children[0].firstLeaf
-        }
-    }
-
-    var leaves: [PaneSnapshot] {
-        switch self {
-        case .pane(let pane): return [pane]
-        case .split(_, _, let children): return children.flatMap(\.leaves)
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey { case kind, pane, vertical, fractions, children }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        switch try c.decode(String.self, forKey: .kind) {
-        case "pane":
-            self = .pane(try c.decode(PaneSnapshot.self, forKey: .pane))
-        case "split":
-            let children = try c.decode([SplitNodeSnapshot].self, forKey: .children)
-            guard !children.isEmpty else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .children, in: c, debugDescription: "split without children")
-            }
-            self = .split(
-                vertical: try c.decode(Bool.self, forKey: .vertical),
-                fractions: try c.decode([Double].self, forKey: .fractions),
-                children: children)
-        case let other:
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind, in: c, debugDescription: "unknown node kind \(other)")
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .pane(let pane):
-            try c.encode("pane", forKey: .kind)
-            try c.encode(pane, forKey: .pane)
-        case .split(let vertical, let fractions, let children):
-            try c.encode("split", forKey: .kind)
-            try c.encode(vertical, forKey: .vertical)
-            try c.encode(fractions, forKey: .fractions)
-            try c.encode(children, forKey: .children)
-        }
-    }
-}
+/// 分屏树的线格式与它和 `PaneLayout` 的换算在 `LighttyCore/SplitSnapshot.swift`。
+typealias SplitNodeSnapshot = SplitSnapshot<PaneSnapshot>
 
 struct PaneSnapshot: Codable, Equatable {
     /// pane 名（用户可改的会话态标签；恢复后原样回填）

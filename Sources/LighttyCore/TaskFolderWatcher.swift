@@ -61,3 +61,10 @@ public final class TaskFolderWatcher {
         queue.asyncAfter(deadline: .now() + debounce, execute: item)
     }
 }
+
+extension TaskFolderWatcher {
+    /// `TaskBindings` 的生产变更源：凭据就是监听器本身，释放即 `cancel`。
+    public static let changeSource: TaskFolderChangeSource = { directory, onChange in
+        try TaskFolderWatcher(directory: directory, onChange: onChange)
+    }
+}

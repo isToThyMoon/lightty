@@ -4,7 +4,7 @@ import Testing
 @testable import lightty
 
 /// The same provider seam used by the application, with mutable official metadata fixtures.
-final class SessionModelCatalog: SessionCatalogProvider {
+final class SessionModelCatalog: CatalogOnlyProvider {
     let source: SessionCatalogSource
     let pageSize: Int
     private let lock = NSLock()
@@ -16,7 +16,7 @@ final class SessionModelCatalog: SessionCatalogProvider {
     }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
     init(root: URL, pageSize: Int = 100, agent: SessionAgent = .codex) {
-        source = .init(agent: agent, root: root, executable: "/bin/echo")
+        source = .init(agent: agent, root: root, executable: "/bin/echo", configuration: .custom(root.path))
         self.pageSize = pageSize
     }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
