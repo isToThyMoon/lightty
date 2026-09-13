@@ -12,7 +12,11 @@ final class HookAgentEndToEndTests: XCTestCase {
     private var wrapperDir: URL!
 
     override func setUpWithError() throws {
-        socketPath = URL(fileURLWithPath: "/tmp/lightty-agent-\(getpid()).sock")  // sun_path 104 字节上限，别用 NSTemporaryDirectory
+        // sun_path 104 字节上限，别用 NSTemporaryDirectory。文件名和 app 一样用本进程 pid：
+        // hook 按它确定父进程链走到哪为止，否则在 agent 会话里跑测试会被判成子会话。
+        let socketDirectory = URL(fileURLWithPath: "/tmp/lightty-agent-\(getpid())")
+        try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
+        socketPath = socketDirectory.appendingPathComponent("\(getpid()).sock")
         store = PaneStatusStore(socketPath: socketPath)
         XCTAssertTrue(store.start(), "store 没能绑定 \(socketPath.path)")
         wrapperDir = FileManager.default.temporaryDirectory.appendingPathComponent("lightty-agent-wrappers-\(getpid())")
@@ -22,7 +26,7 @@ final class HookAgentEndToEndTests: XCTestCase {
 
     override func tearDownWithError() throws {
         store?.stop()
-        if let socketPath { try? FileManager.default.removeItem(at: socketPath) }
+        if let socketPath { try? FileManager.default.removeItem(at: socketPath.deletingLastPathComponent()) }
         if let wrapperDir { try? FileManager.default.removeItem(at: wrapperDir) }
     }
 
@@ -79,20 +83,8 @@ final class HookAgentEndToEndTests: XCTestCase {
             }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
-        let p = Process()
-        p.executableURL = try wrapper(named: parent)
-        p.arguments = [hookBinary.path]
-        var env = ["LIGHTTY_PANE_ID": pane.uuidString, "LIGHTTY_SOCK": socketPath.path, "PATH": "/usr/bin:/bin"]
-        env.merge(environment) { _, new in new }
-        p.environment = env
-        let stdin = Pipe()
-        p.standardInput = stdin
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try p.run()
-        stdin.fileHandleForWriting.write(Data(payload.utf8))
-        try stdin.fileHandleForWriting.close()
-        p.waitUntilExit()
+        let env = hookEnvironment(pane: pane, extra: environment)
+        let p = try runHook(through: [parent], payload: payload, environment: env)
         wait(for: [received], timeout: 5)
         XCTAssertEqual(p.terminationStatus, 0, "hook 应静默退出 0")
         XCTAssertEqual(store.status(for: pane)?.agentProcess?.pid, p.processIdentifier,
@@ -103,6 +95,57 @@ final class HookAgentEndToEndTests: XCTestCase {
             XCTAssertEqual(store.status(for: pane)?.sourceRoot, expectedRoot)
         }
         return store.status(for: pane)?.agent
+    }
+
+    private func hookEnvironment(pane: UUID, extra: [String: String] = [:]) -> [String: String] {
+        var env = ["LIGHTTY_PANE_ID": pane.uuidString, "LIGHTTY_SOCK": socketPath.path, "PATH": "/usr/bin:/bin"]
+        env.merge(extra) { _, new in new }
+        return env
+    }
+
+    /// 按 `chain` 从外到内一层层拉起，最里层再拉起 hook，等它退出。
+    @discardableResult
+    private func runHook(through chain: [String], payload: String, environment: [String: String]) throws -> Process {
+        let wrappers = try chain.map { try wrapper(named: $0) }
+        let p = Process()
+        p.executableURL = wrappers[0]
+        p.arguments = wrappers.dropFirst().map(\.path) + [hookBinary.path]
+        p.environment = environment
+        let stdin = Pipe()
+        p.standardInput = stdin
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        stdin.fileHandleForWriting.write(Data(payload.utf8))
+        try stdin.fileHandleForWriting.close()
+        p.waitUntilExit()
+        return p
+    }
+
+    /// 主会话工具里拉起的子会话（claude → shell → claude → hook）不发状态，
+    /// 否则它的 SessionStart / SessionEnd 会顶掉主会话的状态和会话绑定。
+    func testSessionLaunchedInsideAnotherSessionStaysSilent() throws {
+        let pane = UUID()
+        store.attach(pane)
+        defer { store.detach(pane) }
+        var received: [PaneStatus] = []
+        let arrived = expectation(description: "main session datagram")
+        let observer = NotificationCenter.default.addObserver(forName: .lighttyPaneStatusDidChange, object: nil, queue: .main) { [store] note in
+            guard PaneStatusStore.paneID(from: note) == pane, let status = store?.status(for: pane) else { return }
+            // 同一发报文之后还会因 agent 进程退出再通知一次，只记会话变化
+            guard received.last?.sessionID != status.sessionID else { return }
+            received.append(status)
+            if status.sessionID == "main" { arrived.fulfill() }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let env = hookEnvironment(pane: pane)
+        // 报文按发送顺序到达：子会话若发了，一定排在主会话那发前面
+        try runHook(through: ["claude", "tool-shell", "claude"],
+                    payload: #"{"hook_event_name":"SessionStart","session_id":"child","cwd":"/tmp"}"#, environment: env)
+        try runHook(through: ["claude"],
+                    payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"main","cwd":"/tmp"}"#, environment: env)
+        wait(for: [arrived], timeout: 5)
+        XCTAssertEqual(received.map(\.sessionID), ["main"])
     }
 
     func testCodexParentWithoutEnvironmentHintsIsReportedAsCodex() throws {

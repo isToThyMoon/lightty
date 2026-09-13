@@ -63,11 +63,13 @@ private func detectAgent(payload: [String: Any]) -> String? {
 ///
 /// 要整条路径而不是 basename：claude 经 symlink 解析后可执行文件名是版本号
 /// （`.../share/claude/versions/2.1.263`），basename 认不出，但路径里含 `claude` 段。
-private func ancestorExecutablePaths(limit: Int = 8) -> [String] {
+///
+/// `stopAt`：走到这个 pid 就停，不含它本身。
+private func ancestorExecutablePaths(limit: Int = 8, stopAt boundary: pid_t? = nil) -> [String] {
     var paths: [String] = []
     var pid = getppid()
     var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE 是算式宏，Swift 导不进来
-    while pid > 1, paths.count < limit {
+    while pid > 1, pid != boundary, paths.count < limit {
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { break }
         paths.append(String(cString: buffer))
@@ -180,6 +182,15 @@ guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let state = PaneActivity(
           hookEventName: event, notificationType: string(payload["notification_type"]))
 else { exit(0) }
+
+// pane 只绑定主会话：主会话工具里拉起的子会话（`claude -p` 等）完全隐形，不发状态也不注入。
+// 父进程链只走到 lightty 为止（socket 文件名就是它的 pid）：lightty 本身若是从某个
+// agent 会话里启动的，那一层不能把 pane 里所有会话都判成子会话。
+let lighttyPID = pid_t((URL(fileURLWithPath: socketPath).deletingPathExtension().lastPathComponent))
+if HookAgentDetection.isNestedSession(
+    ancestorExecutablePaths: ancestorExecutablePaths(limit: 64, stopAt: lighttyPID)) {
+    exit(0)
+}
 
 let agentProcess = AgentProcessIdentity.agentAncestor(startingAt: getppid())
 let agentName = agentProcess?.agent ?? detectAgent(payload: payload)

@@ -39,6 +39,18 @@ public enum HookAgentDetection {
         return nil
     }
 
+    /// hook 所属的 agent 是不是别的会话从工具里拉起的子会话（例如 Bash 工具里跑 `claude -p`）。
+    ///
+    /// 子会话继承了 pane 的环境变量，不拦的话它的 SessionStart / SessionEnd 会顶掉主会话的
+    /// 状态和会话绑定。判据：父进程链（最近的在前，只到 lightty 为止）里最近的 agent 之上，
+    /// 隔着非 agent 进程还有另一个 agent。紧挨着的 agent 进程算同一个（启动器、re-exec）。
+    public static func isNestedSession(ancestorExecutablePaths paths: [String]) -> Bool {
+        guard let nearest = paths.firstIndex(where: { agentInPath($0) != nil }) else { return false }
+        return paths[(nearest + 1)...]
+            .drop { agentInPath($0) != nil }
+            .contains { agentInPath($0) != nil }
+    }
+
     /// 一条可执行文件路径归属哪家 agent。codex 的二进制名就是 `codex`；claude 解析后
     /// 是版本号，靠路径里的 `claude` 段认。用路径分段避免把随便含 "codex" 子串的路径误判。
     private static func agentInPath(_ path: String) -> String? {

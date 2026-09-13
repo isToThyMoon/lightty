@@ -56,6 +56,10 @@ codex plugin add lightty@lightty
 `Notification` 里已知只是告知的类型不改变状态，其余都算「待处理」。其中最常见的是回合结束
 60 秒没人输入时 Claude Code 发的 `idle_prompt`：它被忽略，pane 保持「已完成」。
 
+pane 只跟踪主会话。主会话在工具里拉起的子会话（比如 Bash 里跑 `claude -p`）会继承 pane 的
+环境变量，hook 沿父进程链往上找（只到 lightty 为止），发现最近的 agent 之上还有另一个 agent，
+就静默退出，不发状态也不注入交接文档。
+
 这些事件缺一条都会让状态机少一条进出边：只登记 `Stop` 的话圆点永远不会变成"思考中"；
 漏掉 `PostToolUse`，工具跑完后状态会卡在 `tool` 上不回落；Codex 漏掉 `Interrupt`，
 用户主动停止后会一直停在 `thinking` / `tool`。

@@ -34,6 +34,27 @@ final class HookAgentDetectionTests: XCTestCase {
         XCTAssertEqual(agent(paths: ["/bin/sh", "/Users/u/.local/share/claude/versions/2.1.263", "/bin/sh", "/Users/u/.codex/packages/x/bin/codex"]), "claude")
     }
 
+    func testSessionLaunchedFromAnotherSessionsToolIsNested() {
+        let claude = "/Users/u/.local/share/claude/versions/2.1.270"
+        let codex = "/Users/u/.codex/packages/x/bin/codex"
+        // 主会话：hook ← claude ← pane 的 zsh ← login（到 lightty 为止）
+        XCTAssertFalse(HookAgentDetection.isNestedSession(
+            ancestorExecutablePaths: [claude, "/bin/zsh", "/usr/bin/login"]))
+        // Codex 经 shell 拉起 hook
+        XCTAssertFalse(HookAgentDetection.isNestedSession(
+            ancestorExecutablePaths: ["/bin/zsh", codex, "/bin/zsh", "/usr/bin/login"]))
+        // 主会话 Bash 工具里的脚本跑 `claude -p`
+        XCTAssertTrue(HookAgentDetection.isNestedSession(
+            ancestorExecutablePaths: [claude, "/bin/bash", "/bin/zsh", claude, "/bin/zsh", "/usr/bin/login"]))
+        // 跨家嵌套同样算
+        XCTAssertTrue(HookAgentDetection.isNestedSession(
+            ancestorExecutablePaths: ["/bin/zsh", codex, "/bin/zsh", claude, "/bin/zsh"]))
+        // 紧挨着的 agent 进程是启动器或 re-exec，仍是同一个会话
+        XCTAssertFalse(HookAgentDetection.isNestedSession(
+            ancestorExecutablePaths: [codex, "/opt/homebrew/bin/codex", "/bin/zsh"]))
+        XCTAssertFalse(HookAgentDetection.isNestedSession(ancestorExecutablePaths: ["/bin/zsh", "/usr/bin/login"]))
+    }
+
     func testEnvironmentIsOnlyAFallback() {
         XCTAssertEqual(agent(env: ["CODEX_HOME": "/x"]), "codex")
         XCTAssertEqual(agent(env: ["CLAUDE_CODE_ENTRYPOINT": "cli"]), "claude")
