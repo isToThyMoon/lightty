@@ -93,6 +93,19 @@ final class PaneStatusTests: XCTestCase {
         XCTAssertNil(PaneActivity(hookEventName: "FutureEvent"))
     }
 
+    func testInformationalNotificationsLeaveStateAlone() {
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "permission_prompt"), .attention)
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "elicitation_dialog"), .attention)
+        // 回合结束 60 秒没人输入：保持已完成，不变成待处理
+        XCTAssertNil(PaneActivity(hookEventName: "Notification", notificationType: "idle_prompt"))
+        XCTAssertNil(PaneActivity(hookEventName: "Notification", notificationType: "auth_success"))
+        // 没见过的类型可能是新的阻塞对话框，宁可提醒
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "future_dialog"), .attention)
+    }
+
     func testRejectsUnknownSchemaVersion() throws {
         let future = """
             {"v":999,"pane":"6C6F4B2E-9E31-4E2F-9D45-3A1C2B7E5F80",\

@@ -177,7 +177,8 @@ else { exit(0) }
 guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any],
       let event = string(payload["hook_event_name"]),
-      let state = PaneActivity(hookEventName: event)
+      let state = PaneActivity(
+          hookEventName: event, notificationType: string(payload["notification_type"]))
 else { exit(0) }
 
 let agentProcess = AgentProcessIdentity.agentAncestor(startingAt: getppid())

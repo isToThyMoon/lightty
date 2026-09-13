@@ -12,23 +12,37 @@ public enum PaneActivity: String, Codable, Sendable {
     case thinking
     /// 正在执行工具（PreToolUse）
     case tool
-    /// 需要用户介入（Notification / PermissionRequest）
+    /// 需要用户介入（PermissionRequest，或请求输入的 Notification）
     case attention
     /// turn 完成且**未读**——唯一的粘滞态，只由 lightty 侧清除
     case done
 
     /// agent hook 事件到 pane 状态的共享契约。
     /// 不认识的事件返回 nil：agent 随时可能加新事件，静默跳过才向前兼容。
-    public init?(hookEventName event: String) {
+    ///
+    /// `Notification` 按 `notification_type` 分流。Claude Code 在回合结束 60 秒无人输入、
+    /// 且屏幕上没有任何对话框时发 `idle_prompt`，那只是「还停在提示符上」，不能把已完成
+    /// 顶成待处理；登录成功、子 agent 完成、推送这类也只是告知。这些已知的告知类型跳过，
+    /// 其余一律算介入：Claude Code 以后新增的类型宁可多提醒，也不能把真卡住的漏掉。
+    public init?(hookEventName event: String, notificationType: String? = nil) {
         switch event {
         case "SessionStart", "SessionEnd", "Interrupt": self = .idle
         case "UserPromptSubmit", "PostToolUse": self = .thinking
         case "PreToolUse": self = .tool
+        case "Notification" where notificationType.map(Self.informationalNotificationTypes.contains) == true:
+            return nil
         case "Notification", "PermissionRequest": self = .attention
         case "Stop": self = .done
         default: return nil
         }
     }
+
+    /// Claude Code 2.1.270 里不需要用户操作的通知类型。
+    private static let informationalNotificationTypes: Set<String> = [
+        "idle_prompt", "auth_success", "agent_completed", "push_notification",
+        "computer_use_enter", "computer_use_exit", "elicitation_complete", "elicitation_response",
+        "quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled",
+    ]
 }
 
 /// 一发状态报文的**载荷**。信封见 `PaneStatusDatagram`。
