@@ -1,19 +1,19 @@
 #!/bin/bash
-# 为一种分发口味生成带增量包的 appcast。
+# 为一种架构的安装包生成带增量包的 appcast。
 #
 # 用法：
-#   echo "$SPARKLE_ED_PRIVATE_KEY" | scripts/build-appcast.sh <口味> <新包> <appcast 名> <下载前缀> [回溯版本数]
+#   echo "$SPARKLE_ED_PRIVATE_KEY" | scripts/build-appcast.sh <架构> <新包> <appcast 名> <下载前缀> [回溯版本数]
 #
 # 为什么要增量包：应用 317MB 里有 264MB 是 Claude 会话助手（两份 Node 运行时 +
 # node_modules），版本之间一个字节都不变，而每次更新却让用户重下 150MB。
 # 实测 v0.13.11 → v0.13.12 的增量包只有 1.2MB，小 124 倍。
 #
-# 做法：把最近几个已发布版本的同口味包下载到一个目录，连同新包一起交给 Sparkle 的
+# 做法：把最近几个已发布版本的同架构的包下载到一个目录，连同新包一起交给 Sparkle 的
 # generate_appcast，它会两两生成 .delta 并写进 appcast 的 <sparkle:deltas>。
 # 用户装的是哪个版本，Sparkle 就取哪一条增量；对不上就退回整包，不会更新失败。
 #
 # 两处收尾是 generate_appcast 不管的：
-#  1. 增量包的文件名只带版本号（lightty999-998.delta），两种口味撞名。GitHub 的
+#  1. 增量包的文件名只带版本号（lightty999-998.delta），两种架构的增量包撞名。GitHub 的
 #     资产名是平的一层，必须改名并同步改 appcast 里的 URL。签名签的是内容不是文件名，
 #     改名不会让签名失效。
 #  2. 生成的 feed 会保留历史条目，但那些旧包挂在旧 Release 上，用当前前缀拼出来的
@@ -36,10 +36,10 @@ mkdir -p "$FEED_DIR"
 cp "$NEW_DMG" "$FEED_DIR/"
 
 # ── 取历史包 ────────────────────────────────────────────────────────────────
-# 同口味的资产名带口味后缀。只发 arm64 / x64；通用包已停发（appcast.xml 冻结，见 release.yml）。
+# 同架构的资产名带架构后缀。只发 arm64 / x64；通用包已停发（appcast.xml 冻结，见 release.yml）。
 case "$FLAVOR" in
     arm64|x64) ;;
-    *) echo "✗ 未知口味：$FLAVOR（arm64|x64）"; exit 1 ;;
+    *) echo "✗ 未知架构：$FLAVOR（arm64|x64）"; exit 1 ;;
 esac
 matches_flavor() { [[ "$1" == *-"$FLAVOR".dmg ]]; }
 

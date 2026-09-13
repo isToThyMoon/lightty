@@ -111,7 +111,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
-          # 只发两种单架构口味，共用同一次 swift build（增量），分别组包签名。
+          # 只发 arm64 / x64 两种单架构包，共用同一次 swift build（增量），分别组包签名。
           # 通用包不再发布：分架构之前装好的 app 经冻结的 appcast.xml 迁移，见下面的 feed 步骤。
           for flavor in arm64 x64; do
             FLAVOR=$flavor MAKE_DMG=1 scripts/package-app.sh "$VERSION"

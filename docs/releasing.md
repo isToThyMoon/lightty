@@ -2,20 +2,20 @@
 
 ## 发布入口与版本
 
-正式发布由 [release.yml](../.github/workflows/release.yml) 执行，打包实现见 [package-app.sh](../scripts/package-app.sh)。推送 `v*` tag 会创建 GitHub Release，并上传两种口味的 DMG、各自的增量包、两条单架构 Sparkle feed，以及冻结的 `appcast.xml`。
+正式发布由 [release.yml](../.github/workflows/release.yml) 执行，打包实现见 [package-app.sh](../scripts/package-app.sh)。推送 `v*` tag 会创建 GitHub Release，并上传两种架构的 DMG、各自的增量包、两条单架构 Sparkle feed，以及冻结的 `appcast.xml`。
 
-## 两种口味与更新源
+## 两种架构与更新源
 
 应用解包 317MB，其中 264MB 是 Claude 会话助手（两份 Node 运行时 218MB + node_modules 46MB），
 用户只用得上其中一份运行时。所以按机器分包：
 
-| 口味 | DMG | 更新源 | 给谁 |
+| 架构 | DMG | 更新源 | 给谁 |
 | --- | --- | --- | --- |
 | `arm64` | `lightty-<版本>-arm64.dmg`（约 77MB） | `appcast-arm64.xml` | Apple Silicon |
 | `x64` | `lightty-<版本>-x64.dmg` | `appcast-x64.xml` | Intel |
 
 Sparkle 的一条 feed 里一个版本只能有一条记录（generate_appcast 直接拒绝重复版本），
-所以两种口味是两条 feed，不能合并。`universal` 口味只留作本地打包，不再发布。
+所以两种架构是两条 feed，不能合并。`universal` 通用包只留作本地打包，不再发布。
 
 ### 冻结的 appcast.xml（不能删）
 
@@ -36,17 +36,17 @@ Sparkle 的一条 feed 里一个版本只能有一条记录（generate_appcast �
 - 更早的安装：没有这段逻辑，先经冻结的 `appcast.xml` 升到 v0.14.0 通用包，再下一次检查
   换成单架构包（两跳）。
 
-跨口味没有增量，所以换成单架构包那一次是整包，多出来的那份 Node 运行时随之消失。
+跨架构没有增量，所以换成单架构包那一次是整包，多出来的那份 Node 运行时随之消失。
 单架构包自己的 `SUFeedURL` 已经指向单架构源，改写算出来是同一个地址，等于没动。
 
 ## 增量更新
 
 版本之间变的只有主程序，Node 运行时和 node_modules 一个字节都不动。
-[build-appcast.sh](../scripts/build-appcast.sh) 把最近两个同口味的历史包拉下来交给
+[build-appcast.sh](../scripts/build-appcast.sh) 把最近两个同架构的历史包拉下来交给
 Sparkle 的 `generate_appcast`，生成 `.delta` 并写进 feed。实测 v0.13.11 → v0.13.12
 的增量包 1.2MB，全量 150MB。用户装的版本对不上任何一条增量时，Sparkle 自动退回整包。
 
-增量包文件名只带版本号，两种口味会撞名，而 GitHub 的资产名是平的一层，
+增量包文件名只带版本号，两种架构的增量包会撞名，而 GitHub 的资产名是平的一层，
 所以脚本改名后同步改 feed 里的 URL——签名签的是内容不是文件名，改名不影响验签。
 
 - 修复使用补丁版本，新功能使用次版本；发布前核对远端 tag 和 Releases，不能覆盖已发布 tag。
@@ -120,7 +120,7 @@ git status --short --branch
 - 两份整包（`-arm64` / `-x64`）、两条单架构 feed（`appcast-arm64.xml`、`appcast-x64.xml`）和 `appcast.xml` 都在且非空。
 - 单架构 feed 的版本、下载地址、长度与对应的包一致，且 enclosure 带 `sparkle:edSignature`（脚本会在缺签名时直接失败）。
 - `appcast.xml` 与 `LEGACY_FEED_TAG` 那一版的原文件逐字节相同，下载地址仍指向那个 Release。
-- 有历史包可比对时，feed 里应出现 `<sparkle:deltas>`，且增量包资产名带口味前缀。
+- 有历史包可比对时，feed 里应出现 `<sparkle:deltas>`，且增量包资产名带架构前缀。
 - 签名步骤成功，公证状态如实说明；不能将 skipped 当作成功。
 - 本地 main 与远端一致，工作区无意外残留。
 
