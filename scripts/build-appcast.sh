@@ -13,7 +13,7 @@
 # 用户装的是哪个版本，Sparkle 就取哪一条增量；对不上就退回整包，不会更新失败。
 #
 # 两处收尾是 generate_appcast 不管的：
-#  1. 增量包的文件名只带版本号（lightty999-998.delta），三种口味撞名。GitHub 的
+#  1. 增量包的文件名只带版本号（lightty999-998.delta），两种口味撞名。GitHub 的
 #     资产名是平的一层，必须改名并同步改 appcast 里的 URL。签名签的是内容不是文件名，
 #     改名不会让签名失效。
 #  2. 生成的 feed 会保留历史条目，但那些旧包挂在旧 Release 上，用当前前缀拼出来的
@@ -36,13 +36,12 @@ mkdir -p "$FEED_DIR"
 cp "$NEW_DMG" "$FEED_DIR/"
 
 # ── 取历史包 ────────────────────────────────────────────────────────────────
-# 同口味的资产名：arm64/x64 带后缀；universal 还要认改名之前的 lightty-<版本>.dmg。
-matches_flavor() {
-    case "$FLAVOR" in
-        arm64|x64) [[ "$1" == *-"$FLAVOR".dmg ]] ;;
-        universal) [[ "$1" == *-universal.dmg ]] || [[ "$1" =~ ^lightty-[0-9.]+\.dmg$ ]] ;;
-    esac
-}
+# 同口味的资产名带口味后缀。只发 arm64 / x64；通用包已停发（appcast.xml 冻结，见 release.yml）。
+case "$FLAVOR" in
+    arm64|x64) ;;
+    *) echo "✗ 未知口味：$FLAVOR（arm64|x64）"; exit 1 ;;
+esac
+matches_flavor() { [[ "$1" == *-"$FLAVOR".dmg ]]; }
 
 found=0
 if command -v gh > /dev/null 2>&1; then

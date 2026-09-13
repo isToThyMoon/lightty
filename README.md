@@ -23,7 +23,7 @@ The app is signed but not notarized. If Gatekeeper blocks the first launch:
 xattr -cr /Applications/lightty.app
 ```
 
-Requires macOS 13+ (universal binary for Apple Silicon / Intel).
+Requires macOS 13+. Download `-arm64` for Apple Silicon or `-x64` for Intel.
 
 ## Building from source
 

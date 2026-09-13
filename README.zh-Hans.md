@@ -22,7 +22,7 @@
 xattr -cr /Applications/lightty.app
 ```
 
-要求 macOS 13+（Apple Silicon / Intel 通用包）。
+要求 macOS 13+。Apple Silicon 下载 `-arm64`，Intel 下载 `-x64`。
 
 ## 从源码构建
 

@@ -10,10 +10,9 @@
 # 口味（FLAVOR）：universal（默认）/ arm64 / x64。
 # 通用包里两份 Node 运行时就占 218MB，用户只用得上一份；单架构包砍掉另一份，
 # 顺带把主程序也瘦成单架构，下载量从 150MB 降到 93MB（实测）。
-# 通用包仍然要出：本次改动之前装好的那些 app 指向 appcast.xml，那条源必须继续
-# 提供一个两种机器都能跑的包，否则 Intel 用户会卡在旧版本上收不到更新。
+# 正式发布只出 arm64 / x64（见 release.yml）；universal 只留作本地打包，一个包两种机器都能跑。
 # 每种口味有自己的更新源（SUFeedURL），Sparkle 的 appcast 一个版本只能有一条记录，
-# 三种口味塞不进同一个源。
+# 不同口味塞不进同一个源。
 #
 # 签名策略：SIGN_IDENTITY 显式指定 > 钥匙串里的 Developer ID Application >
 # ad-hoc（"-"，仅本机可跑，分发会被 Gatekeeper 拦）。
