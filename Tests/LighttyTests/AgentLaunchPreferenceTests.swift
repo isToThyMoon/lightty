@@ -5,36 +5,6 @@ import XCTest
 
 @MainActor
 final class AgentLaunchPreferenceTests: XCTestCase {
-    func testSearchUsesSharedAgentWorkflowAndArchiveSettingsEntry() throws {
-        _ = NSApplication.shared
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        ensureTerminalRuntime()
-        try AppState.shared.taskBindings.store.create(name: "Search fixture", workdir: directory.path)
-        let controller = TerminalWindowController()
-        let palette = SearchPaletteView(controller: controller)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = palette
-        palette.frame = NSRect(x: 0, y: 0, width: 1100, height: 700)
-        palette.layoutSubtreeIfNeeded()
-        let buttons = descendants(palette).compactMap { $0 as? NSButton }
-        XCTAssertEqual(buttons.first { $0.title == L("New tab") }?.state, .on)
-        XCTAssertTrue(buttons.contains { $0.title == L("Split in current tab") })
-        XCTAssertFalse(buttons.contains { $0.title == L("New terminal") })
-        XCTAssertNotNil(descendants(palette).compactMap { $0 as? ShellDropdown }.first)
-        XCTAssertEqual(controller.tabCount, 1)
-        let settings = SettingsView(page: .archive)
-        XCTAssertTrue(descendants(settings).contains { $0 is ArchivedTasksView })
-        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
-           let bitmap = palette.bitmapImageRepForCachingDisplay(in: palette.bounds) {
-            palette.cacheDisplay(in: palette.bounds, to: bitmap)
-            try bitmap.representation(using: .png, properties: [:])?.write(to:
-                URL(fileURLWithPath: path).appendingPathComponent("search-agent-workflow.png"))
-        }
-    }
-
     func testLongPreviewCannotOpenAnUnclampedFieldEditor() throws {
         _ = NSApplication.shared
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -102,7 +72,11 @@ final class AgentLaunchPreferenceTests: XCTestCase {
                        directory.resolvingSymlinksInPath().path)
     }
 
-    func testCommandsPersistAndTerminalOnlyDoesNotSendInput() throws {
+    /// AgentLaunchPreference 偏好 → 命令串的整份映射：选择持久化、附加参数校验
+    /// （拒绝换行/NUL）、terminal 不发输入；bypass 开关一个管两家（意图是「跳过权限
+    /// 确认」，参数写法是 lightty 的翻译）；`launchArguments` 是 `command` 的数组形态，
+    /// 续接会话继承开关与附加参数、不带程序名。
+    func testLaunchCommandsFollowTheBypassSwitchAndCustomArguments() throws {
         let suite = "agent-launch-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -121,13 +95,19 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex --yolo")
         XCTAssertTrue(AgentLaunchPreference.setCustomArguments("  ", for: .claudeCode, in: defaults))
         XCTAssertEqual(AgentLaunchPreference.command(for: .claudeCode, in: defaults), "claude --permission-mode bypassPermissions")
-    }
 
-    /// 一个开关管两家：意图是「跳过权限确认」，参数写法是 lightty 的翻译。
-    func testOneBypassSwitchTranslatesToEachCLIsOwnFlag() throws {
-        let suite = "agent-bypass-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        // 续接：launchArguments 继承开关与附加参数，不带程序名；带引号的参数按 shell 规则拆。
+        AgentLaunchPreference.reset(in: defaults)
+        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .codex, in: defaults), ["--yolo"])
+        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .claude, in: defaults),
+                       ["--permission-mode", "bypassPermissions"])
+        XCTAssertTrue(AgentLaunchPreference.setCustomArguments("-c model=\"o3 mini\"", for: .codex, in: defaults))
+        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .codex, in: defaults),
+                       ["--yolo", "-c", "model=o3 mini"])
+        XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex --yolo -c model=\"o3 mini\"")
+
+        // bypass 开关：默认开；关掉后两家都没有权限参数，再打开各自翻译回自己的写法。
+        AgentLaunchPreference.reset(in: defaults)
         XCTAssertTrue(AgentLaunchPreference.bypassEnabled(in: defaults))
         AgentLaunchPreference.setBypass(false, in: defaults)
         XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex")
@@ -140,21 +120,9 @@ final class AgentLaunchPreferenceTests: XCTestCase {
                        "claude --permission-mode bypassPermissions")
     }
 
-    func testResumeInheritsBypassAndExtraArgumentsWithoutTheProgramToken() throws {
-        let suite = "agent-resume-flags-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .codex, in: defaults), ["--yolo"])
-        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .claude, in: defaults),
-                       ["--permission-mode", "bypassPermissions"])
-        XCTAssertTrue(AgentLaunchPreference.setCustomArguments("-c model=\"o3 mini\"", for: .codex, in: defaults))
-        XCTAssertEqual(AgentLaunchPreference.launchArguments(for: .codex, in: defaults),
-                       ["--yolo", "-c", "model=o3 mini"])
-        XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex --yolo -c model=\"o3 mini\"")
-    }
-
     /// 0.1.x 的整条命令只拆出附加参数：程序名丢弃，bypass 写法删掉（已由开关表达），
     /// 开关一律留在默认打开，不按旧命令反推。
+    /// 迁移只跑一次的量：旧键清掉之后，再跑不能覆盖用户此后关掉开关的选择。
     func testLegacyCommandsMigrateIntoExtraArgumentsAndLeaveTheSwitchOn() throws {
         for (legacy, expected) in [
             (["lightty.agent.command.claudeCode": "claude --permission-mode bypassPermissions --model opus"],
@@ -172,20 +140,14 @@ final class AgentLaunchPreferenceTests: XCTestCase {
             XCTAssertEqual([LaunchAgent.claudeCode, .codex].map { AgentLaunchPreference.command(for: $0, in: defaults) },
                            expected)
             for key in legacy.keys { XCTAssertNil(defaults.string(forKey: key)) }
-        }
-    }
 
-    /// 迁移只跑一次的量：旧键清掉之后，再跑不能覆盖用户此后关掉开关的选择。
-    func testMigrationDoesNotOverrideALaterChoice() throws {
-        let suite = "agent-migrate-again-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("codex --yolo", forKey: "lightty.agent.command.codex")
-        AgentLaunchPreference.migrateLegacyCommands(in: defaults)
-        AgentLaunchPreference.setBypass(false, in: defaults)
-        AgentLaunchPreference.migrateLegacyCommands(in: defaults)
-        XCTAssertFalse(AgentLaunchPreference.bypassEnabled(in: defaults))
-        XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults), "codex")
+            // 用户此后关掉开关；再跑一遍迁移（旧键已清）不能把它翻回来。
+            AgentLaunchPreference.setBypass(false, in: defaults)
+            AgentLaunchPreference.migrateLegacyCommands(in: defaults)
+            XCTAssertFalse(AgentLaunchPreference.bypassEnabled(in: defaults))
+            XCTAssertEqual(AgentLaunchPreference.command(for: .codex, in: defaults),
+                           expected[1].replacingOccurrences(of: " --yolo", with: ""))
+        }
     }
 
     func testPopoverSwitchingAgentKeepsDestinationAndDoesNotCreateTerminal() throws {

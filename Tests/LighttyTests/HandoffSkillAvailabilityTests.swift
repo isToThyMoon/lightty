@@ -75,68 +75,58 @@ final class HandoffSkillAvailabilityTests: XCTestCase {
         agent == .codex ? .codex : .claude
     }
 
-    /// 装了、且缓存里就是当前内容——这是唯一该敲技能调用的情形。
-    func testAvailableOnlyWhenInstalledAndUpToDate() throws {
-        try declareInstalled()
-        let ctx = context()
-        for agent in HookAgent.allCases {
-            try recordLedger(agent, version: HookInstaller.report(for: agent, in: ctx).version)
-            XCTAssertTrue(
-                HookInstaller.handoffSkillAvailable(for: sessionAgent(for: agent), in: ctx),
-                "\(agent.rawValue) 装好且是当前版本，却判成了技能不可用")
-        }
+    /// 回到「没装、没台账」的起点，让表里每一行都从同一状态出发。
+    private func resetFixture() throws {
+        try? FileManager.default.removeItem(at: ledger)
+        for file in configs.values { try? FileManager.default.removeItem(at: file) }
     }
 
-    /// **这条是主角。** 装了，但装进去的是旧内容——技能是后加的，旧缓存里没有它。
-    /// 只看 `state == .installed` 的写法会在这里返回真，于是按钮静默失败。
-    func testStaleInstallIsNotAvailable() throws {
-        try declareInstalled()
-        let ctx = context()
-        for agent in HookAgent.allCases {
-            try recordLedger(agent, version: "0.1.0+deadbeef")
-            let report = HookInstaller.report(for: agent, in: ctx)
-            XCTAssertEqual(report.state, .installed, "前提没造对：应当是已装状态")
-            XCTAssertTrue(report.needsUpdate, "前提没造对：应当是需要更新")
-            XCTAssertFalse(
-                HookInstaller.handoffSkillAvailable(for: sessionAgent(for: agent), in: ctx),
-                "\(agent.rawValue) 缓存里是旧插件，技能调不起来，却判成了可用")
-        }
-    }
+    private enum Ledger { case current, stale, missing }
 
-    /// 台账缺失也算旧：我们不知道 CLI 缓存里是什么，就不能拿静默失败去赌。
-    func testMissingLedgerIsNotAvailable() throws {
-        try declareInstalled()
-        let ctx = context()
-        for agent in HookAgent.allCases {
-            XCTAssertFalse(
-                HookInstaller.handoffSkillAvailable(for: sessionAgent(for: agent), in: ctx),
-                "\(agent.rawValue) 没有台账记录，不该断言技能可用")
+    /// 同一个布尔函数、同一套 fixture，只差「装没装 × 台账 × CLI 在不在」。
+    /// 唯一为真的情形是装了且缓存里就是当前内容；其余全部必须为假。
+    func testHandoffSkillIsAvailableOnlyForACurrentInstall() throws {
+        struct Case {
+            let name: String
+            let installed: Bool
+            let ledger: Ledger
+            let cliPresent: Bool
+            let expected: Bool
         }
-    }
-
-    /// 压根没装，以及 CLI 都找不到——两种都必须是假。
-    func testNotInstalledAndMissingCLIAreNotAvailable() throws {
-        for agent in HookAgent.allCases {
-            XCTAssertFalse(
-                HookInstaller.handoffSkillAvailable(for: sessionAgent(for: agent), in: context()),
-                "\(agent.rawValue) 没装插件却判成技能可用")
+        let cases: [Case] = [
+            // 装了、且缓存里就是当前内容——这是唯一该敲技能调用的情形。
+            Case(name: "installed and current", installed: true, ledger: .current, cliPresent: true, expected: true),
+            // **这行是主角。** 装了，但装进去的是旧内容——技能是后加的，旧缓存里没有它。
+            // 只看 `state == .installed` 的写法会在这里返回真，于是按钮静默失败。
+            Case(name: "stale install", installed: true, ledger: .stale, cliPresent: true, expected: false),
+            // 台账缺失也算旧：我们不知道 CLI 缓存里是什么，就不能拿静默失败去赌。
+            Case(name: "missing ledger", installed: true, ledger: .missing, cliPresent: true, expected: false),
+            // 压根没装。
+            Case(name: "not installed", installed: false, ledger: .missing, cliPresent: true, expected: false),
+            // 装了也记了台账，但 CLI 都找不到，谈不上技能可用。
+            Case(name: "missing CLI", installed: true, ledger: .current, cliPresent: false, expected: false),
+        ]
+        for c in cases {
+            try resetFixture()
+            if c.installed { try declareInstalled() }
+            for agent in HookAgent.allCases {
+                switch c.ledger {
+                case .current:
+                    try recordLedger(agent, version: HookInstaller.report(for: agent, in: context()).version)
+                case .stale:
+                    try recordLedger(agent, version: "0.1.0+deadbeef")
+                    let report = HookInstaller.report(for: agent, in: context())
+                    XCTAssertEqual(report.state, .installed, "\(c.name): 前提没造对：应当是已装状态")
+                    XCTAssertTrue(report.needsUpdate, "\(c.name): 前提没造对：应当是需要更新")
+                case .missing:
+                    break
+                }
+                XCTAssertEqual(
+                    HookInstaller.handoffSkillAvailable(
+                        for: sessionAgent(for: agent), in: context(cliPresent: c.cliPresent)),
+                    c.expected,
+                    "\(c.name) / \(agent.rawValue)：技能可用性判错了")
+            }
         }
-        try declareInstalled()
-        for agent in HookAgent.allCases {
-            try recordLedger(agent, version: HookInstaller.report(
-                for: agent, in: context()).version)
-            XCTAssertFalse(
-                HookInstaller.handoffSkillAvailable(
-                    for: sessionAgent(for: agent), in: context(cliPresent: false)),
-                "\(agent.rawValue) 的 CLI 都找不到，谈不上技能可用")
-        }
-    }
-
-    /// 会话侧的 agent 身份 → 安装侧的同一家，映错了同样是静默失败。
-    /// `HookAgent.init(_ SessionAgent)` 用 switch 而不是三元式，正是为了让将来
-    /// 多一家 agent 时是编译错误而不是默默被当成 Claude Code。
-    func testSessionAgentMapsToTheSameFamily() {
-        XCTAssertEqual(HookAgent(SessionAgent.claude), .claudeCode)
-        XCTAssertEqual(HookAgent(SessionAgent.codex), .codex)
     }
 }

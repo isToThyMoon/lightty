@@ -148,19 +148,34 @@ final class HookAgentEndToEndTests: XCTestCase {
         XCTAssertEqual(received.map(\.sessionID), ["main"])
     }
 
-    func testCodexParentWithoutEnvironmentHintsIsReportedAsCodex() throws {
-        let payload = #"{"hook_event_name":"PreToolUse","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","transcript_path":"/Users/u/.codex/sessions/2026/09/07/rollout-2026-09-07T18-26-43-01a07e9f.jsonl","tool_name":"shell","cwd":"/tmp"}"#
-        XCTAssertEqual(try agentReported(parent: "codex", payload: payload), "codex")
-    }
-
-    func testCodexParentBeatsLeakedClaudeEnvironment() throws {
-        let payload = #"{"hook_event_name":"UserPromptSubmit","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","cwd":"/tmp"}"#
-        XCTAssertEqual(try agentReported(parent: "codex", payload: payload, environment: ["CLAUDECODE": "1"]), "codex")
-    }
-
-    func testClaudeParentIsReportedAsClaude() throws {
-        let payload = #"{"hook_event_name":"PreToolUse","session_id":"7d3c1e2a-1111-4222-8333-444455556666","transcript_path":"/Users/u/.claude/projects/-Users-u-p/7d3c1e2a.jsonl","tool_name":"Edit","cwd":"/tmp"}"#
-        XCTAssertEqual(try agentReported(parent: "claude", payload: payload), "claude")
+    /// agent 身份只看父进程链：parent × 环境变量 × 载荷 → 记下的 agent。
+    func testAgentIsIdentifiedByTheParentProcessChain() throws {
+        struct Case {
+            let name: String
+            let parent: String
+            let environment: [String: String]
+            let payload: String
+            let expected: String
+        }
+        let cases: [Case] = [
+            // 用户报的场景：Codex 的 hook 环境里没有任何 CODEX_* 变量、载荷带 Claude 同款
+            // transcript_path，之前一律被认成 claude。
+            Case(name: "codex parent without environment hints", parent: "codex", environment: [:],
+                 payload: #"{"hook_event_name":"PreToolUse","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","transcript_path":"/Users/u/.codex/sessions/2026/09/07/rollout-2026-09-07T18-26-43-01a07e9f.jsonl","tool_name":"shell","cwd":"/tmp"}"#,
+                 expected: "codex"),
+            // 从 Claude 会话里开出的 Codex：泄漏进来的 CLAUDECODE 环境变量不能压过父进程链。
+            Case(name: "codex parent beats leaked claude environment", parent: "codex", environment: ["CLAUDECODE": "1"],
+                 payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","cwd":"/tmp"}"#,
+                 expected: "codex"),
+            // 反面：Claude 父进程照样认成 claude。
+            Case(name: "claude parent", parent: "claude", environment: [:],
+                 payload: #"{"hook_event_name":"PreToolUse","session_id":"7d3c1e2a-1111-4222-8333-444455556666","transcript_path":"/Users/u/.claude/projects/-Users-u-p/7d3c1e2a.jsonl","tool_name":"Edit","cwd":"/tmp"}"#,
+                 expected: "claude"),
+        ]
+        for c in cases {
+            XCTAssertEqual(try agentReported(parent: c.parent, payload: c.payload, environment: c.environment),
+                           c.expected, c.name)
+        }
     }
 
 }

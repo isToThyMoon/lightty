@@ -38,7 +38,8 @@ final class LoginShellPathTests: XCTestCase {
         XCTAssertEqual(resolved.first, "/fake/bin")
     }
 
-    func testResolveGivesUpOnAHangingShell() throws {
+    /// 两种失败都返回 nil：shell 挂住（超时放弃，不能等 30 秒）、shell 路径不存在。
+    func testResolveReturnsNilWhenTheShellHangsOrIsMissing() throws {
         let shell = try makeFakeShell(
             """
             #!/bin/sh
@@ -47,14 +48,17 @@ final class LoginShellPathTests: XCTestCase {
         let started = Date()
         XCTAssertNil(LoginShellPath.resolve(shell: shell.path, environment: [:], timeout: 0.5))
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
-    }
-
-    func testResolveReturnsNilForMissingShell() {
         XCTAssertNil(LoginShellPath.resolve(shell: "/nonexistent/shell", environment: [:], timeout: 1))
     }
 
+    /// `HookInstaller.searchPath()` 的内容：登录 shell 目录、版本管理器目录、
+    /// Finder 启动（PATH 只有 /usr/bin:/bin）时的兜底位置，且不重复。
     func testSearchPathIncludesLoginShellDirectoriesAndVersionManagers() {
         let path = HookInstaller.searchPath()
+        XCTAssertEqual(path.count, Set(path).count, "PATH 里有重复目录")
+        // 子进程 PATH 直接由它拼出来，缺了 node 的常见安装位置 claude 会自己失败
+        XCTAssertTrue(path.contains("/opt/homebrew/bin"))
+        XCTAssertTrue(path.contains("/usr/local/bin"))
         for directory in LoginShellPath.directories {
             XCTAssertTrue(path.contains(directory), "登录 shell 的 \(directory) 没进查找清单")
         }

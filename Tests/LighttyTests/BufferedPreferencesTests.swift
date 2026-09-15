@@ -10,22 +10,8 @@ struct BufferedPreferencesTests {
         try body(root.appendingPathComponent("preferences.json"))
     }
 
-    @Test func editsAreImmediatelyReadableAndFlushPersistsLatestValue() throws {
-        try fixture { file in
-            let store = FilePreferences(fileURL: file)
-            defer { store.flush() }
-            for value in 0..<100 { store.set(value, forKey: "counter") }
-            #expect(store.double(forKey: "counter") == 99)
-            store.set("temporary", forKey: "removed")
-            store.removeObject(forKey: "removed")
-            store.flush()
-            let reopened = FilePreferences(fileURL: file)
-            #expect(reopened.double(forKey: "counter") == 99)
-            #expect(reopened.object(forKey: "removed") == nil)
-            #expect(store.lastError == nil)
-        }
-    }
-
+    /// 写失败后 lastError 保留、文件不被覆盖；修复后再写一次才成功。
+    /// set/remove/flush/reopen 的基本语义在 FilePreferencesTests 里。
     @Test func failedBatchSurvivesUntilExplicitRetry() throws {
         try fixture { file in
             let store = FilePreferences(fileURL: file)

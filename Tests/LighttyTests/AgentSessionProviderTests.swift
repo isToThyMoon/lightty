@@ -49,7 +49,8 @@ struct AgentSessionProviderTests {
         #expect(provider.calls == [.occupancy(key(provider))])
     }
 
-    /// 说不清谁在用：没同意就停，同意了只压掉这一种失败。
+    /// 说不清谁在用：没同意就停，同意了只压掉这一种失败——确认有人在用的会话，
+    /// 同意也压不掉。
     @Test func unknownUsageNeedsExplicitConsent() throws {
         let provider = FakeSessionProvider()
         provider.deletionCheckError = SessionDeletion.Failure.unknownOccupancy(42)
@@ -62,15 +63,14 @@ struct AgentSessionProviderTests {
         #expect(!provider.calls.contains(.delete(key(provider))))
         try SessionDeletion.delete(key(provider), provider: provider, acceptingUnknownOccupancy: true)
         #expect(provider.calls.last == .delete(key(provider)))
-    }
 
-    @Test func consentNeverOverridesConfirmedUsage() {
-        let provider = FakeSessionProvider()
-        provider.deletionCheckError = SessionDeletion.Failure.occupiedProcess(9)
+        // 反面：同意只针对 unknownOccupancy，确认占用照样拒绝。
+        let occupied = FakeSessionProvider()
+        occupied.deletionCheckError = SessionDeletion.Failure.occupiedProcess(9)
         #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(key(provider), provider: provider, acceptingUnknownOccupancy: true)
+            try SessionDeletion.delete(key(occupied), provider: occupied, acceptingUnknownOccupancy: true)
         }
-        #expect(!provider.calls.contains(.delete(key(provider))))
+        #expect(!occupied.calls.contains(.delete(key(occupied))))
     }
 
     @Test func nativeDeletionErrorIsReportedAsFailed() {

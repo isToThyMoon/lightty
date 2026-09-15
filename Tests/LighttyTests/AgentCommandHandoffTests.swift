@@ -15,18 +15,16 @@ final class AgentCommandHandoffTests: XCTestCase {
 
     /// 两家的调用写法不同，这是实测出来的：Claude Code 用 `/`，Codex 用 `$`，
     /// 且都按插件名加前缀。写反了不会报错，只会什么都不发生。
-    func testEachCLIGetsItsOwnInvocationSyntax() {
+    /// 前缀必须跟着插件名走，不是写死的字符串——插件改名了这条会跟着变。
+    func testEachCLIGetsItsOwnInvocationSyntax() throws {
         XCTAssertEqual(input(.claude, installed: true), "/lightty:handoff \(path)")
         XCTAssertEqual(input(.codex, installed: true), "$lightty:handoff \(path)")
-    }
-
-    /// 前缀必须跟着插件名走，不是写死的字符串——插件改名了这条会跟着变。
-    func testInvocationUsesThePluginName() throws {
         let claude = try XCTUnwrap(input(.claude, installed: true))
         XCTAssertEqual(claude, "/\(HookMarketplace.pluginName):\(HandoffProtocol.skillName) \(path)")
     }
 
     /// 没装插件就不能敲调用（静默失败），改敲自带全部契约的整段指令。
+    /// 整段指令与技能正文同源：写作规矩逐字相同，否则同一件事会有两种说法。
     func testWithoutThePluginItTypesTheWholeInstruction() throws {
         let text = try XCTUnwrap(input(.codex, installed: false))
         XCTAssertFalse(text.hasPrefix("$"), "没装插件还敲调用，等于什么都没做")
@@ -36,6 +34,11 @@ final class AgentCommandHandoffTests: XCTestCase {
         XCTAssertTrue(text.contains("Refresh `updated`"))
         XCTAssertTrue(text.contains("named with a leading dot"))
         XCTAssertTrue(text.contains("Lead with `## Next steps`"))
+        // 写作规矩与 SKILL 同源，两家 CLI 的兜底指令都一样。
+        let claude = try XCTUnwrap(input(.claude, installed: false))
+        XCTAssertTrue(claude.contains(HandoffProtocol.writingRules))
+        XCTAssertTrue(text.contains(HandoffProtocol.writingRules))
+        XCTAssertTrue(HandoffProtocol.skillDocument.contains(HandoffProtocol.writingRules))
     }
 
     /// 这一支是敲给已经跑起来的 TUI，不是敲给 shell。粘进去的回车不提交，

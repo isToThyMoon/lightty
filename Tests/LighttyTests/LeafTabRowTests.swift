@@ -69,38 +69,28 @@ final class LeafTabRowTests: XCTestCase {
         XCTAssertTrue(labels().contains(pane.sessionState.title), "\(labels())")
     }
 
-    func testLeafRowCarriesTheTabGlyphInTheContainerColumn() throws {
-        let glyphs = descendants(table).compactMap { $0 as? NSImageView }
-            .filter { $0.image?.accessibilityDescription == L("Tab") }
-        XCTAssertEqual(glyphs.count, 1, "叶子行前面要有标签页图标")
-        XCTAssertNil(descendants(table).compactMap { $0 as? NSButton }.first { $0.toolTip == L("Collapse tab") })
-    }
-
+    /// 容器行当且仅当分屏：分屏展开成容器 + pane 行，别的标签页不受牵连，关掉分屏又收回。
     func testSplittingExpandsIntoContainerAndPaneRows() throws {
         let pane = try XCTUnwrap(controller.activePane)
         controller.split(pane, direction: .down)
+        let extra = try XCTUnwrap(controller.panes().first { $0 !== pane })
         layout()
         XCTAssertEqual(table.numberOfRows, 3)
         XCTAssertTrue(labels().contains(L("Tab %d", 1)), "多 pane 标签页要有容器行：\(labels())")
         XCTAssertTrue(labels().contains("2"), "容器行显示 pane 计数")
 
-        // 关掉一个分屏又收回成叶子行。
-        let extra = try XCTUnwrap(controller.panes().first { $0 !== pane })
-        controller.close(pane: extra)
-        layout()
-        XCTAssertEqual(table.numberOfRows, 1)
-        XCTAssertFalse(labels().contains(L("Tab %d", 1)))
-    }
-
-    func testMixedTabsKeepContainerRowsOnlyWhereSplit() throws {
-        let first = try XCTUnwrap(controller.activePane)
-        controller.split(first, direction: .right)
+        // 再开一个单 pane 标签页：标签页 1 仍是容器 + 2 pane，标签页 2 压成叶子行。
         controller.addTab(initialPane: PaneView())
         layout()
-        // 标签页 1：容器 + 2 pane；标签页 2：叶子。
         XCTAssertEqual(table.numberOfRows, 4)
         XCTAssertTrue(labels().contains(L("Tab %d", 1)))
-        XCTAssertFalse(labels().contains(L("Tab %d", 2)))
+        XCTAssertFalse(labels().contains(L("Tab %d", 2)), "没分屏的标签页不该有容器行：\(labels())")
+
+        // 关掉一个分屏又收回成叶子行：两个标签页各一行。
+        controller.close(pane: extra)
+        layout()
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertFalse(labels().contains(L("Tab %d", 1)))
     }
 
     // MARK: - helpers

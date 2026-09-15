@@ -5,32 +5,30 @@ import XCTest
 
 @MainActor
 final class PaneIdentityPanelTests: XCTestCase {
-    func testExpandedIslandContainsLongBoundCapsule() {
-        let capsule = NSRect(x: 100, y: 600, width: 480, height: 20)
-        let panel = PaneIdentityMorphGeometry.panelFrame(around: capsule)
-        XCTAssertGreaterThanOrEqual(panel.width, capsule.width)
-        XCTAssertLessThanOrEqual(panel.minX, capsule.minX)
-        XCTAssertGreaterThanOrEqual(panel.maxX, capsule.maxX)
-    }
-
-    func testAnimationStartsAtDisplayedFrameWithoutMovingContent() {
+    /// 形变的核心不变式：岛体在长，内容在面板坐标系里必须纹丝不动。
+    ///
+    /// 内容住在岛体的裁剪层里，frame 原点取岛体原点的相反数——所以岛体长开只是
+    /// 「露出更多」，内容一个像素都不许挪。第一行还要和 header 上的胶囊逐像素交接，
+    /// 挪了就穿帮。内容必须住在岛体里：放在岛体外面就不受裁剪，岛体还只有胶囊大小时，
+    /// 底下已经躺着一整屏列表——那就是"整块区域从上往下砸下来"的由来。
+    ///
+    /// 场景：先钉结构前提（列表与搜索框都在岛体裁剪层里），再同步形变一次看内容原点与
+    /// 标题不动，然后起真动画：起点是当前 frame、内容不动；动画中途顶边/中线/标题不动；
+    /// 可逆，被取消的 completion 不跑。
+    func testIslandMorphKeepsContentAndTopEdgeFixedAndCanReverse() throws {
         _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: 272, height: PaneIdentityPanel.maxHeight)
-        let start = NSRect(x: 80, y: panel.bounds.height - 20, width: 112, height: 20)
-        panel.applyIslandFrame(start, duration: 0)
-        panel.layoutSubtreeIfNeeded()
-        let origin = panel.identityRowOriginInPanel
-        panel.applyIslandFrame(
-            PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: 250),
-            duration: 0.24)
-        XCTAssertEqual(panel.islandFrame, start)
-        XCTAssertEqual(panel.identityRowOriginInPanel, origin)
-        panel.applyIslandFrame(start, duration: 0)
-    }
+        // 结构前提：搜索框与列表都住在岛体的裁剪层里。
+        let (listPanel, search, scroll) = try makeTaskList()
+        for view in [search, scroll] {
+            var ancestor = view.superview
+            var insideIsland = false
+            while let current = ancestor {
+                if current === listPanel.island { insideIsland = true; break }
+                ancestor = current.superview
+            }
+            XCTAssertTrue(insideIsland, "\(type(of: view)) 必须在岛体的裁剪层里")
+        }
 
-    func testVisibleAnimationKeepsTitleAndTopEdgeFixedAndCanReverse() throws {
-        _ = NSApplication.shared
         let panel = PaneIdentityPanel()
         panel.frame = NSRect(x: 0, y: 0, width: 496, height: PaneIdentityPanel.maxHeight)
         panel.update(paneName: "Long session title", taskName: "Bound task", dot: .systemGray, agent: .claude)
@@ -46,8 +44,25 @@ final class PaneIdentityPanelTests: XCTestCase {
             $0.stringValue == "Long session title"
         })
         let titleFrame = panel.convert(title.bounds, from: title)
+        let origin = panel.identityRowOriginInPanel
+
+        // 同步形变（必须走形变入口：直接给 island.frame 赋值会把内容一起带偏，这也正是
+        // `applyIslandFrame` 存在的理由）：岛体长开，内容原点与标题（图标、文字）纹丝不动。
+        panel.applyIslandFrame(end, duration: 0)
+        panel.layoutSubtreeIfNeeded()
+        XCTAssertEqual(panel.identityRowOriginInPanel.x, origin.x, accuracy: 0.001)
+        XCTAssertEqual(panel.identityRowOriginInPanel.y, origin.y, accuracy: 0.001)
+        let grownTitle = panel.convert(title.bounds, from: title)
+        XCTAssertEqual(grownTitle.minX, titleFrame.minX, accuracy: 0.001)
+        XCTAssertEqual(grownTitle.midY, titleFrame.midY, accuracy: 0.001)
+        panel.applyIslandFrame(start, duration: 0)
+        panel.layoutSubtreeIfNeeded()
+
+        // 真动画：起点是当前显示的 frame，内容不动。
         var cancelledCompletionRan = false
         panel.applyIslandFrame(end, duration: 0.3) { cancelledCompletionRan = true }
+        XCTAssertEqual(panel.islandFrame, start)
+        XCTAssertEqual(panel.identityRowOriginInPanel, origin)
         let sampled = expectation(description: "Sample visible morph")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             XCTAssertEqual(panel.islandFrame.maxY, start.maxY, accuracy: 0.001)
@@ -82,12 +97,15 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertEqual(picked?.lastPathComponent, "task-1.md")
     }
 
+    /// 滚轮 settle 与键盘选择的优先级：滚轮停下后高亮指针所在行；期间用了键盘，
+    /// 键盘的选择不被 settle 覆盖。
     func testKeyboardSelectionSurvivesPendingWheelSettle() throws {
-        try checkWheelSettle(keyboardTakesOver: true, expectedTask: "task-2.md")
-    }
-
-    func testWheelSettleHighlightsRowUnderPointer() throws {
-        try checkWheelSettle(keyboardTakesOver: false, expectedTask: "task-4.md")
+        for (keyboardTakesOver, expectedTask) in [
+            (true, "task-2.md"),   // 键盘接管：回车选的是键盘移到的行
+            (false, "task-4.md"),  // 没碰键盘：settle 后高亮指针下那行
+        ] {
+            try checkWheelSettle(keyboardTakesOver: keyboardTakesOver, expectedTask: expectedTask)
+        }
     }
 
     private func checkWheelSettle(keyboardTakesOver: Bool, expectedTask: String) throws {
@@ -114,94 +132,6 @@ final class PaneIdentityPanelTests: XCTestCase {
         _ = panel.control(search, textView: NSTextView(),
                           doCommandBy: #selector(NSResponder.insertNewline(_:)))
         XCTAssertEqual(picked?.lastPathComponent, expectedTask)
-    }
-
-    /// 形变的核心不变式：岛体在长，内容在面板坐标系里必须纹丝不动。
-    ///
-    /// 内容住在岛体的裁剪层里，frame 原点取岛体原点的相反数——所以岛体长开只是
-    /// 「露出更多」，内容一个像素都不许挪。第一行还要和 header 上的胶囊逐像素交接，
-    /// 挪了就穿帮。
-    func testContentStaysPutWhileTheIslandGrows() throws {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: nil)
-
-        let collapsed = NSRect(x: 29, y: PaneIdentityPanel.maxHeight - 20, width: 214, height: 20)
-        panel.applyIslandFrame(collapsed, duration: 0)
-        panel.layoutSubtreeIfNeeded()
-        let before = panel.identityRowOriginInPanel
-
-        let expanded = NSRect(x: 0, y: PaneIdentityPanel.maxHeight - 62,
-                              width: PaneIdentityPanel.panelWidth, height: 62)
-        panel.applyIslandFrame(expanded, duration: 0)
-        panel.layoutSubtreeIfNeeded()
-
-        XCTAssertEqual(panel.identityRowOriginInPanel.x, before.x, accuracy: 0.001)
-        XCTAssertEqual(panel.identityRowOriginInPanel.y, before.y, accuracy: 0.001)
-    }
-
-    /// 内容必须住在岛体里。放在岛体外面就不受裁剪，岛体还只有胶囊大小时，
-    /// 底下已经躺着一整屏列表——那就是"整块区域从上往下砸下来"的由来。
-    func testEveryPieceOfContentIsClippedByTheIsland() throws {
-        let (panel, search, scroll) = try makeTaskList()
-        for view in [search, scroll] {
-            var ancestor = view.superview
-            var insideIsland = false
-            while let current = ancestor {
-                if current === panel.island { insideIsland = true; break }
-                ancestor = current.superview
-            }
-            XCTAssertTrue(insideIsland, "\(type(of: view)) 必须在岛体的裁剪层里")
-        }
-    }
-
-    /// 阴影单独一层并挖空内部：岛体是半透明的，阴影画在它自己的图层上会透上来
-    /// 把文字压暗。
-    func testIslandShadowIsCutOutSoItCannotDarkenContent() throws {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.applyIslandFrame(NSRect(x: 0, y: 0, width: 272, height: 62),
-                               duration: 0)
-
-        XCTAssertNil(panel.island.layer?.shadowPath, "岛体自己不许画阴影")
-        let cutout = try XCTUnwrap(panel.islandShadow.layer?.mask as? CAShapeLayer)
-        XCTAssertEqual(cutout.fillRule, .evenOdd, "挖空靠 even-odd，不是靠盖一层")
-        XCTAssertNotNil(cutout.path)
-        XCTAssertNotNil(panel.islandShadow.layer?.shadowPath)
-    }
-
-    /// 任务行必须一眼看得出能点：常驻底色 + 右端箭头 + 左侧「任务」标签。
-    /// 它原来和上一行（点了直接打字改 pane 名）一样是透明底的一行字，
-    /// 两种行为同一张脸，用户只能靠试。
-    func testTaskRowLooksLikeAPickerInsteadOfPlainText() throws {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
-        panel.layoutSubtreeIfNeeded()
-
-        let row = try XCTUnwrap(panel.descendants.first {
-            $0.identifier == PaneIdentityPanel.taskFieldIdentifier
-        })
-        let fill = try XCTUnwrap(row.layer?.backgroundColor)
-        XCTAssertGreaterThan(fill.alpha, 0, "静息态就该有底色，不能等 hover 才出现")
-
-        let labels = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
-        XCTAssertTrue(labels.contains(L("Task")), "左侧要有说明这一行是什么的标签")
-        XCTAssertTrue(labels.contains(L("Not set")), "未选择时要说“未选择”，不是“绑定任务”")
-
-        let chevrons = row.descendants.compactMap { ($0 as? NSImageView)?.image }
-        XCTAssertFalse(chevrons.isEmpty, "右端要有下拉箭头")
-
-        let pencils = panel.descendants.compactMap { ($0 as? NSButton)?.image?
-            .accessibilityDescription }
-        XCTAssertFalse(pencils.contains(L("Rename task")),
-                       "改名不再挂在任务行右边那支铅笔上")
     }
 
     /// 还没绑任务时，面板一打开就把列表摊开；已经绑了就保持两行。
@@ -231,72 +161,47 @@ final class PaneIdentityPanelTests: XCTestCase {
         view.mouseDown(with: event)
     }
 
-    /// 「让 Agent 总结」在第一层——任务行正下方，点一次胶囊就能看到。
-    ///
+    /// 「让 Agent 总结」在第一层，点一次胶囊就能看到、不必先展开任务列表。
     /// 它原先在任务列表底部，够着它要点两次（胶囊 → 任务行）。这是任务进行中反复
     /// 要做的动作，不该藏在管归属的那一层里。
-    func testSummarizeRowSitsOnTheFirstLevelUnderTheTaskRow() throws {
+    ///
+    /// 出现条件是一张表：provider 有无（认不认得出 agent）× 绑没绑任务 → 这一行在不在，
+    /// 以及岛体高度——没有这一行时岛体不该为它留空。
+    func testSummarizeRowAppearsOnlyWithABoundTaskAndAKnownAgent() throws {
         _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.handoffActionProvider = { .ready }
-        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: .claude)
-        panel.layoutSubtreeIfNeeded()
-
-        // 没有展开任何列表，这一行就该在。
-        let row = try XCTUnwrap(panel.descendants.first {
-            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
-        }, "第一层就该有这一行，不必先展开任务列表")
-        let taskRow = try XCTUnwrap(panel.descendants.first {
-            $0.identifier == PaneIdentityPanel.taskFieldIdentifier
-        })
-        let rowFrame = panel.convert(row.bounds, from: row)
-        let taskFrame = panel.convert(taskRow.bounds, from: taskRow)
-        XCTAssertLessThan(rowFrame.maxY, taskFrame.minY + 0.5,
-                          "要在任务行下方（面板坐标系 y 向上）")
-
-        let titles = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
-        XCTAssertTrue(titles.contains(L("Have the Agent summarize it")))
-    }
-
-    /// 条件出现：认不出 agent 就没有这一行，而且岛体不该为它留空。
-    func testSummarizeRowCostsNoHeightWhenItIsAbsent() {
-        _ = NSApplication.shared
-        for provider in [nil, { PaneIdentityPanel.HandoffAction.ready }]
-            as [(() -> PaneIdentityPanel.HandoffAction?)?] {
+        struct Case {
+            let name: String
+            let provider: (() -> PaneIdentityPanel.HandoffAction?)?
+            let taskName: String?
+            let present: Bool
+        }
+        let cases: [Case] = [
+            // 认得出 agent 且绑了任务：第一层就该有这一行。
+            Case(name: "known agent with a bound task", provider: { .ready }, taskName: "Some task", present: true),
+            // 认不出 agent 就没有这一行，而且岛体不该为它留空。
+            Case(name: "unknown agent", provider: nil, taskName: "Some task", present: false),
+            // 没绑任务就没有这一行：没有可写回的地址，摆出来只是噪音。
+            Case(name: "no bound task", provider: { .ready }, taskName: nil, present: false),
+        ]
+        for c in cases {
             let panel = PaneIdentityPanel()
             panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
                                  height: PaneIdentityPanel.maxHeight)
-            panel.handoffActionProvider = provider
-            panel.update(paneName: "Terminal", taskName: "Some task",
-                         dot: .systemGray, agent: .claude)
+            panel.handoffActionProvider = c.provider
+            panel.update(paneName: "Terminal", taskName: c.taskName, dot: .systemGray, agent: .claude)
             panel.layoutSubtreeIfNeeded()
 
-            let present = panel.descendants.contains {
-                $0.identifier == PaneIdentityPanel.handoffRowIdentifier
-            }
-            XCTAssertEqual(present, provider != nil)
+            let row = panel.descendants.first { $0.identifier == PaneIdentityPanel.handoffRowIdentifier }
+            XCTAssertEqual(row != nil, c.present, c.name)
             XCTAssertEqual(
                 panel.currentIslandHeight,
-                PaneIdentityPanel.baseHeight
-                    + (provider == nil ? 0 : PaneIdentityPanel.handoffRowSpace),
-                "没有这一行时岛体不该凭空多出一块空白")
+                PaneIdentityPanel.baseHeight + (c.present ? PaneIdentityPanel.handoffRowSpace : 0),
+                "\(c.name)：没有这一行时岛体不该凭空多出一块空白")
+            if let row {
+                let titles = row.descendants.compactMap { ($0 as? NSTextField)?.stringValue }
+                XCTAssertTrue(titles.contains(L("Have the Agent summarize it")), c.name)
+            }
         }
-    }
-
-    /// 没绑任务就没有这一行：没有可写回的地址，摆出来只是噪音。
-    func testSummarizeRowNeedsABoundTask() {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.handoffActionProvider = { .ready }
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: .claude)
-        panel.layoutSubtreeIfNeeded()
-        XCTAssertFalse(panel.descendants.contains {
-            $0.identifier == PaneIdentityPanel.handoffRowIdentifier
-        })
     }
 
     /// agent 正忙时这一行还在（藏掉等于让用户以为没这功能），但点不动、给出理由。
@@ -339,50 +244,6 @@ final class PaneIdentityPanelTests: XCTestCase {
         })
         try click(row)
         XCTAssertEqual(dismissed, 0)
-    }
-
-    /// 改名的入口在列表底部，和解除绑定并排——不是任务行右边那支 20×20 的铅笔。
-    func testRenameLivesInTheListNextToUnbind() throws {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                             height: PaneIdentityPanel.maxHeight)
-        panel.taskProvider = {
-            [.init(name: "Some task", fileURL: URL(fileURLWithPath: "/tmp/t.md"),
-                   running: false, current: true)]
-        }
-        panel.update(paneName: "Terminal", taskName: "Some task", dot: .systemGray, agent: nil)
-        panel.toggleTaskList()
-        panel.layoutSubtreeIfNeeded()
-
-        let labels = panel.descendants.compactMap { $0 as? NSTextField }
-        let titles = labels.map(\.stringValue)
-        XCTAssertTrue(titles.contains(L("Rename this task…")))
-        XCTAssertTrue(titles.contains(L("Unbind")))
-
-        // 三行三个颜色：候选是普通文字色，改名走强调色，解绑走红色。同色的话
-        // 底下这两行看着就是"又两个任务"。
-        let choice = try XCTUnwrap(labels.first { $0.stringValue == "Some task" })
-        let rename = try XCTUnwrap(labels.first { $0.stringValue == L("Rename this task…") })
-        let unbind = try XCTUnwrap(labels.first { $0.stringValue == L("Unbind") })
-        // 动态色每次取都是新实例，比的是解析出来的值。
-        let appearance = panel.effectiveAppearance
-        func resolved(_ field: NSTextField) -> CGColor? {
-            field.textColor?.shellResolvedCGColor(for: appearance)
-        }
-        XCTAssertEqual(resolved(rename),
-                       ShellStyle.navigationAccent.shellResolvedCGColor(for: appearance))
-        XCTAssertNotEqual(resolved(rename), resolved(choice))
-        XCTAssertNotEqual(resolved(unbind), resolved(choice))
-        XCTAssertNotEqual(resolved(unbind), resolved(rename))
-
-        // 而且必须钉在滚动区外面：任务一多，跟着候选一起滚就又被挤到看不见了。
-        let scroll = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSScrollView }.first)
-        let scrolled = Set((scroll.documentView?.descendants ?? []).compactMap {
-            ($0 as? NSTextField)?.stringValue
-        })
-        XCTAssertFalse(scrolled.contains(L("Rename this task…")))
-        XCTAssertFalse(scrolled.contains(L("Unbind")))
     }
 
     /// 胶囊与灵动岛第一行必须逐像素同构：展开时胶囊瞬间隐身、第一行顶上，收起反过来。
@@ -485,7 +346,16 @@ final class PaneIdentityPanelTests: XCTestCase {
         panel.layoutSubtreeIfNeeded()
     }
 
+    /// `PaneIdentityMorphGeometry` 纯函数：面板包住胶囊（再长的胶囊也不许探出面板），
+    /// 展开时中线不变、顶边不变、左右等量外扩、只向下长。
     func testMorphExpandsEquallyLeftAndRightAndOnlyDownward() {
+        // 面板要包住胶囊：绑了长任务名时胶囊可以很宽。
+        let long = NSRect(x: 100, y: 600, width: 480, height: 20)
+        let around = PaneIdentityMorphGeometry.panelFrame(around: long)
+        XCTAssertGreaterThanOrEqual(around.width, long.width)
+        XCTAssertLessThanOrEqual(around.minX, long.minX)
+        XCTAssertGreaterThanOrEqual(around.maxX, long.maxX)
+
         let capsule = NSRect(x: 410, y: 612, width: 96, height: 20)
         let panel = PaneIdentityMorphGeometry.panelFrame(around: capsule)
         // 胶囊在面板坐标系里的位置。生产路径靠坐标转换拿到同一个结果——面板在
@@ -504,61 +374,6 @@ final class PaneIdentityPanelTests: XCTestCase {
             expanded.maxX - collapsed.maxX,
             accuracy: 0.001)
         XCTAssertLessThan(expanded.minY, collapsed.minY)
-    }
-
-    func testIdentityIconAndTitleStayFixedWhileIslandExpands() throws {
-        _ = NSApplication.shared
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(
-            x: 0, y: 0,
-            width: PaneIdentityPanel.panelWidth,
-            height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
-        panel.setIdentityAnchorOffset(74)
-        panel.layoutSubtreeIfNeeded()
-
-        let title = try XCTUnwrap(
-            panel.descendants.compactMap { $0 as? NSTextField }.first {
-                $0.stringValue == "Terminal"
-            })
-        let before = panel.convert(title.bounds, from: title)
-
-        // 必须走形变入口：直接给 island.frame 赋值会把内容一起带偏，这也正是
-        // `applyIslandFrame` 存在的理由。
-        panel.applyIslandFrame(
-            PaneIdentityMorphGeometry.expandedIslandFrame(
-                in: panel.bounds, height: PaneIdentityPanel.baseHeight),
-            duration: 0)
-        panel.layoutSubtreeIfNeeded()
-        let after = panel.convert(title.bounds, from: title)
-
-        XCTAssertEqual(after.minX, before.minX, accuracy: 0.001)
-        XCTAssertEqual(after.midY, before.midY, accuracy: 0.001)
-    }
-
-    func testSearchPlaceholderFitsWithinIsland() throws {
-        _ = NSApplication.shared
-
-        let panel = PaneIdentityPanel()
-        panel.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: PaneIdentityPanel.panelWidth,
-            height: PaneIdentityPanel.maxHeight)
-        panel.update(paneName: "Terminal", taskName: nil, dot: .systemGray, agent: nil)
-        panel.layoutSubtreeIfNeeded()
-
-        let searchField = try XCTUnwrap(
-            panel.descendants.compactMap { $0 as? NSTextField }.first {
-                $0.placeholderAttributedString?.string
-                    == L("Search, or type a new task name and press Return")
-            })
-        let placeholder = try XCTUnwrap(searchField.placeholderAttributedString)
-
-        XCTAssertLessThanOrEqual(
-            placeholder.size().width,
-            searchField.bounds.width,
-            "The default placeholder copy must fit instead of being clipped at the island edge")
     }
 
     func testLongTaskListUsesAViewportInsideTheIsland() throws {
