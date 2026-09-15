@@ -42,6 +42,7 @@ enum ShellMenuPopover {
     }
 
     private static var window: ShellMenuWindow?
+    static var isPresented: Bool { window?.isVisible ?? false }
 
     /// 贴锚点下方、右缘对齐的自绘卡片（ChatGPT 桌面版式，无气泡小三角）。
     /// 空间不够时翻到锚点上方。
