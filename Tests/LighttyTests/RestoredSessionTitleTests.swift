@@ -116,7 +116,7 @@ extension SessionAssociationTests {
             library.updateWindow(UUID(), panes: [], selected: nil)
         }
         // Drain the coalesced notifications, including cancelLoading's library notification.
-        try await Task.sleep(for: .milliseconds(50))
+        await awaitMainQueue(hops: 2)
         #expect(provider.requestCount == 2)
         #expect(!library.loaded, "Presentation notifications must not restart a cancelled load")
     }

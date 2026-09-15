@@ -39,8 +39,11 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - 在 lightty 的 pane 里跑，先 `unset LIGHTTY_PANE_ID LIGHTTY_SOCK`。
 - 测试里不要广播全局偏好变化（例如 `LanguagePreference.set`）：之前测试留下的窗口会跟着重建，曾让进程稳定卡死在 `ghostty_surface_free`。
 - 测试里建 ghostty 运行时一律用 `ensureTerminalRuntime()`（`Tests/LighttyTests/TerminalRuntimeTestSupport.swift`）。测试终端默认跑 `cat`、不跑交互 shell：测试主线程很少 tick，app 邮箱常年是满的，这时释放跑着 zsh 的 surface 会永久卡死在 `ghostty_surface_free`。确实要真 shell 的测试设 `TerminalTestShell.usesRealShell = true`，用完复原。
+- 测试里 pane 进窗口默认**不建 surface**（`ensureTerminalRuntime()` 会把 `TerminalSurfaceView.spawnsSurfaces` 关掉）：`TerminalWindowController(...)` 装进去的 pane 只是布局/状态载体，`terminal.surface == nil`，不 spawn `login`/shell、不起渲染和 IO 线程。全量一轮里同时存活的 `cat` 从 66 个降到 0。确实要 pty 的测试（环境变量到 shell、启动命令真执行、等 OSC 7/进程退出之类）在该测试里设 `TerminalTestShell.spawnsSurfaces = true`（要真 zsh 再加 `usesRealShell = true`），用完复原；已在窗口里的 pane 不会补建 surface。目前只有 `SurfaceEnvironmentTests` 和 `AgentLaunchPreferenceTests.testBoundTaskIsReadyBeforeStartupCommandRunsInTaskDirectory` 打开它。
 - 测试里等异步结果只用 `waitUntil`（XCTest）/ `awaitUntil`（Swift Testing），见 `Tests/LighttyTests/WaitTestSupport.swift`。超时会结束当前测试；不要手写「截止时间 + 循环 + 断言」，超时后继续往下按行号取行会 trap，整个测试进程崩掉。超时上限本身是契约时（如刷新按钮最多转完一圈）才显式传短超时。
-- 机器负载高时（例如多个 worktree 同时跑），固定时长的等待（`RunLoop.main.run(until:)`、固定 `Task.sleep`）仍可能偶发失败。判断是不是回归，以单机串行重跑的结果为准。
+- 不写固定时长的等待（`RunLoop.main.run(until:)`、固定 `Task.sleep`）：负载高时偶发失败，负载低时白等。等的是「排在主队列里的下一拍」（`Coalescer(.nextTick)` 合流刷新、投到下一拍的命令）就用 `drainMainQueue()`（XCTest）/ `awaitMainQueue(hops:)`（async 测试；会话库通知一拍、收到通知的列表再一拍，是两跳）；等控制器 init 排到下一拍装的侧栏用 `controller.waitForInitialLayout()`（`WindowChromeTestSupport.swift`）。任务侧栏的滑入由 CADisplayLink 驱动，不上屏的测试窗口永远不走帧，别等它滑到位。只有「某事**不该**发生」的否定式断言仍用一段固定时长，且要注释它压过的是哪个时间窗。
+- 测试窗口不上屏：要窗口成为 key 或参与布局时用 `makeKeyAndOrderFrontInvisibly()` / `orderFrontInvisibly()`（`InvisibleWindowTestSupport.swift`），不要 `makeKeyAndOrderFront(nil)`；只有 `LIGHTTY_UI_SNAPSHOT_DIR` 截图那条分支例外。
+- `RefreshButtonTests.symbolPreservesNativeImageLayoutAndAppearance` 会随本机状态失败（把 SF Symbol 图层渲染进离屏位图只剩几个像素），未改动的 HEAD 上也复现，与业务代码无关；判断回归时忽略它。
 - `scripts/check-config-parity.sh` 会启动 lightty 二进制，入口会先对真实 `~/.lightty` 跑数据迁移，HOME 覆盖无效，先退出正在使用的 lightty 再跑。
 发布打包：scripts/package-app.sh。
 

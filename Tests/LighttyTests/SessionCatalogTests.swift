@@ -306,10 +306,14 @@ final class PrimarySidebarTests: XCTestCase {
             }
             XCTAssertFalse(library.loading)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(ShellStyle.animationDuration + 0.05))
+        // 让最后一次展开的折叠钮动画走完，后面对下一层折叠钮的断言不受它影响。
+        try waitUntil("disclosure animation finished") { button.disclosureLayer?.animation(forKey: "disclosure") == nil }
         XCTAssertTrue(button.expanded)
         XCTAssertEqual(table.numberOfRows, 5)
         if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            // 这条分支要拿 screencapture 抓窗口像素，必须真的上屏：alpha 0 或挪到屏外
+            // 的窗口 `screencapture -l` 都静默不产出文件（实测）。它只在显式开启快照
+            // 目录时执行，普通 `swift test` 走不到，所以不经 orderFrontInvisibly。
             window.orderFront(nil)
             window.display()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -462,7 +466,7 @@ final class PrimarySidebarTests: XCTestCase {
         for name: Notification.Name in [.lighttyWindowArrangementDidChange, .lighttyPaneStatusDidChange] {
             NotificationCenter.default.post(name: name, object: nil)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        try drainMainQueue()  // 列表的重配合流到下一拍
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
                        "开终端后的这几条通知也不该把列表弹回顶部")
@@ -841,7 +845,8 @@ final class PrimarySidebarTests: XCTestCase {
         document.addSubview(row); scroll.documentView = document
         let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = scroll
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        // 装进窗口时的首次布局算一次滚动，列表自己的闸门要等收敛定时器放开。
+        try waitUntil("initial layout settles") { !scroll.suppressesPointerFeedback }
         ShellHoverGate.release(in: nil)
         let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
@@ -860,7 +865,7 @@ final class PrimarySidebarTests: XCTestCase {
         scroll.documentView = table
         let first = ShellTableRowView(), second = ShellTableRowView()
         table.addSubview(first); table.addSubview(second)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        try waitUntil("initial layout settles") { !scroll.suppressesPointerFeedback }
         ShellHoverGate.release(in: nil)
         let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,

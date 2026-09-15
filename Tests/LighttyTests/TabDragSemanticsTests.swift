@@ -181,11 +181,10 @@ final class TabDragSemanticsTests: XCTestCase {
         return NSPoint(x: rect.midX, y: rect.minY - 1)
     }
 
-    /// 等松手后投递到下一拍的命令执行完。用挂起而不是转事件循环：同步测试若本身
-    /// 跑在主队列的块里，嵌套转事件循环不会执行主队列里排着的块。
-    private func settle() async {
-        for _ in 0..<5 { try? await Task.sleep(nanoseconds: 20_000_000) }
-    }
+    /// 等松手后投递到下一拍的命令执行完（`completeDrag`），再等它引起的列表刷新合流的那一拍：
+    /// 两跳。用挂起而不是转事件循环：async 测试体本身就是主队列上的块，嵌套转事件循环
+    /// 不会执行主队列里排着的块。
+    private func settle() async { await awaitMainQueue(hops: 2) }
 
     func testAReloadInTheMiddleOfADragNoLongerCancelsIt() async throws {
         let controller = TerminalWindowController()

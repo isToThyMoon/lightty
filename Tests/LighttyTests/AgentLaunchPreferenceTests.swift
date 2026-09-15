@@ -70,9 +70,13 @@ final class AgentLaunchPreferenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
         ensureTerminalRuntime()
-        // 启动命令要在真 shell 里执行才会写出标记文件。
+        // 启动命令要在真 surface 的真 shell 里执行才会写出标记文件。
+        TerminalTestShell.spawnsSurfaces = true
         TerminalTestShell.usesRealShell = true
-        defer { TerminalTestShell.usesRealShell = false }
+        defer {
+            TerminalTestShell.usesRealShell = false
+            TerminalTestShell.spawnsSurfaces = false
+        }
         let task = TaskFile(name: "Launch test", workdir: directory.path,
                             created: Date(), updated: Date())
         let file = directory.appendingPathComponent("task.md")

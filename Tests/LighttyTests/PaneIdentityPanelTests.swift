@@ -40,7 +40,7 @@ final class PaneIdentityPanelTests: XCTestCase {
         let end = PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: 280)
         panel.setIdentityAnchorOffset(start.minX)
         panel.applyIslandFrame(start, duration: 0)
-        window.orderFront(nil)
+        window.orderFrontInvisibly()
         panel.layoutSubtreeIfNeeded()
         let title = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSTextField }.first {
             $0.stringValue == "Long session title"

@@ -13,12 +13,15 @@ import Foundation
 /// - 孤儿：pane 没释放就到了进程退出，内核关 pty 时还没初始化完的 zsh 会永久卡在
 ///   `init_io` 的 `open()` 上，成为挂在 launchd 下的孤儿。
 ///
-/// 所以测试里的终端默认不跑交互 shell，而是跑一个不输出的 `cat`（见 `TerminalTestShell`）；
+/// 所以测试里的 pane 进窗口时默认**不建 surface**（`TerminalTestShell.spawnsSurfaces`），
+/// 绝大多数测试只拿装在窗口里的 pane 当布局/状态载体；确实要 pty 的测试再打开。
+/// 打开后终端也不跑交互 shell，而是跑一个不输出的 `cat`（见 `TerminalTestShell`）；
 /// 退出前再把剩下的子进程收掉。
 @MainActor
 func ensureTerminalRuntime() {
     guard GhosttyRuntime.shared == nil else { return }
     TerminalTestShell.install()
+    TerminalTestShell.spawnsSurfaces = false
     GhosttyRuntime.shared = GhosttyRuntime()
     atexit { reapTerminalShells() }
 }
@@ -35,7 +38,16 @@ enum TerminalTestShell {
         .appendingPathComponent("lightty-test-shell-\(getpid())")
     private static let realShellMarker = directory.appendingPathComponent("real-shell")
 
-    /// 之后新建的终端是否跑真实的登录 zsh。已经起来的终端不受影响。
+    /// 之后进窗口的 pane 是否真的创建 ghostty surface（spawn 终端进程、起渲染/IO 线程）。
+    /// 默认关：只有要 pty 的测试（环境变量到 shell、启动命令真执行、进程退出……）
+    /// 才打开，用完必须复原。已经装进窗口的 pane 不受影响。
+    static var spawnsSurfaces: Bool {
+        get { TerminalSurfaceView.spawnsSurfaces }
+        set { TerminalSurfaceView.spawnsSurfaces = newValue }
+    }
+
+    /// 之后新建的终端是否跑真实的登录 zsh。已经起来的终端不受影响。只在
+    /// `spawnsSurfaces` 打开时才有意义。
     static var usesRealShell: Bool {
         get { FileManager.default.fileExists(atPath: realShellMarker.path) }
         set {

@@ -83,8 +83,8 @@ final class SessionModelFixture {
         catalog.records = records
         library.refresh()
         try await wait { !library.loading }
-        // Delivery is coalesced; give consumers a runloop turn after the committed snapshot.
-        try await Task.sleep(for: .milliseconds(20))
+        // 会话库的变更通知合流到下一拍，收到通知的列表再合流一拍。
+        await awaitMainQueue(hops: 2)
     }
     func status(_ state: PaneActivity, event: String, pane: UUID, record: AgentSession,
                 directory: String? = nil) async throws {
@@ -94,7 +94,7 @@ final class SessionModelFixture {
             cwd: directory ?? root.path, event: event)
         _ = PaneStatusDatagram(pane: pane, status: value).send(to: statuses.socketPath)
         try await wait { library.paneState(for: pane)?.status?.event == event }
-        try await Task.sleep(for: .milliseconds(20))
+        await awaitMainQueue(hops: 2)
     }
 }
 
@@ -112,7 +112,7 @@ struct SessionModelTests {
         // Completion may have scheduled bounded metadata retries. Finish that setup
         // before measuring whether the read operation itself starts catalog work.
         f.library.cancelLoading()
-        try await Task.sleep(for: .milliseconds(20))
+        await awaitMainQueue(hops: 2)
         let reads = f.catalog.requestCount
         var changes: [SessionChange] = []
         let observer = NotificationCenter.default.addObserver(forName: .lighttySessionLibraryDidChange,

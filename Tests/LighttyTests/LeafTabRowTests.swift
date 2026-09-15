@@ -19,7 +19,7 @@ final class LeafTabRowTests: XCTestCase {
         column = TabColumnView()
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        try controller.waitForInitialLayout()
         table = try XCTUnwrap(descendants(column).compactMap { $0 as? NSTableView }.first)
         layout()
     }

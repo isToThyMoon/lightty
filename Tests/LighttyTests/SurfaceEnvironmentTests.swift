@@ -25,12 +25,14 @@ final class SurfaceEnvironmentTests: XCTestCase {
         previousAppState = AppState.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
         ensureTerminalRuntime()
-        // 要读 shell 里的环境变量，得是真 zsh。
+        // 要读 shell 里的环境变量，得真建 surface、跑真 zsh。
+        TerminalTestShell.spawnsSurfaces = true
         TerminalTestShell.usesRealShell = true
     }
 
     override func tearDown() {
         TerminalTestShell.usesRealShell = false
+        TerminalTestShell.spawnsSurfaces = false
         GhosttyRuntime.shared.setColorScheme(GHOSTTY_COLOR_SCHEME_LIGHT)
         AppState.shared = previousAppState ?? AppState.shared
         try? FileManager.default.removeItem(at: directory)
@@ -77,9 +79,9 @@ final class SurfaceEnvironmentTests: XCTestCase {
         let pane = PaneView()
         pane.frame = window.contentView!.bounds
         window.contentView?.addSubview(pane)
-        window.orderFront(nil)
+        // surface 在 pane 进入窗口时就创建；shell 集成的 OSC 7 走 core，不依赖窗口上屏，
+        // 所以不 order 窗口。
         defer {
-            window.orderOut(nil)
             pane.removeFromSuperview()
             PaneRuntimeDirectory.destroy(paneID: pane.dragIdentifier.uuidString)
         }

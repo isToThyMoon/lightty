@@ -12,7 +12,7 @@ extension SessionAssociationTests {
         directory.frame = NSRect(x: 10, y: 10, width: 200, height: 28)
         host.contentView?.addSubview(directory)
         host.contentView?.layoutSubtreeIfNeeded()
-        host.makeKeyAndOrderFront(nil)
+        host.makeKeyAndOrderFrontInvisibly()
         defer { host.orderOut(nil) }
         host.makeFirstResponder(directory.field)
         let editor = try #require(directory.field.currentEditor() as? NSTextView)
@@ -91,7 +91,7 @@ extension SessionAssociationTests {
                             styleMask: [.titled], backing: .buffered, defer: false)
         host.contentView?.addSubview(area)
         area.frame = NSRect(x: 10, y: 10, width: 280, height: 92)
-        host.makeKeyAndOrderFront(nil)
+        host.makeKeyAndOrderFrontInvisibly()
         defer { host.orderOut(nil) }
         host.makeFirstResponder(area.textView)
         #expect(area.isShowingPlaceholder)
@@ -324,7 +324,7 @@ extension SessionAssociationTests {
         let preview = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 500),
             styleMask: [.titled], backing: .buffered, defer: false)
         preview.contentView = launcher.view
-        preview.makeKeyAndOrderFront(nil)
+        preview.makeKeyAndOrderFrontInvisibly()
         defer { preview.orderOut(nil) }
         preview.makeFirstResponder(launcher.directory.field)
         launcher.viewDidAppear()

@@ -70,12 +70,14 @@ struct PaneStatusLabelTests {
         }
         let animation = try #require(label.breath)
         let color = label.textColor
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(animation.isAnimating && animation.currentProgress > 0)
-        #expect(label.textColor != color)
+        try await awaitUntil("the breath advances and recolors the text") {
+            animation.currentProgress > 0 && label.textColor != color
+        }
+        #expect(animation.isAnimating)
         // Native completion callback must restart the next cycle, not stop after one breath.
-        try await Task.sleep(for: .milliseconds(3100))
-        #expect(label.breath != nil && label.breath !== animation)
+        // 一口气是 3.2 秒；把正在呼的这口缩短，只看呼完会不会接着呼下一口。
+        animation.duration = 0.3
+        try await awaitUntil("the next breath starts") { label.breath != nil && label.breath !== animation }
         label.isHidden = true
         #expect(label.breath == nil)
         label.isHidden = false

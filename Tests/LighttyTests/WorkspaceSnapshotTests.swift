@@ -70,7 +70,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
 
         let controller = TerminalWindowController()
         AppState.shared.windowControllers.append(controller)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try controller.waitForInitialLayout()
 
         let first = try XCTUnwrap(controller.panes().first)
         first.rename(to: "编译")
@@ -95,8 +95,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
 
         let restored = TerminalWindowController(restoring: snapshot)
         AppState.shared.windowControllers.append(restored)
-        restored.window?.contentView?.superview?.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try restored.waitForInitialLayout()
 
         let again = try XCTUnwrap(restored.snapshot())
         XCTAssertEqual(again.tabs.map(\.title), snapshot.tabs.map(\.title))
@@ -161,7 +160,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         let a = TerminalWindowController()
         let b = TerminalWindowController()
         AppState.shared.windowControllers = [a, b]
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        for c in [a, b] { try c.waitForInitialLayout() }
 
         // 窗口 A：标签页 0 = [A1 | A2]，标签页 1 = [A3]（活跃）
         let a1 = try XCTUnwrap(a.panes().first)
@@ -188,7 +187,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         try XCTUnwrap(b.panes().last).rename(to: "Q3")
         b.selectTab(at: 0)
         for c in [a, b] { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try drainMainQueue()
 
         let snapshot = WorkspaceStore.capture()
         XCTAssertEqual(snapshot.windows.count, 2)
@@ -205,8 +204,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         AppState.shared.windowControllers.removeAll()
         let restored = WorkspaceRestorer.restore(snapshot)
         XCTAssertEqual(restored.count, 2)
-        for c in restored { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        for c in restored { try c.waitForInitialLayout() }
 
         let again = WorkspaceStore.capture()
         XCTAssertEqual(

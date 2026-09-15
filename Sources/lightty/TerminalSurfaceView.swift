@@ -93,6 +93,11 @@ struct TerminalSurfaceConfiguration {
 /// 渲染硬约束：不设 wantsLayer、不建自己的 layer。`ghostty_surface_new`
 /// 会安装 IOSurfaceLayer 并把视图变成 layer-hosting，壳层不能踢掉它。
 final class TerminalSurfaceView: NSView {
+    /// 进窗口时是否真的创建 ghostty surface（随之 spawn `login → shell`、起渲染和 IO 线程）。
+    /// 生产恒为 `true`；只有测试运行时把它关掉，让 pane 只当布局/状态载体，见
+    /// `Tests/LighttyTests/TerminalRuntimeTestSupport.swift`。
+    static var spawnsSurfaces = true
+
     private(set) var surface: ghostty_surface_t?
     /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
@@ -156,7 +161,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     private func createSurface() {
-        guard let window else { return }
+        guard Self.spawnsSurfaces, let window else { return }
 
         // 必须从 libghostty 的 default constructor 开始。默认 surface 不覆盖 cwd；
         // 由 core 请求的新 surface 仅使用 core 返回的 inherited config。

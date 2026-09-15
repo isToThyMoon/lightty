@@ -8,15 +8,14 @@ final class SidebarScrollHoverTests: XCTestCase {
         XCTAssertTrue(SidebarListScrollView.isCompatibleWithResponsiveScrolling)
     }
 
-    func testBoundsOnlyScrollingIsScopedAndSettles() {
+    func testBoundsOnlyScrollingIsScopedAndSettles() throws {
         let scrolling = SidebarListScrollView(frame: .zero)
         let other = SidebarListScrollView(frame: .zero)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scrolling.contentView)
         XCTAssertTrue(scrolling.suppressesPointerFeedback)
         XCTAssertFalse(other.suppressesPointerFeedback)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        XCTAssertFalse(scrolling.suppressesPointerFeedback)
+        // 滚动停下 0.08 秒后收敛定时器自己放开闸门。
+        try waitUntil("bounds-only scroll settles") { !scrolling.suppressesPointerFeedback }
     }
 
     func testCursorTrackingDoesNotRetainVirtualizedRow() {
@@ -45,19 +44,20 @@ final class SidebarScrollHoverTests: XCTestCase {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 0, clickCount: 0, pressure: 0))
         defer { NSCursor.arrow.set() }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         ShellHoverGate.release(in: nil)
         owner.cursorUpdate(with: event)
         XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
         NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
         // A stationary finger / scrollbar hold must not let the idle timer reopen hover.
+        // 否定式：闸门「不该」自己放开，没有可等的信号。收敛定时器的窗口是 0.08 秒
+        //（SidebarListScrollView），这里压过它三倍再查，确认它没在指针静止时被误触发。
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
         for _ in 0..<20 {
             owner.cursorUpdate(with: event)
             XCTAssertEqual(NSCursor.current, NSCursor.arrow)
         }
         NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        try waitUntil("live scroll settles") { !scroll.suppressesPointerFeedback }
         owner.cursorUpdate(with: event)
         XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
     }
@@ -78,7 +78,9 @@ final class SidebarScrollHoverTests: XCTestCase {
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
         column.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+        // 控制器在下一拍才装标题栏和任务侧栏，装侧栏会关上 hover 闸门；等它装完再放开闸门，
+        // 否则闸门会在测试中途被关上。
+        try controller.waitForInitialLayout()
         ShellHoverGate.release(in: nil)
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
@@ -118,7 +120,8 @@ final class SidebarScrollHoverTests: XCTestCase {
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
         column.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+        // 同上：等控制器下一拍装完侧栏（会关闸门）再放开。
+        try controller.waitForInitialLayout()
         ShellHoverGate.release(in: nil)
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
@@ -127,7 +130,8 @@ final class SidebarScrollHoverTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rows.count, 2, "Exercise real tab and pane rows")
         let scroll = try XCTUnwrap(descendants(column).compactMap { $0 as? SidebarListScrollView }.first)
         for row in rows {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+            // 上一轮的滚动关了列表自己的闸门，等收敛定时器放开它。
+            try waitUntil("previous scroll settles") { !scroll.suppressesPointerFeedback }
             let buttons = descendants(row).compactMap { $0 as? NSButton }
             let idle = buttons.map(\.isHidden)
             row.sidebarHoverEntered()

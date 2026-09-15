@@ -34,9 +34,9 @@ final class PaneArrangementTests: XCTestCase {
         return controller
     }
 
-    private func spin(_ seconds: TimeInterval = 0.3) {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
-    }
+    /// 编排提交是同步的；这里只让提交排出的下一拍（侧栏列表合流刷新）落地，
+    /// 好让下一步操作在刷新过的视图树上进行。
+    private func settle() throws { try drainMainQueue() }
 
     /// 每次操作之后都必须成立的不变量：模型里的每个 pane 恰好出现一次，视图就挂在
     /// 它所属标签页的容器里，没有挂错、挂丢或重复。
@@ -64,10 +64,10 @@ final class PaneArrangementTests: XCTestCase {
         let a = PaneView(); controller.addTab(initialPane: a)
         let b = PaneView(); controller.addTab(initialPane: b)
         controller.openTabSidebar(animated: false)
-        spin()
+        try controller.waitForInitialLayout()
 
         XCTAssertTrue(controller.movePane(withID: a.dragIdentifier, to: b, zone: .right))
-        spin(0.4)
+        try settle()
         assertConsistent(controller)
         XCTAssertEqual(controller.tabOverview().map(\.panes.count), [1, 1, 1, 2])
 
@@ -84,10 +84,10 @@ final class PaneArrangementTests: XCTestCase {
                 if sidebar { controller.openTabSidebar(animated: false) }
                 let a = PaneView(); controller.addTab(initialPane: a)
                 let b = PaneView(); controller.addTab(initialPane: b)
-                spin(0.1)
+                try controller.waitForInitialLayout()
                 for round in 0..<3 {
                     XCTAssertTrue(controller.movePane(withID: a.dragIdentifier, to: b, zone: round % 2 == 0 ? .right : .bottom))
-                    spin(0.05)
+                    try settle()
                     assertConsistent(controller)
                     controller.split(b, direction: .down)
                     assertConsistent(controller)

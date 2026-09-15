@@ -120,7 +120,7 @@ func sessionTitleIsDerivedWithoutOverwritingTerminalName(agent: SessionAgent) as
         _ = PaneStatusDatagram(pane: pane.dragIdentifier, status: end).send(to: store.socketPath)
         try await awaitUntil("SessionEnd delivered") { store.status(for: pane.dragIdentifier)?.event == "SessionEnd" }
         #expect(pane.displayedSessionKey == nil)
-        try await Task.sleep(for: .milliseconds(20))
+        await awaitMainQueue(hops: 2)  // 会话库通知一拍，头部重算再一拍
         #expect(pane.header.title == terminalName)
         #expect(pane.header.sessionAgent == nil)
         #expect(!pane.snapshot().agentAlive)

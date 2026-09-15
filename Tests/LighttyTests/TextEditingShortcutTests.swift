@@ -14,7 +14,7 @@ final class TextEditingShortcutTests: XCTestCase {
             field.frame = NSRect(x: 10, y: 10, width: 240, height: 24)
             field.stringValue = "中文 title"
             window.contentView?.addSubview(field)
-            window.makeKeyAndOrderFront(nil)
+            window.makeKeyAndOrderFrontInvisibly()
             window.makeFirstResponder(field)
             let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
             editor.setSelectedRange(NSRange(location: 2, length: 0))
@@ -37,7 +37,7 @@ final class TextEditingShortcutTests: XCTestCase {
         bar.frame = NSRect(x: 0, y: 0, width: 360, height: 40)
         let window = PaneIdentityWindow(content: bar)
         defer { window.orderOut(nil) }
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontInvisibly()
         bar.focus()
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
         editor.setSelectedRange(NSRange(location: 3, length: 0))
@@ -55,7 +55,7 @@ final class TextEditingShortcutTests: XCTestCase {
         editor.string = "ordinary editor"
         let window = PaneIdentityWindow(content: editor)
         defer { window.orderOut(nil) }
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontInvisibly()
         window.makeFirstResponder(editor)
         editor.setSelectedRange(NSRange(location: 4, length: 0))
         XCTAssertTrue(TextEditingShortcuts.handle(try event("a", .command, window)))
@@ -83,7 +83,7 @@ final class TextEditingShortcutTests: XCTestCase {
         panel.update(paneName: "下单归因治理", taskName: "Task", dot: .gray, agent: nil)
         let window = PaneIdentityWindow(content: panel)
         defer { window.orderOut(nil) }
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontInvisibly()
         panel.focusInitialField()
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let length = (editor.string as NSString).length

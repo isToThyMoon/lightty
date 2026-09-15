@@ -38,6 +38,13 @@ func waitUntil(
     }
 }
 
+/// XCTest：等主队列里**此刻已排队**的块执行完——`Coalescer(.nextTick)` 合流出的刷新、
+/// `DispatchQueue.main.async` 投到下一拍的命令、控制器 init 里排的首帧块。主队列先到先执行，
+/// 标记块排在它们后面。只覆盖一跳：一跳里再排出的下一跳要再排空一次；`asyncAfter` 的定时块不算。
+func drainMainQueue(file: StaticString = #filePath, line: UInt = #line) throws {
+    try waitUntil("queued main-queue work", file: file, line: line) { true }
+}
+
 /// Swift Testing：异步轮询，超时经 `#require` 记录并结束测试。
 @MainActor
 func awaitUntil(
@@ -52,5 +59,34 @@ func awaitUntil(
     }
     try #require(condition(), comment, sourceLocation: sourceLocation)
     // 同上：让已排队的下一拍刷新先落地。
-    await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+    await awaitMainQueue()
+}
+
+/// `drainMainQueue` 的挂起版：等此刻已排在主队列里的块执行完。`hops` 是要排空几跳——
+/// 一跳里再排出的下一跳（会话库通知合流一拍、收到通知的列表再合流一拍）要多等一跳。
+@MainActor
+func awaitMainQueue(hops: Int = 1) async {
+    for _ in 0..<hops {
+        await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+    }
+}
+
+/// XCTest 的 async 测试用。测试体本身就是主队列上的一个块，`XCTWaiter` 嵌套转事件循环时
+/// 主队列里排着的块（合流刷新、下一拍命令）不会执行，只能挂起轮询。和 Swift Testing 那个
+/// 同名会让字符串字面量撞上重载，所以另起名字；失败按 XCTest 记录。
+@MainActor
+func awaitUntilXCTest(
+    _ description: String, timeout: TimeInterval = 10,
+    file: StaticString = #filePath, line: UInt = #line,
+    _ condition: () -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    guard condition() else {
+        XCTFail("timed out waiting for \(description)", file: file, line: line)
+        throw WaitTimeout.expired(description)
+    }
+    await awaitMainQueue()
 }

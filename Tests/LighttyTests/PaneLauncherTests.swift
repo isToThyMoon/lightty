@@ -28,8 +28,9 @@ private final class LauncherFixture {
         ensureTerminalRuntime()
         controller = TerminalWindowController()
         AppState.shared.windowControllers = [controller]
-        // 续接在检查占用之后还要确认宿主窗口仍在屏幕上。
-        controller.window?.orderFront(nil)
+        // 续接在检查占用之后还要确认宿主窗口仍在（`isVisible`）；不可见地 order 出来即可，
+        // 顺带钉住 alpha，INITIAL_SIZE 到达后的显形也不会把它弹上屏。
+        controller.window?.orderFrontInvisibly()
         launcher = PaneLauncher(sessionLibrary: library, taskBindings: AppState.shared.taskBindings,
                                 runningPanes: { AppState.shared.runningPanes() },
                                 openWindow: { AppState.shared.newWindow(initialPane: $0) },

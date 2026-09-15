@@ -16,8 +16,7 @@ struct SessionDeletionTests {
         confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
         #expect(parent.attachedSheet == nil)
         #expect(parent.childWindows?.contains(where: { $0 is ShellMenuWindow && !$0.isOpaque }) == true)
-        confirmation.buttons[0].performClick(nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        confirmation.buttons[0].performClick(nil)  // 回调同步送达
         #expect(cancelled)
         #expect(parent.childWindows?.isEmpty != false)
         cancelled = false
@@ -45,7 +44,6 @@ struct SessionDeletionTests {
             timestamp: 0, windowNumber: panel.windowNumber, context: nil,
             characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         panel.keyDown(with: event)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         #expect(cancelled)
         #expect(parent.childWindows?.isEmpty != false)
         parent.orderOut(nil)

@@ -14,9 +14,8 @@ final class SidebarControlsTests: XCTestCase {
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
         let host = try XCTUnwrap(window.contentView?.superview)
-        try waitUntil("primary sidebar installed") { host.subviews.contains(where: { $0 is PrimarySidebar }) }
-        // 收敛初始任务侧栏动画；仅任务侧栏打开是实际复现的前置状态。
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        // 仅任务侧栏打开、且已滑到位，是实际复现的前置状态。
+        try controller.waitForInitialLayout()
         host.layoutSubtreeIfNeeded()
         let pane = try XCTUnwrap(controller.panes().first)
         let terminalBefore = pane.terminal.convert(pane.terminal.bounds, to: host)
