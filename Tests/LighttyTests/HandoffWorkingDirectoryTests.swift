@@ -4,7 +4,6 @@ import Testing
 @testable import lightty
 
 extension SessionAssociationTests {
-<<<<<<< ours
     @Test func directoryFieldEditorDoesNotWrapLongPaths() throws {
         _ = NSApplication.shared
         let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 220, height: 70),
@@ -25,8 +24,6 @@ extension SessionAssociationTests {
         #expect(lines == 1)
     }
 
-=======
->>>>>>> theirs
     /// 新建任务里回车提交只在编辑文本时生效，走字段的 doCommandBy；
     /// 按钮不再持有 AppKit keyEquivalent。回车现在走的是主操作——建任务并启动。
     @MainActor @Test func returnInTheNameFieldCreatesAndLaunchesWithoutAKeyEquivalent() throws {

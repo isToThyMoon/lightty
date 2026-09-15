@@ -39,22 +39,19 @@ final class SurfaceEnvironmentTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPaneEnvReachesShellUnderLightScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_LIGHT)
-        XCTAssertTrue(env.hasPaneID, "light: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "light: env=\(env.summary)")
-    }
-
-    func testPaneEnvReachesShellUnderDarkScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_DARK)
-        XCTAssertTrue(env.hasPaneID, "dark: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "dark: env=\(env.summary)")
-    }
-
-    func testPaneEnvReachesShellWhenSpawnedRightAfterDarkScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_DARK, settle: false)
-        XCTAssertTrue(env.hasPaneID, "dark/no-settle: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "dark/no-settle: env=\(env.summary)")
+    /// 三种时序只差 (scheme, settle)：明、暗、以及「上报暗色后立刻 spawn」那个空窗。
+    func testPaneEnvReachesShell() throws {
+        let cases: [(name: String, scheme: ghostty_color_scheme_e, settle: Bool)] = [
+            ("light", GHOSTTY_COLOR_SCHEME_LIGHT, true),
+            ("dark", GHOSTTY_COLOR_SCHEME_DARK, true),
+            // 盯 config replay 丢 env 的空窗：不等 soft reload 跑完就 spawn
+            ("dark/no-settle", GHOSTTY_COLOR_SCHEME_DARK, false),
+        ]
+        for c in cases {
+            let env = try spawnAndDumpEnvironment(scheme: c.scheme, settle: c.settle)
+            XCTAssertTrue(env.hasPaneID, "\(c.name): env=\(env.summary)")
+            XCTAssertTrue(env.hasSocket, "\(c.name): env=\(env.summary)")
+        }
     }
 
     private struct DumpedEnvironment {

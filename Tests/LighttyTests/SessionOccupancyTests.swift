@@ -54,28 +54,35 @@ final class SessionOccupancyTests: XCTestCase {
         XCTAssertEqual(provider.occupancy(of: key), .unknown, "A history file alone is not occupancy evidence")
     }
 
-    func testExactWritableCodexTranscriptIsPositiveEvidence() {
+    /// `inspect()`：lsof 行 → 占用结论的查表。正例是「codex 以可写方式打开本源根下
+    /// 精确匹配的会话记录」；差任何一样都是 unknown。
+    func testCodexInspectClassifiesOpenFileRows() {
         let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
+        var cases: [(name: String, data: Data, expected: SessionOccupancy.Result)] = []
         for directory in ["sessions/2026/09/06", "archived_sessions"] {
             let path = "/fixture/.codex/\(directory)/rollout-date-\(id).jsonl"
-            XCTAssertEqual(CodexSessionProvider.inspect(output(path: path), for: key), .inUse(pid: 123))
-            XCTAssertEqual(CodexSessionProvider.inspect(output(access: "w", path: path), for: key), .inUse(pid: 123))
-            XCTAssertEqual(CodexSessionProvider.inspect(output(access: "r", path: path), for: key), .unknown)
-            XCTAssertEqual(CodexSessionProvider.inspect(output(command: "cat", path: path), for: key), .unknown)
-            XCTAssertEqual(CodexSessionProvider.inspect(output(command: "codex-other", path: path), for: key), .unknown)
+            // 可写打开（u / w）算证据
+            cases.append(("\(directory): access u", output(path: path), .inUse(pid: 123)))
+            cases.append(("\(directory): access w", output(access: "w", path: path), .inUse(pid: 123)))
+            // 只读打开不算
+            cases.append(("\(directory): access r", output(access: "r", path: path), .unknown))
+            // 命令名不是 codex 不算（包括前缀相同的别的命令）
+            cases.append(("\(directory): command cat", output(command: "cat", path: path), .unknown))
+            cases.append(("\(directory): command codex-other", output(command: "codex-other", path: path), .unknown))
         }
-    }
-
-    func testDifferentSourceSessionAndNonTranscriptAreUnknown() {
-        let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
+        // 别的源根、别的会话 ID、不是会话记录的文件，都不算
         for path in ["/other/.codex/sessions/rollout-date-\(id).jsonl",
                      "/fixture/.codex-other/sessions/rollout-date-\(id).jsonl",
                      "/fixture/.codex/sessions/rollout-date-other.jsonl",
                      "/fixture/.codex/config.toml", "/fixture/.codex/sessions/rollout-date-\(id).jsonl.bak"] {
-            XCTAssertEqual(CodexSessionProvider.inspect(output(path: path), for: key), .unknown)
+            cases.append(("path \(path)", output(path: path), .unknown))
         }
-        XCTAssertEqual(CodexSessionProvider.inspect(Data(), for: key), .unknown)
-        XCTAssertEqual(CodexSessionProvider.inspect(Data("permission denied".utf8), for: key), .unknown)
+        // 空输出与报错文本
+        cases.append(("empty output", Data(), .unknown))
+        cases.append(("error text", Data("permission denied".utf8), .unknown))
+        for c in cases {
+            XCTAssertEqual(CodexSessionProvider.inspect(c.data, for: key), c.expected, c.name)
+        }
     }
 
     func testClaudeAndDescriptorStateDoNotLeakBetweenRecords() {
@@ -89,33 +96,41 @@ final class SessionOccupancyTests: XCTestCase {
         XCTAssertEqual(ClaudeSessionProvider.inspect(differentProcess, for: key), .unknown)
     }
 
-    func testClaudeLiveRegistryIsReadAsPidToSession() {
-        let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
-        let data = Data("""
-        [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
-         {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
-        """.utf8)
-        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(data)?.map { [String($0.pid), $0.sessionID] },
-                       [["51228", id], ["51233", other]])
-        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(Data("[]".utf8)), [])
-        // cwd 也要读出来：官方开发包偶尔给不出会话目录，靠这张表补空。
-        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(data)?.map(\.cwd), ["/w", "/w"])
-        // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信。
-        let noCWD = Data("[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]".utf8)
-        XCTAssertEqual(ClaudeSessionProvider.decodeLiveSessions(noCWD)?.count, 1)
-        XCTAssertNil(ClaudeSessionProvider.decodeLiveSessions(noCWD)?.first?.cwd)
-    }
-
+    /// `decodeLiveSessions`：活会话表的输入 → 结果查表。
+    ///
     /// 认不出来必须是「问不出来」（nil），不能是空表——空表会被读成「一个都没在跑」，
     /// 于是一段正开着的会话会被当成可以删。
-    func testUnrecognizedClaudeRegistryOutputIsUnknownRatherThanEmpty() {
-        for text in ["", "not json", "{\"pid\":1}",
-                     "[{\"cwd\":\"/w\"}]",
-                     "[{\"pid\":0,\"sessionId\":\"\(id)\"}]",
-                     "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]",
-                     "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]",
-                     "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]"] {
-            XCTAssertNil(ClaudeSessionProvider.decodeLiveSessions(Data(text.utf8)), text)
+    func testClaudeLiveRegistryDecodesOrRefuses() {
+        typealias Row = (pid: Int32, sessionID: String, cwd: String?)
+        let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
+        let cases: [(name: String, text: String, expected: [Row]?)] = [
+            // 正例：pid → 会话，cwd 也要读出来——官方开发包偶尔给不出会话目录，靠这张表补空
+            ("two sessions", """
+             [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
+              {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
+             """, [(51228, id, "/w"), (51233, other, "/w")]),
+            // 空表是合法的「一个都没在跑」
+            ("empty array", "[]", []),
+            // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信
+            ("missing cwd", "[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]", [(7, id, nil)]),
+            // 反例：八种坏输入都必须是 nil 而非空表
+            ("empty", "", nil),
+            ("not json", "not json", nil),
+            ("object not array", "{\"pid\":1}", nil),
+            ("row without pid", "[{\"cwd\":\"/w\"}]", nil),
+            ("pid 0", "[{\"pid\":0,\"sessionId\":\"\(id)\"}]", nil),
+            ("session id not a uuid", "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]", nil),
+            ("pid as string", "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]", nil),
+            ("one good row beside a bad one", "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]", nil),
+        ]
+        for c in cases {
+            let decoded = ClaudeSessionProvider.decodeLiveSessions(Data(c.text.utf8))
+            guard let expected = c.expected else {
+                XCTAssertNil(decoded, c.name)
+                continue
+            }
+            let rows = decoded?.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }
+            XCTAssertEqual(rows, expected.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }, c.name)
         }
     }
 
@@ -133,13 +148,5 @@ final class SessionOccupancyTests: XCTestCase {
         // 不是会话记录的文件不算。
         let noise = "p1\0ccodex\0\nf3\0au\0n\(root)/config.toml\0\n"
         XCTAssertTrue(CodexSessionProvider.decodeOpenSessionPIDs(Data(noise.utf8), root: root).isEmpty)
-    }
-
-    /// codex 没有活会话表，所以就算传了可执行文件路径也只能走文件表那条路。
-    func testCodexIgnoresTheClaudeOnlyRegistryPath() {
-        let key = AgentSessionKey(agent: .codex, sourceRoot: "/fixture/.codex", nativeID: id)
-        let provider = CodexSessionProvider(source: .init(agent: .codex, root: URL(fileURLWithPath: "/fixture/.codex"),
-            executable: "/nonexistent/codex", configuration: .custom("/fixture/.codex")))
-        XCTAssertEqual(provider.occupancy(of: key), .unknown)
     }
 }

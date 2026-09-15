@@ -57,60 +57,62 @@ struct SessionTitleSignalTests {
         }
     }
 
-    @Test func renameFileChangeRefreshesTheOpenSessionTitleOnce() async throws {
+    /// 文件信号只值一次目录读（active + archived 两页 = +2），不进入五次重试——
+    /// 标题真的变了（改名）如此，标题没变（普通的 transcript 追加）也如此。
+    @Test(arguments: [true, false])
+    func titleSignalCostsExactlyOneRead(titleChanged: Bool) async throws {
         let (f, changes, file) = try fixture()
         defer { f.close() }
         let record = f.record(title: "你好"), id = f.pane()
         try await open(record, in: id, f)
         try await f.wait { changes.watchedPaths == [file] }
 
-        f.catalog.records = [f.record(title: "修复标题同步")]
+        if titleChanged { f.catalog.records = [f.record(title: "修复标题同步")] }
         let reads = f.catalog.requestCount
         changes.fire(file)
-        try await f.wait { f.library.paneState(for: id)?.title == "修复标题同步" && !f.library.loading }
+        if titleChanged {
+            try await f.wait { f.library.paneState(for: id)?.title == "修复标题同步" && !f.library.loading }
+        } else {
+            try await f.wait { f.catalog.requestCount == reads + 2 && !f.library.loading }
+        }
+        // 否定式断言：之后「不该」再有读取，没有可等的信号，只能压一小段再查。
         try await Task.sleep(for: .milliseconds(60))
-        #expect(f.catalog.requestCount == reads + 2, "One catalog read (active + archived pages), no retries")
+        #expect(f.catalog.requestCount == reads + 2,
+                titleChanged ? "One catalog read (active + archived pages), no retries"
+                             : "An ordinary transcript append costs one read, not five")
     }
 
-    @Test func unchangedTitleStillStopsAfterOneRead() async throws {
+    /// 只有钩子报过「空闲」的会话才响应文件信号：
+    enum SessionState: CustomStringConvertible {
+        /// 钩子报了 thinking，一个回合正在跑——Stop 钩子到时再重读
+        case runningTurn
+        /// 没有钩子状态（只有关联）——没有插件就分不清在跑还是空闲
+        case noHookState
+        var description: String { self == .runningTurn ? "running turn" : "no hook state" }
+    }
+
+    @Test(arguments: [SessionState.runningTurn, .noHookState])
+    func titleSignalIsIgnoredUnlessSessionIsKnownIdle(state: SessionState) async throws {
         let (f, changes, file) = try fixture()
         defer { f.close() }
         let record = f.record(), id = f.pane()
-        try await open(record, in: id, f)
-        try await f.wait { changes.watchedPaths == [file] }
-        let reads = f.catalog.requestCount
-        changes.fire(file)
-        try await f.wait { f.catalog.requestCount == reads + 2 && !f.library.loading }
-        try await Task.sleep(for: .milliseconds(60))
-        #expect(f.catalog.requestCount == reads + 2, "An ordinary transcript append costs one read, not five")
-    }
-
-    @Test func writesDuringARunningTurnDoNotRead() async throws {
-        let (f, changes, file) = try fixture()
-        defer { f.close() }
-        let record = f.record(), id = f.pane()
-        try await f.load([record])
-        try await f.status(.thinking, event: "UserPromptSubmit", pane: id, record: record)
+        switch state {
+        case .runningTurn:
+            try await f.load([record])
+            try await f.status(.thinking, event: "UserPromptSubmit", pane: id, record: record)
+        case .noHookState:
+            f.library.associate(.attached(f.association(record)), with: id)
+            try await f.load([record])
+        }
         try await f.wait { changes.watchedPaths == [file] }
         try await settle(f)
         let reads = f.catalog.requestCount
         changes.fire(file)
+        // 否定式断言：信号「不该」触发读取，没有可等的信号，只能压一小段再查。
         try await Task.sleep(for: .milliseconds(300))
-        #expect(f.catalog.requestCount == reads, "The Stop hook re-reads when the turn ends")
-    }
-
-    @Test func withoutHookStateWritesDoNotRead() async throws {
-        let (f, changes, file) = try fixture()
-        defer { f.close() }
-        let record = f.record(), id = f.pane()
-        f.library.associate(.attached(f.association(record)), with: id)
-        try await f.load([record])
-        try await f.wait { changes.watchedPaths == [file] }
-        try await settle(f)
-        let reads = f.catalog.requestCount
-        changes.fire(file)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(f.catalog.requestCount == reads, "No plugin, no way to tell a running turn from an idle one")
+        #expect(f.catalog.requestCount == reads,
+                state == .runningTurn ? "The Stop hook re-reads when the turn ends"
+                                      : "No plugin, no way to tell a running turn from an idle one")
     }
 
     @Test func closedSessionsAreNoLongerWatchedAndReplacedFilesAreReopened() async throws {

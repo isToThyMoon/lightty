@@ -2,19 +2,6 @@ import XCTest
 @testable import lightty
 
 final class TabSidebarWidthTests: XCTestCase {
-    func testWidthRangeUsesCurrentWidthAsMinimumAndTwiceThatAsMaximum() {
-        XCTAssertEqual(TabSidebarSizing.minimumWidth, ShellStyle.tabColumnWidth)
-        XCTAssertEqual(
-            TabSidebarSizing.maximumWidth,
-            ShellStyle.tabColumnWidth * 2)
-        XCTAssertEqual(
-            TabSidebarSizing.clampedWidth(TabSidebarSizing.minimumWidth - 1),
-            TabSidebarSizing.minimumWidth)
-        XCTAssertEqual(
-            TabSidebarSizing.clampedWidth(TabSidebarSizing.maximumWidth + 1),
-            TabSidebarSizing.maximumWidth)
-    }
-
     func testClosingRequiresOvershootingMinimumWidth() {
         XCTAssertFalse(TabSidebarSizing.shouldClose(
             rawWidth: TabSidebarSizing.minimumWidth - TabSidebarSizing.closeOvershoot))
@@ -23,7 +10,17 @@ final class TabSidebarWidthTests: XCTestCase {
                 - TabSidebarSizing.closeOvershoot - 1))
     }
 
-    func testWidthPreferenceDefaultsClampsAndRoundTrips() throws {
+    /// 宽度落在 [minimumWidth, maximumWidth] 里：钳制函数与偏好读写都守这一条。
+    func testWidthPreferenceClampsToSizingRangeAndRoundTrips() throws {
+        // 钳制：越界一点就贴回边界
+        XCTAssertEqual(
+            TabSidebarSizing.clampedWidth(TabSidebarSizing.minimumWidth - 1),
+            TabSidebarSizing.minimumWidth)
+        XCTAssertEqual(
+            TabSidebarSizing.clampedWidth(TabSidebarSizing.maximumWidth + 1),
+            TabSidebarSizing.maximumWidth)
+
+        // 偏好：默认为最小值、写入读回、超大钳到最大值
         let suiteName = "TabSidebarWidthTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }

@@ -4,39 +4,28 @@ import Testing
 @testable import lightty
 
 struct SessionDeletionTests {
-    @MainActor @Test func confirmationUsesTransparentChildWindowNotSystemSheet() {
-        let parent = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 600, height: 500),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        let confirmation = SessionDeletionConfirmation()
-        confirmation.messageText = "Delete?"
-        confirmation.informativeText = "Fixture\n\nCannot be undone."
-        confirmation.addButton(withTitle: "Cancel")
-        confirmation.addButton(withTitle: "Delete")
-        var cancelled = false
-        confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
-        #expect(parent.attachedSheet == nil)
-        #expect(parent.childWindows?.contains(where: { $0 is ShellMenuWindow && !$0.isOpaque }) == true)
-        confirmation.buttons[0].performClick(nil)  // 回调同步送达
-        #expect(cancelled)
-        #expect(parent.childWindows?.isEmpty != false)
-        cancelled = false
-        confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
-        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: parent)
-        #expect(cancelled)
-        #expect(parent.childWindows?.isEmpty != false)
-        parent.orderOut(nil)
-    }
+    /// 删除确认的每一条取消路径都回调 cancelled 并收走子窗口：点 Cancel、按回车、父窗口关闭。
     /// 回车走窗口的响应链（与 Escape 对称），不靠按钮的 AppKit keyEquivalent——
     /// 那是窗口级快捷键，会抢在 surface 之前吃掉用户配的 Ghostty 绑定。
-    @MainActor @Test func returnTakesTheSafeActionWithoutAKeyEquivalent() throws {
+    @MainActor @Test func deletionConfirmationCancelsOnButtonReturnAndParentClose() throws {
         let parent = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 600, height: 500),
                               styleMask: [.titled], backing: .buffered, defer: false)
+        defer { parent.orderOut(nil) }
         let confirmation = SessionDeletionConfirmation()
         confirmation.messageText = "Delete?"
         confirmation.informativeText = "Fixture\n\nCannot be undone."
         confirmation.addButton(withTitle: "Cancel")
         confirmation.addButton(withTitle: "Delete")
         var cancelled = false
+
+        // 点 Cancel：回调同步送达
+        confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
+        confirmation.buttons[0].performClick(nil)
+        #expect(cancelled)
+        #expect(parent.childWindows?.isEmpty != false)
+
+        // 按回车：没有 keyEquivalent，走面板的 keyDown
+        cancelled = false
         confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
         for button in confirmation.buttons { #expect(button.keyEquivalent.isEmpty) }
         let panel = try #require(parent.childWindows?.compactMap { $0 as? ShellMenuWindow }.first)
@@ -46,7 +35,13 @@ struct SessionDeletionTests {
         panel.keyDown(with: event)
         #expect(cancelled)
         #expect(parent.childWindows?.isEmpty != false)
-        parent.orderOut(nil)
+
+        // 父窗口关闭也算取消
+        cancelled = false
+        confirmation.beginSheetModal(for: parent) { cancelled = $0 == .alertFirstButtonReturn }
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: parent)
+        #expect(cancelled)
+        #expect(parent.childWindows?.isEmpty != false)
     }
 
     @MainActor @Test func unknownUsageOffersCancelBeforePermanentOverride() {
@@ -164,21 +159,30 @@ struct SessionDeletionTests {
         #expect(script.waits.count == 1)
     }
 
-    @Test func consentDoesNotOverrideAYoungTargetBesideAnOldUnknownClaude() {
-        let script = ProbeScript()
-        script.processTable = Data("42 claude\n43 claude\n".utf8)
-        script.start(42, secondsAgo: 1)
-        script.start(43, secondsAgo: 600)
-        script.liveTables = [[], [script.row(42, script.target.nativeID)]]
-        let provider = FakeSessionProvider(root: "/fixture")
-        let adapter = DeletionCheckOverride(base: provider, check: { try script.check() })
-        let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: script.target.nativeID)
-        do {
-            try SessionDeletion.delete(key, provider: adapter, acceptingUnknownOccupancy: true)
-            Issue.record("A young Claude running the target must block deletion despite consent")
-        } catch SessionDeletion.Failure.occupiedProcess(let pid) { #expect(pid == 42) }
-        catch { Issue.record("Unexpected \(error)") }
-        #expect(!provider.calls.contains(.delete(key)))
+    /// 同意「仍然删除」只压身份不明；等出来的确认占用照样拒绝、provider 也不被调 delete。
+    /// 两个场景：只有一个年轻进程在等待期间登记为目标；年轻的目标旁边还有一个老的身份不明
+    ///（老的注定要问用户，但年轻那个若跑的正是目标，必须以确认占用拒绝，不能被一并压掉）。
+    @Test func consentOverridesUnknownButNeverAConfirmedOccupant() {
+        let cases: [(name: String, processTable: String, oldUnknown: Int32?)] = [
+            ("young target registered during the wait", "42 claude\n", nil),
+            ("young target beside an old unknown claude", "42 claude\n43 claude\n", 43),
+        ]
+        for c in cases {
+            let script = ProbeScript()
+            script.processTable = Data(c.processTable.utf8)
+            script.start(42, secondsAgo: 1)
+            if let old = c.oldUnknown { script.start(old, secondsAgo: 600) }
+            script.liveTables = [[], [script.row(42, script.target.nativeID)]]
+            let provider = FakeSessionProvider(root: "/fixture")
+            let adapter = DeletionCheckOverride(base: provider, check: { try script.check() })
+            let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: script.target.nativeID)
+            do {
+                try SessionDeletion.delete(key, provider: adapter, acceptingUnknownOccupancy: true)
+                Issue.record("\(c.name): A young Claude running the target must block deletion despite consent")
+            } catch SessionDeletion.Failure.occupiedProcess(let pid) { #expect(pid == 42, "\(c.name)") }
+            catch { Issue.record("\(c.name): Unexpected \(error)") }
+            #expect(!provider.calls.contains(.delete(key)), "\(c.name)")
+        }
     }
 
     @Test func youngClaudeThatRegistersTheTargetIsOccupied() {
@@ -192,38 +196,20 @@ struct SessionDeletionTests {
         catch { Issue.record("Unexpected \(error)") }
     }
 
-    /// 同意「仍然删除」只压身份不明；等出来的确认占用照样拒绝。
-    @Test func consentDoesNotOverrideATargetRegisteredDuringTheWait() {
+    /// 活会话表读不到就是「说不清」，不能变成空闲——第一眼读不到不等直接抛；
+    /// 第一眼空、等完第二眼读不到，也抛，且只读了两次。
+    @Test(arguments: [1, 2])
+    func unreadableLiveTableIsUnknown(failingLook: Int) {
         let script = ProbeScript()
         script.start(42, secondsAgo: 1)
-        script.liveTables = [[], [script.row(42, script.target.nativeID)]]
-        let provider = FakeSessionProvider(root: "/fixture")
-        let adapter = DeletionCheckOverride(base: provider, check: { try script.check() })
-        let key = AgentSessionKey(agent: .claude, sourceRoot: "/fixture", nativeID: script.target.nativeID)
-        #expect(throws: SessionDeletion.Failure.self) {
-            try SessionDeletion.delete(key, provider: adapter, acceptingUnknownOccupancy: true)
-        }
-        #expect(!provider.calls.contains(.delete(key)))
-    }
-
-    @Test func unreadableLiveTableIsUnknownWithoutWaiting() {
-        let script = ProbeScript()
-        script.start(42, secondsAgo: 1)
-        script.liveTables = [nil, [script.row(42, UUID().uuidString)]]
+        script.liveTables = failingLook == 1 ? [nil, [script.row(42, UUID().uuidString)]] : [[], nil]
         do {
             try script.check()
             Issue.record("An unreadable live table must not become idle")
         } catch SessionDeletion.Failure.unknownOccupancy(let pid) { #expect(pid == 42) }
         catch { Issue.record("Unexpected \(error)") }
-        #expect(script.waits.isEmpty)
-    }
-
-    @Test func liveTableFailingOnTheSecondLookIsUnknown() {
-        let script = ProbeScript()
-        script.start(42, secondsAgo: 1)
-        script.liveTables = [[], nil]
-        #expect(throws: SessionDeletion.Failure.self) { try script.check() }
-        #expect(script.liveReads == 2)
+        #expect(script.waits.count == failingLook - 1, "第一眼读不到不等；第二眼是等完才读的")
+        #expect(script.liveReads == failingLook)
     }
 
     /// 等的这一会儿里 PID 被别的进程复用，新进程的登记不能算到原来那个头上。

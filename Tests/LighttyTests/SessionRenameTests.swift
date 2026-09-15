@@ -76,20 +76,27 @@ struct SessionRenameTests {
     private let id = "01a07a5f-6811-7f12-94c5-dc0f0f92f40a"
 
     /// 两条改名路径（敲 `/rename`、走官方接口）共用一个清洗函数，否则同一个名字
-    /// 在两条路上会存成两个样子。
-    @Test func nameIsReducedToOneLineWithoutControlCharacters() {
-        #expect(SessionRename.sanitize("  修好灵动岛  ") == "修好灵动岛")
-        #expect(SessionRename.sanitize("第一行\n第二行") == "第一行 第二行")
-        #expect(SessionRename.sanitize("带\u{7}响铃") == "带响铃")
-        #expect(SessionRename.sanitize(String(repeating: "名", count: 300))?.count == 240)
-        for empty in ["", "   ", "\n\n", "\u{1}"] { #expect(SessionRename.sanitize(empty) == nil) }
-    }
-
-    /// 敲进终端的那条命令必须和官方接口收到的名字一致，而且不带行尾——
-    /// 提交是另外按一次回车键，不是文本的一部分（见 `TerminalSurfaceView.sendText`）。
-    @Test func theTypedCommandCarriesTheSameCleanedNameAndNoLineEnding() {
-        #expect(AgentCommand.rename("第一行\n第二行").shellInput == "/rename 第一行 第二行")
-        #expect(AgentCommand.rename("  ").shellInput == nil)
+    /// 在两条路上会存成两个样子。敲进终端的那条命令必须和官方接口收到的名字一致，
+    /// 而且不带行尾——提交是另外按一次回车键，不是文本的一部分
+    ///（见 `TerminalSurfaceView.sendText`）。
+    @Test func renameNameIsSanitizedIdenticallyOnBothPaths() {
+        let cases: [(input: String, cleaned: String?)] = [
+            // 首尾空白去掉
+            ("  修好灵动岛  ", "修好灵动岛"),
+            // 换行压成一个空格，不能带行尾
+            ("第一行\n第二行", "第一行 第二行"),
+            // 控制字符去掉
+            ("带\u{7}响铃", "带响铃"),
+            // 截到 240 个字
+            (String(repeating: "名", count: 300), String(repeating: "名", count: 240)),
+            // 清洗后为空的一律是 nil
+            ("", nil), ("   ", nil), ("\n\n", nil), ("\u{1}", nil),
+        ]
+        for c in cases {
+            #expect(SessionRename.sanitize(c.input) == c.cleaned, "sanitize(\(c.input.debugDescription))")
+            #expect(AgentCommand.rename(c.input).shellInput == c.cleaned.map { "/rename \($0)" },
+                    "typed command for \(c.input.debugDescription)")
+        }
     }
 
     /// 会话身份不匹配时不发任何请求：改名同样是写进用户的 agent 目录，

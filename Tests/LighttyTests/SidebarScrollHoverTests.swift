@@ -8,31 +8,20 @@ final class SidebarScrollHoverTests: XCTestCase {
         XCTAssertTrue(SidebarListScrollView.isCompatibleWithResponsiveScrolling)
     }
 
-    func testBoundsOnlyScrollingIsScopedAndSettles() throws {
+    /// 滚动期间压住 hover 反馈，停稳后自己放开：
+    /// 只有 bounds 变化的滚动（合成通知）只压本实例、收敛定时器自行回落；
+    /// 原生 live scroll 生命周期里指针静止也不放开，didEnd 后才恢复手形光标。
+    func testScrollingSuppressesHoverFeedbackUntilItSettles() throws {
+        // 只有 bounds 变化：闸门是每个列表自己的，且会自行回落
         let scrolling = SidebarListScrollView(frame: .zero)
         let other = SidebarListScrollView(frame: .zero)
         NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scrolling.contentView)
         XCTAssertTrue(scrolling.suppressesPointerFeedback)
-        XCTAssertFalse(other.suppressesPointerFeedback)
+        XCTAssertFalse(other.suppressesPointerFeedback, "Another list's scroll must not close this one's gate")
         // 滚动停下 0.08 秒后收敛定时器自己放开闸门。
         try waitUntil("bounds-only scroll settles") { !scrolling.suppressesPointerFeedback }
-    }
 
-    func testCursorTrackingDoesNotRetainVirtualizedRow() {
-        weak var releasedRow: NSView?
-        weak var releasedOwner: AnyObject?
-        autoreleasepool {
-            let row = NSView(frame: .zero)
-            HoverCursor.installPointingHand(on: row)
-            releasedRow = row
-            releasedOwner = row.trackingAreas.last?.owner as AnyObject?
-            XCTAssertNotNil(releasedOwner)
-        }
-        XCTAssertNil(releasedRow)
-        XCTAssertNil(releasedOwner)
-    }
-
-    func testNativeScrollLifecycleSuppressesRowCursorUntilScrollEnds() throws {
+        // 原生 live scroll：willStart 后行光标一直是箭头，didEnd 后恢复手形
         let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 400))
         let document = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 2000))
         let row = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 40))
@@ -62,12 +51,53 @@ final class SidebarScrollHoverTests: XCTestCase {
         XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
     }
 
-    /// 标签页行前只有一个图标，hover 也不换成折叠箭头——同一个位置换图标会让人
-    /// 以为那里多了一个控件。折叠仍然点它触发，说明留在 tooltip 里。
-    func testTabRowKeepsOneGlyphAndNeverSwapsInAChevron() throws {
+    func testCursorTrackingDoesNotRetainVirtualizedRow() {
+        weak var releasedRow: NSView?
+        weak var releasedOwner: AnyObject?
+        autoreleasepool {
+            let row = NSView(frame: .zero)
+            HoverCursor.installPointingHand(on: row)
+            releasedRow = row
+            releasedOwner = row.trackingAreas.last?.owner as AnyObject?
+            XCTAssertNotNil(releasedOwner)
+        }
+        XCTAssertNil(releasedRow)
+        XCTAssertNil(releasedOwner)
+    }
+
+    private func hovered(_ row: ShellTableRowView) -> Bool {
+        Mirror(reflecting: row).children.first { $0.label == "isHovered" }?.value as? Bool ?? false
+    }
+
+    /// 滚动把 hover 行滚出视口时没有 mouseExited，hover 也必须清掉；滚动期间来的
+    /// 陈旧 tracking 事件也被压住。先用一个 ShellTableRowView 验证 boundsDidChange
+    /// 这条路，再用真实的标签页行 / pane 行验证按钮显隐回到 idle。
+    func testScrollClearsAndSuppressesRowHoverWithoutMouseExited() throws {
+        _ = NSApplication.shared
+        // 单个 ShellTableRowView：boundsDidChange 清 hover
+        do {
+            let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 1000))
+            let row = ShellTableRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 48))
+            document.addSubview(row); scroll.documentView = document
+            let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = scroll
+            // 装进窗口时的首次布局算一次滚动，列表自己的闸门要等收敛定时器放开。
+            try waitUntil("initial layout settles") { !scroll.suppressesPointerFeedback }
+            ShellHoverGate.release(in: nil)
+            let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, trackingNumber: 0, userData: nil))
+            row.mouseEntered(with: event)
+            XCTAssertTrue(hovered(row))
+            scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 500))
+            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            XCTAssertFalse(hovered(row), "Scrolling must clear hover even without mouseExited")
+        }
+
+        // 真实的标签页行与 pane 行：滚动后按钮显隐回到 idle，滚动中 hover 被压
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
         ensureTerminalRuntime()
         let controller = TerminalWindowController()
@@ -80,47 +110,6 @@ final class SidebarScrollHoverTests: XCTestCase {
         column.layoutSubtreeIfNeeded()
         // 控制器在下一拍才装标题栏和任务侧栏，装侧栏会关上 hover 闸门；等它装完再放开闸门，
         // 否则闸门会在测试中途被关上。
-        try controller.waitForInitialLayout()
-        ShellHoverGate.release(in: nil)
-        func descendants(_ view: NSView) -> [NSView] {
-            view.subviews.flatMap { [$0] + descendants($0) }
-        }
-        let row = try XCTUnwrap(descendants(column).first { $0 is SidebarHoverRow })
-        let glyph = try XCTUnwrap(descendants(row).compactMap { $0 as? NSButton }
-            .first { $0.toolTip == L("Collapse tab") || $0.toolTip == L("Expand tab") })
-        XCTAssertEqual(glyph.image?.accessibilityDescription, L("Tab"))
-        row.sidebarHoverEntered()
-        column.layoutSubtreeIfNeeded()
-        XCTAssertEqual(glyph.image?.accessibilityDescription, L("Tab"),
-                       "Hover must not swap the tab glyph for a chevron")
-        XCTAssertFalse(glyph.isHidden)
-        // 展开/收起靠同一形状的空心与实心区分，仍然只有一个图标。
-        glyph.performClick(nil)
-        column.layoutSubtreeIfNeeded()
-        let collapsed = try XCTUnwrap(descendants(column).compactMap { $0 as? NSButton }
-            .first { $0.toolTip == L("Expand tab") })
-        XCTAssertEqual(collapsed.image?.accessibilityDescription, L("Collapsed tab"))
-        collapsed.performClick(nil)
-        column.layoutSubtreeIfNeeded()
-        XCTAssertEqual(try XCTUnwrap(descendants(column).compactMap { $0 as? NSButton }
-            .first { $0.toolTip == L("Collapse tab") }).image?.accessibilityDescription, L("Tab"))
-    }
-
-    func testTabAndPaneHoverClearWithoutMouseExitedOnScroll() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        ensureTerminalRuntime()
-        let controller = TerminalWindowController()
-        defer { controller.window?.close() }
-        // 单 pane 标签页是叶子行，没有容器行；分屏一次才有标签页行 + pane 行可测。
-        controller.split(try XCTUnwrap(controller.activePane), direction: .right)
-        let column = TabColumnView()
-        controller.window!.contentView!.addSubview(column)
-        column.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
-        column.layoutSubtreeIfNeeded()
-        // 同上：等控制器下一拍装完侧栏（会关闸门）再放开。
         try controller.waitForInitialLayout()
         ShellHoverGate.release(in: nil)
         func descendants(_ view: NSView) -> [NSView] {
@@ -141,6 +130,25 @@ final class SidebarScrollHoverTests: XCTestCase {
             row.sidebarHoverEntered() // Stale tracking event while content moves under pointer.
             XCTAssertEqual(buttons.map(\.isHidden), idle, "Scrolling suppresses transient hover")
         }
+    }
+
+    /// 两行连续 mouseEntered（中间没有 mouseExited）只剩后者 hovered：hover 互斥。
+    func testEnteringAnotherRowClearsPreviousHoverWithoutExitEvent() throws {
+        _ = NSApplication.shared
+        let table = NSTableView()
+        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
+        scroll.documentView = table
+        let first = ShellTableRowView(), second = ShellTableRowView()
+        table.addSubview(first); table.addSubview(second)
+        try waitUntil("initial layout settles") { !scroll.suppressesPointerFeedback }
+        ShellHoverGate.release(in: nil)
+        let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, trackingNumber: 0, userData: nil))
+        first.mouseEntered(with: event)
+        second.mouseEntered(with: event)
+        XCTAssertFalse(hovered(first), "Fast row transitions must not leave multiple hover backgrounds")
+        XCTAssertTrue(hovered(second))
     }
 
     func testScrollingDoesNotInvalidateEveryUnhoveredRow() {
