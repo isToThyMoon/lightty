@@ -1278,11 +1278,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabEdgeLeadingConstraint = nil
 
         // 两态都垫在 task 卡片之下：侧栏从卡片下方穿行，开关随行时不能浮到卡片表面
+        var mountAnchor: NSView = tabSidebar ?? rootContainer
         func mount(_ v: NSView) {
             if let taskPanel {
                 themeFrame.addSubview(v, positioned: .below, relativeTo: taskPanel)
             } else {
-                themeFrame.addSubview(v)
+                // Stay in the main-page layer, rather than appending above the titlebar
+                // and any full-page overlays mounted beneath it.
+                themeFrame.addSubview(v, positioned: .above, relativeTo: mountAnchor)
+                mountAnchor = v
             }
         }
 

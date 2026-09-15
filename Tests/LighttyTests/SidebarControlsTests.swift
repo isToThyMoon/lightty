@@ -101,6 +101,16 @@ final class SidebarControlsTests: XCTestCase {
             accuracy: 0.5)
         XCTAssertEqual(expand.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
 
+        controller.showSettings()
+        XCTAssertFalse(expand.isHidden)
+        let settings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
+        let settingsIndex = try XCTUnwrap(themeFrame.subviews.firstIndex(of: settings))
+        for control in themeFrame.subviews where control is EdgeToggleControl || control is EdgeRevealStrip {
+            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)), settingsIndex)
+        }
+        controller.hideSettings()
+        XCTAssertFalse(expand.isHidden)
+
         // 标签页侧栏打开后：分屏 / 新建标签页按钮齐备，关闭钮吸在侧栏右边线。
         controller.openTabSidebar(animated: false)
         themeFrame.layoutSubtreeIfNeeded()
@@ -112,6 +122,15 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(sidebarToolTips.contains(L("New tab")))
         let closeControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
         XCTAssertEqual(closeControls.count, 1, "侧栏开着时应只剩一枚关闭钮")
+        controller.showSettings()
+        let openSettings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
+        for control in closeControls {
+            XCTAssertFalse(control.isHidden)
+            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)),
+                              try XCTUnwrap(themeFrame.subviews.firstIndex(of: openSettings)))
+        }
+        controller.hideSettings()
+        XCTAssertTrue(closeControls.allSatisfy { !$0.isHidden })
         XCTAssertEqual(
             try XCTUnwrap(closeControls.first).frame.maxX, sidebar.frame.maxX, accuracy: 0.5)
     }

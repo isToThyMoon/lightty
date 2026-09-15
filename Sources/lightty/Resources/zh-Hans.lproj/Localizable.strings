@@ -380,3 +380,45 @@
 "Typed in when the plugin is not installed" = "插件没装时敲进终端的内容";
 "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "按钮会退回到这一段。它自带全部约定，所以不依赖插件，也不依赖开场注入的那段文字。";
 "Unbinding: nothing is injected, and the next binding starts fresh." = "解除绑定：不再注入；下次绑定重新开始。";
+
+/* Skills 浏览器 */
+"Skills" = "Skills";
+"Refresh skills" = "刷新技能";
+"Favorite" = "收藏";
+"Not favorited" = "未收藏";
+"Skill actions" = "技能操作";
+"Open file" = "打开文件";
+"Open source" = "打开来源";
+"Source" = "原文";
+"Preview" = "预览";
+"Skill sources" = "技能来源";
+"Search skills or sources…" = "搜索技能或来源…";
+"Skill content" = "技能内容";
+"Select a skill to read its instructions." = "选择技能，查看使用说明";
+"Reading skills…" = "正在读取技能…";
+"All skills" = "全部技能";
+"Favorites" = "收藏";
+"Mine" = "我的";
+"Unclassified" = "待归类";
+"Sources" = "来源";
+"Provided by agents" = "Agent 提供";
+"Plugin skills" = "插件技能";
+"Built-in skills" = "内置技能";
+"No skills in this category." = "此分类暂无技能";
+"No matching skills." = "没有匹配的技能";
+"The skill file could not be opened." = "无法打开技能文件。";
+"Mark as mine" = "标记为我的";
+"Copy file path" = "复制文件路径";
+"Found in" = "发现位置";
+"%d notices" = "%d 条提示";
+"Skills notices" = "技能提示";
+
+"Common installations" = "通用安装";
+
+"Agent installations" = "Agent 安装";
+
+"Bundled with Claude Code; reading is not supported yet." = "随程序提供，暂不支持读取";
+
+"File locations" = "文件位置";
+
+"Actual file" = "实际文件";

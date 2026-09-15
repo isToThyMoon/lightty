@@ -7,13 +7,14 @@ import LighttyCore
 final class SettingsView: NSView, NSTextFieldDelegate {
     enum Page: String, CaseIterable {
         // archive 是数据清理性质的页面，留在最后；handoff 与 appearance 同属功能域。
-        case general, appearance, handoff, archive
+        case general, appearance, skills, handoff, archive
 
         var title: String {
             switch self {
             case .general: return L("General")
             case .appearance: return L("Appearance")
             case .handoff: return L("Handoff")
+            case .skills: return L("Skills")
             case .archive: return L("Archive")
             }
         }
@@ -23,12 +24,18 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             case .general: return "gearshape"
             case .appearance: return "sun.max"
             case .handoff: return "doc.text"
+            case .skills: return "square.stack.3d.up"
             case .archive: return "archivebox"
             }
         }
     }
 
     static let sidebarWidth: CGFloat = 240
+    static let minimumSidebarWidth: CGFloat = 160
+    let sidebarDivider = SkillsColumnDivider()
+    private var adjustableSidebarWidth: NSLayoutConstraint?
+    private let preferences: PreferenceStorage
+    static let sidebarWidthKey = "settings.sidebarWidth"
 
     var onDismiss: (() -> Void)?
     var onShowHookSetup: (() -> Void)?
@@ -44,9 +51,12 @@ final class SettingsView: NSView, NSTextFieldDelegate {
     private let emptyLabel = NSTextField(labelWithString: L("No matching settings"))
     private var agentCommandFields: [LaunchAgent: NSTextField] = [:]
     private var agentCommandPreview: NSTextField?
+    private var skillsView: SkillsSettingsView?
 
-    init(page: Page = .appearance) {
+    init(page: Page = .appearance, skillsView: SkillsSettingsView? = nil, preferences: PreferenceStorage = FilePreferences.shared) {
+        self.preferences = preferences
         currentPage = page
+        self.skillsView = skillsView
         super.init(frame: .zero)
         wantsLayer = true
         build()
@@ -83,6 +93,14 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         sidebar.addSubview(navStack)
         sidebar.addSubview(emptyLabel)
         contentArea.addSubview(pageHost)
+        sidebarDivider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sidebarDivider)
+        sidebarDivider.onDrag = { [weak self] position in
+            guard let self else { return }
+            self.adjustableSidebarWidth?.constant = min(320, max(Self.minimumSidebarWidth, position))
+            self.preferences.set(self.adjustableSidebarWidth?.constant, forKey: Self.sidebarWidthKey)
+            self.layoutSubtreeIfNeeded()
+        }
 
         backRow.onClick = { [weak self] in self?.onDismiss?() }
 
@@ -103,11 +121,20 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         emptyLabel.textColor = ShellStyle.tertiaryText
         emptyLabel.isHidden = true
 
+        let storedWidth = preferences.double(forKey: Self.sidebarWidthKey)
+        let initialWidth = storedWidth.isFinite && storedWidth > 0
+            ? min(320, max(Self.minimumSidebarWidth, storedWidth)) : Self.sidebarWidth
+        let widthConstraint = sidebar.widthAnchor.constraint(equalToConstant: initialWidth)
+        adjustableSidebarWidth = widthConstraint
         NSLayoutConstraint.activate([
+            widthConstraint,
+            sidebarDivider.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -3),
+            sidebarDivider.widthAnchor.constraint(equalToConstant: 7),
+            sidebarDivider.topAnchor.constraint(equalTo: topAnchor),
+            sidebarDivider.bottomAnchor.constraint(equalTo: bottomAnchor),
             sidebar.leadingAnchor.constraint(equalTo: leadingAnchor),
             sidebar.topAnchor.constraint(equalTo: topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: Self.sidebarWidth),
 
             contentArea.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             contentArea.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -147,7 +174,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             showPage(currentPage)
             return
         case .language:
-            break
+            skillsView?.refreshLocalization()
         default:
             return
         }
@@ -210,6 +237,20 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         pageHost.subviews.forEach { $0.removeFromSuperview() }
         agentCommandFields.removeAll()
         agentCommandPreview = nil
+        if page == .skills {
+            let skills = skillsView ?? SkillsSettingsView(preferences: preferences)
+            skillsView = skills
+            skills.refreshLocalization()
+            skills.translatesAutoresizingMaskIntoConstraints = false
+            pageHost.addSubview(skills)
+            NSLayoutConstraint.activate([
+                skills.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor),
+                skills.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor),
+                skills.topAnchor.constraint(equalTo: pageHost.topAnchor),
+                skills.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor),
+            ])
+            return
+        }
 
         let column = NSStackView()
         column.orientation = .vertical
@@ -261,6 +302,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         case .general: buildGeneral(into: column)
         case .appearance: buildAppearance(into: column)
         case .handoff: buildHandoff(into: column)
+        case .skills: break // Skills 内容页面已在上方处理。
         case .archive:
             if let store = AppState.shared?.taskBindings.store {
                 let archive = ArchivedTasksView(store: store)

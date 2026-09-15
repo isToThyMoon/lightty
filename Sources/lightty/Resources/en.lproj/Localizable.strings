@@ -363,3 +363,45 @@
 "Typed in when the plugin is not installed" = "Typed in when the plugin is not installed";
 "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text.";
 "Unbinding: nothing is injected, and the next binding starts fresh." = "Unbinding: nothing is injected, and the next binding starts fresh.";
+
+/* Skills 浏览器 */
+"Skills" = "Skills";
+"Refresh skills" = "Refresh skills";
+"Favorite" = "Favorite";
+"Not favorited" = "Not favorited";
+"Skill actions" = "Skill actions";
+"Open file" = "Open file";
+"Open source" = "Open source";
+"Source" = "Source";
+"Preview" = "Preview";
+"Skill sources" = "Skill sources";
+"Search skills or sources…" = "Search skills or sources…";
+"Skill content" = "Skill content";
+"Select a skill to read its instructions." = "Select a skill to read its instructions.";
+"Reading skills…" = "Reading skills…";
+"All skills" = "All skills";
+"Favorites" = "Favorites";
+"Mine" = "Mine";
+"Unclassified" = "Unclassified";
+"Sources" = "Sources";
+"Provided by agents" = "Provided by agents";
+"Plugin skills" = "Plugin skills";
+"Built-in skills" = "Built-in skills";
+"No skills in this category." = "No skills in this category.";
+"No matching skills." = "No matching skills.";
+"The skill file could not be opened." = "The skill file could not be opened.";
+"Mark as mine" = "Mark as mine";
+"Copy file path" = "Copy file path";
+"Found in" = "Found in";
+"%d notices" = "%d notices";
+"Skills notices" = "Skills notices";
+
+"Common installations" = "Common installations";
+
+"Agent installations" = "Agent installations";
+
+"Bundled with Claude Code; reading is not supported yet." = "Bundled with Claude Code; reading is not supported yet.";
+
+"File locations" = "File locations";
+
+"Actual file" = "Actual file";
