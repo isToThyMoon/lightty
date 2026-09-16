@@ -65,6 +65,30 @@ final class PrimarySidebarTests: XCTestCase {
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let title = L("Move to recent sessions")
         XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
+        let emptyProjectMenu = ShellMenuPopover.visibleItems(content.sessionMenuItems(record, anchor: NSView()))
+        for (previous, next) in zip(emptyProjectMenu, emptyProjectMenu.dropFirst()) {
+            if case .separator = previous.kind, case .separator = next.kind {
+                XCTFail("An empty project group must not leave adjacent separators")
+            }
+        }
+        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            let directory = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let menu = ShellMenuController(items: emptyProjectMenu)
+                let host = MenuPreviewBackdrop()
+                host.appearance = NSAppearance(named: appearance)
+                host.addSubview(menu.view)
+                let size = menu.view.fittingSize
+                host.frame = NSRect(origin: .zero, size: size)
+                menu.view.frame = host.bounds
+                host.layoutSubtreeIfNeeded()
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(
+                    to: directory.appendingPathComponent("session-menu-\(appearance.rawValue).png"))
+            }
+        }
         let project = SessionProject(name: "Project")
         library.updateOrganization {
             $0.projects = [project]
@@ -781,5 +805,13 @@ private struct FixtureCatalog: CatalogOnlyProvider {
                          title: title, workingDirectory: root.path, updatedAt: Date())
         }
         return SessionCatalogPage(sessions: rows, nextCursor: nil)
+    }
+}
+
+/// 截图只渲染菜单内容；玻璃与投影仍由应用窗口合成器验收。
+private final class MenuPreviewBackdrop: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        ShellStyle.raisedSurface.setFill()
+        bounds.fill()
     }
 }

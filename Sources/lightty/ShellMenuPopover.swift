@@ -2,12 +2,11 @@ import AppKit
 
 /// 自绘菜单气泡：替代原生 NSMenu（样式与壳层不符）。用于管理菜单：
 /// 圆角卡片、整行 hover 提亮、ShellStyle 明暗动态色。
-/// 支持：勾选态、尾注（如「运行中」）、分组标题、分隔线、危险项。
+/// 支持：勾选态、尾注（如「运行中」）、分隔线、危险项。
 enum ShellMenuPopover {
     struct Item {
         enum Kind {
             case action(() -> Void)
-            case header
             case separator
         }
 
@@ -19,6 +18,7 @@ enum ShellMenuPopover {
         var destructive = false
         /// 行首色点（重点色菜单用）
         var swatch: NSColor?
+        var symbol: String?
 
         static func action(
             _ title: String,
@@ -27,15 +27,12 @@ enum ShellMenuPopover {
             subtitle: String? = nil,
             destructive: Bool = false,
             swatch: NSColor? = nil,
+            symbol: String? = nil,
             handler: @escaping () -> Void
         ) -> Item {
             Item(
                 kind: .action(handler), title: title, checked: checked,
-                detail: detail, subtitle: subtitle, destructive: destructive, swatch: swatch)
-        }
-
-        static func header(_ title: String) -> Item {
-            Item(kind: .header, title: title)
+                detail: detail, subtitle: subtitle, destructive: destructive, swatch: swatch, symbol: symbol)
         }
 
         static var separator: Item { Item(kind: .separator) }
@@ -43,6 +40,20 @@ enum ShellMenuPopover {
 
     private static var window: ShellMenuWindow?
     static var isPresented: Bool { window?.isVisible ?? false }
+
+    /// 空组不占菜单空间；分割线只出现在两组内容之间。
+    static func visibleItems(_ items: [Item]) -> [Item] {
+        var result: [Item] = []
+        for item in items {
+            if case .separator = item.kind {
+                guard let last = result.last else { continue }
+                if case .separator = last.kind { continue }
+            }
+            result.append(item)
+        }
+        if let last = result.last, case .separator = last.kind { result.removeLast() }
+        return result
+    }
 
     /// 贴锚点下方、右缘对齐的自绘卡片（ChatGPT 桌面版式，无气泡小三角）。
     /// 空间不够时翻到锚点上方。
@@ -58,7 +69,7 @@ enum ShellMenuPopover {
     static func present(from anchor: NSView, items: [Item]) {
         dismiss()
         guard let parent = anchor.window else { return }
-        let content = MenuController(items: items)
+        let content = ShellMenuController(items: items)
         let menu = ShellMenuWindow(content: content)
         content.onDone = { action in
             dismiss()
@@ -293,13 +304,13 @@ final class ShellMenuWindow: NSWindow {
     }
 }
 
-private final class MenuController: NSViewController {
+final class ShellMenuController: NSViewController {
     var onDone: (((() -> Void)?) -> Void)?
 
     private let items: [ShellMenuPopover.Item]
 
     init(items: [ShellMenuPopover.Item]) {
-        self.items = items
+        self.items = ShellMenuPopover.visibleItems(items)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -309,23 +320,25 @@ private final class MenuController: NSViewController {
         let root = NSView()
         var rows: [NSView] = []
         var buttons: [MenuRowButton] = []
+        let hasLeadingColumn = items.contains { $0.symbol != nil || $0.swatch != nil }
 
         for item in items {
             switch item.kind {
             case .separator:
-                let line = ShellBackdropView(fill: ShellStyle.divider)
+                let container = NSView()
+                let line = ShellBackdropView(fill: ShellStyle.Menu.separatorColor)
                 line.translatesAutoresizingMaskIntoConstraints = false
-                line.heightAnchor.constraint(equalToConstant: 1).isActive = true
-                rows.append(line)
-            case .header:
-                // 分组标题压在半透明卡片上，10pt + 三级灰几乎看不见。
-                // 它是这一组的名字，读不出来就等于没有——用二级灰，字号与字重都提一档。
-                let label = NSTextField(labelWithString: item.title)
-                label.font = .systemFont(ofSize: 11, weight: .semibold)
-                label.textColor = ShellStyle.secondaryText
-                rows.append(label)
+                container.addSubview(line)
+                NSLayoutConstraint.activate([
+                    container.heightAnchor.constraint(equalToConstant: ShellStyle.Menu.separatorHeight),
+                    line.heightAnchor.constraint(equalToConstant: 1),
+                    line.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                    line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: ShellStyle.Menu.rowInset),
+                    line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -ShellStyle.Menu.rowInset),
+                ])
+                rows.append(container)
             case .action(let handler):
-                let row = MenuRowButton(item: item)
+                let row = MenuRowButton(item: item, hasLeadingColumn: hasLeadingColumn)
                 row.onTap = { [weak self] in self?.onDone?(handler) }
                 rows.append(row)
                 buttons.append(row)
@@ -335,26 +348,21 @@ private final class MenuController: NSViewController {
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 2
+        stack.spacing = 0
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         var constraints = [
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -8),
-            root.widthAnchor.constraint(equalToConstant: 224),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: ShellStyle.Menu.inset),
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: ShellStyle.Menu.inset),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -ShellStyle.Menu.inset),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -ShellStyle.Menu.inset),
+            root.widthAnchor.constraint(equalToConstant: ShellStyle.Menu.width),
         ]
         for row in rows {
             constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor))
         }
         for button in buttons {
             constraints.append(button.heightAnchor.constraint(equalToConstant: button.preferredHeight))
-        }
-        // 分组标题左对齐带内缩
-        for case let label as NSTextField in rows {
-            constraints.append(
-                label.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 9))
         }
         NSLayoutConstraint.activate(constraints)
         view = root
@@ -363,9 +371,10 @@ private final class MenuController: NSViewController {
 
 /// 菜单行：（色点 +）标题 + 尾注 + 尾部勾选，整行 hover 提亮（ChatGPT 桌面版式）。
 private final class MenuRowButton: NSView {
-    var preferredHeight: CGFloat { item.subtitle == nil ? 30 : 48 }
+    var preferredHeight: CGFloat { item.subtitle == nil ? ShellStyle.Menu.rowHeight : ShellStyle.Menu.subtitleRowHeight }
     var onTap: (() -> Void)?
     private let swatch = NSView()
+    private let icon = NSImageView()
 
     private let item: ShellMenuPopover.Item
     private let check = NSImageView()
@@ -375,7 +384,7 @@ private final class MenuRowButton: NSView {
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
 
-    init(item: ShellMenuPopover.Item) {
+    init(item: ShellMenuPopover.Item, hasLeadingColumn: Bool) {
         self.item = item
         super.init(frame: .zero)
         HoverCursor.installPointingHand(on: self)
@@ -388,34 +397,41 @@ private final class MenuRowButton: NSView {
             pointSize: 9, weight: .semibold)
         check.isHidden = !item.checked
 
+        toolTip = item.title
         titleLabel.stringValue = item.title
-        titleLabel.font = .systemFont(ofSize: 13)
+        titleLabel.font = ShellStyle.Menu.font
         titleLabel.lineBreakMode = .byTruncatingTail
 
         detailLabel.stringValue = item.detail ?? ""
-        detailLabel.font = .systemFont(ofSize: 10.5)
+        detailLabel.font = ShellStyle.Font.caption
         subtitleLabel.stringValue = item.subtitle ?? ""
-        subtitleLabel.font = .systemFont(ofSize: 10.5)
+        subtitleLabel.font = ShellStyle.Font.caption
         subtitleLabel.textColor = ShellStyle.secondaryText
         subtitleLabel.lineBreakMode = .byTruncatingTail
 
         swatch.wantsLayer = true
         swatch.layer?.cornerRadius = 6
         swatch.isHidden = item.swatch == nil
+        icon.image = item.symbol.flatMap { SymbolImages.image($0, pointSize: ShellStyle.Menu.iconSize, weight: .regular) }
+        icon.isHidden = item.symbol == nil || item.swatch != nil
 
-        for v in [swatch, check, titleLabel, detailLabel, subtitleLabel] {
+        for v in [swatch, icon, check, titleLabel, detailLabel, subtitleLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.Menu.rowInset),
+            icon.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: ShellStyle.Menu.iconSlot),
+            icon.heightAnchor.constraint(equalToConstant: ShellStyle.Menu.iconSlot),
             swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             swatch.centerYAnchor.constraint(equalTo: centerYAnchor),
             swatch.widthAnchor.constraint(equalToConstant: 12),
             swatch.heightAnchor.constraint(equalToConstant: 12),
 
             titleLabel.leadingAnchor.constraint(
-                equalTo: item.swatch == nil ? leadingAnchor : swatch.trailingAnchor,
-                constant: item.swatch == nil ? 12 : 10),
+                equalTo: leadingAnchor,
+                constant: ShellStyle.Menu.rowInset + (hasLeadingColumn ? ShellStyle.Menu.iconSlot + ShellStyle.Menu.iconGap : 0)),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor, constant: item.subtitle == nil ? 0 : -8),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
@@ -426,7 +442,7 @@ private final class MenuRowButton: NSView {
             // 尾注与勾在行尾；未勾选时勾不占位
             detailLabel.trailingAnchor.constraint(
                 equalTo: check.leadingAnchor, constant: item.checked ? -6 : 0),
-            detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            detailLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
             check.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             check.centerYAnchor.constraint(equalTo: centerYAnchor),
             check.widthAnchor.constraint(equalToConstant: item.checked ? 12 : 0),
@@ -438,6 +454,7 @@ private final class MenuRowButton: NSView {
 
     private func applyColors() {
         titleLabel.textColor = item.destructive ? .systemRed : ShellStyle.primaryText
+        icon.contentTintColor = titleLabel.textColor
         detailLabel.textColor = ShellStyle.tertiaryText
         check.contentTintColor = ShellStyle.primaryText
         if let color = item.swatch {
@@ -496,7 +513,7 @@ private final class MenuTintOverlay: NSView {
     }
 
     private func applyColor() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(0.6)
+        layer?.backgroundColor = ShellStyle.raisedSurface.withAlphaComponent(ShellStyle.Menu.surfaceOpacity)
             .shellResolvedCGColor(for: effectiveAppearance)
     }
 }

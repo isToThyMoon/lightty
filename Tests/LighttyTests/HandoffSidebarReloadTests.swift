@@ -114,7 +114,7 @@ final class HandoffSidebarReloadTests: XCTestCase {
         XCTAssertEqual(Set(names(in: table)), ["Agent 改过", "Agent 新建"])
     }
 
-    /// 设置里恢复归档任务：设置页自己立刻重读，Handoff 列表经目录变更跟上。
+    /// 设置里恢复归档任务：Handoff 设置页自己立刻重读，侧栏的 Handoff 列表经目录变更跟上。
     func testRestoringAnArchivedTaskReachesTheListThroughTheFolderChange() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -135,13 +135,17 @@ final class HandoffSidebarReloadTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
-        let archive = ArchivedTasksView(store: store)
+        let settings = HandoffSettingsView(
+            bindings: AppState.shared.taskBindings,
+            preferences: FilePreferences(fileURL: directory.appendingPathComponent("settings.json")))
+        settings.select(.archived)
+        XCTAssertEqual(settings.listIDs.count, 1)
+        settings.selectList(id: settings.listIDs.first)
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
-        let restore = try XCTUnwrap(descendants(archive).compactMap { $0 as? NSButton }
+        let restore = try XCTUnwrap(descendants(settings).compactMap { $0 as? NSButton }
             .first { $0.title == L("Restore") })
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(restore.action), to: restore.target, from: restore))
-        XCTAssertTrue(descendants(archive).contains { ($0 as? NSTextField)?.stringValue == L("No archived tasks") },
-                      "设置页自己同步重读，不等目录事件")
+        XCTAssertTrue(settings.listIDs.isEmpty, "设置页自己同步重读，不等目录事件")
         XCTAssertEqual(posted, 0, "任务列表变化只由 TaskBindings 发出")
 
         try XCTUnwrap(fireFolderChange)()

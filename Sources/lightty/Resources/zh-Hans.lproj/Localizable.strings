@@ -402,8 +402,8 @@
 "Unclassified" = "待归类";
 "Sources" = "来源";
 "Provided by agents" = "Agent 提供";
-"Plugin skills" = "插件技能";
-"Built-in skills" = "内置技能";
+"Plugin skills" = "Plugin skills";
+"Built-in skills" = "Built-in skills";
 "No skills in this category." = "此分类暂无技能";
 "No matching skills." = "没有匹配的技能";
 "The skill file could not be opened." = "无法打开技能文件。";
@@ -415,10 +415,91 @@
 
 "Common installations" = "通用安装";
 
-"Agent installations" = "Agent 安装";
 
 "Bundled with Claude Code; reading is not supported yet." = "随程序提供，暂不支持读取";
 
 "File locations" = "文件位置";
 
 "Actual file" = "实际文件";
+
+/* Plugins settings page；插件、内容类别等产品名保持英文 */
+"Plugins" = "Plugins";
+"Installed plugins" = "已安装的插件";
+"Plugin contents" = "插件内容";
+"Plugin content" = "插件内容正文";
+"Search plugin contents…" = "搜索插件内容…";
+"Select an item to see what the plugin provides." = "选择一条内容，查看这个插件提供了什么。";
+"This plugin provides no contents." = "这个插件没有可展示的内容。";
+"No matching contents." = "没有匹配的内容。";
+"Refresh plugins" = "刷新插件";
+"Enable plugin" = "启用插件";
+"Enabled" = "已启用";
+"Disabled" = "已停用";
+"Cached only" = "仅缓存";
+"Cached in Codex but not in its installed list, so it cannot be enabled here." = "只存在于 Codex 缓存，未列入已安装清单，无法在这里启用。";
+"Remote plugin that Codex has not downloaded to this Mac; its contents cannot be browsed." = "远程插件，Codex 尚未下载到本机，暂时无法浏览内容。";
+"Skill" = "Skill";
+"Command" = "Command";
+"Subagent" = "Subagent";
+"Hook" = "Hook";
+"MCP server" = "MCP server";
+"Plugin notices" = "插件提示";
+"The plugin file could not be opened." = "无法打开这个插件文件。";
+
+/* Handoff 设置页（三栏浏览器） */
+"In progress" = "进行中";
+
+"Protocol" = "协议";
+
+"Handoff categories" = "Handoff 分类";
+
+"Handoff documents" = "Handoff 文档";
+
+"Handoff document" = "Handoff 文档";
+
+"Search handoff documents…" = "搜索 Handoff 文档…";
+
+"No matching documents." = "没有匹配的文档";
+
+"The protocol is the same for every task." = "协议对每个任务都一样";
+
+"Select a handoff document to read it." = "选择一份 Handoff 文档查看内容。";
+
+"The handoff file could not be opened." = "无法打开 Handoff 文件。";
+
+"Rescan the task folder" = "重新扫描任务目录";
+
+/* 插件内容的分组标题：类别名保持英文 */
+"Commands" = "Commands";
+"Subagents" = "Subagents";
+"Hooks" = "Hooks";
+"MCP servers" = "MCP servers";
+"App connector" = "App connector";
+"App connectors" = "App connectors";
+
+/* 技能里 SKILL.md 之外的文件 */
+"%d files in this skill" = "这个技能里有 %d 份文件";
+"This file is not text. Open it to read it." = "这份文件不是文本，打开它来查看。";
+"This file is too large to preview." = "这份文件太大，无法预览。";
+
+/* 独立 MCP server 设置页 */
+"All servers" = "全部 server";
+"MCP server sources" = "MCP server 来源";
+"Search MCP servers…" = "搜索 MCP server…";
+"No MCP servers configured here." = "这里没有独立配置的 MCP server。";
+"No matching servers." = "没有匹配的 server。";
+"Select a server to see how it is configured." = "选择一台 server 查看它的配置。";
+"Refresh MCP servers" = "重新扫描 MCP server";
+"Enable MCP server" = "启用 MCP server";
+"MCP server configuration" = "MCP server 配置";
+"MCP notices" = "MCP 提示";
+"The configuration file could not be opened." = "无法打开配置文件。";
+"Claude Code has no enabled switch for a user-level server: it is on while it is configured." = "Claude Code 的用户级 server 没有启用开关：配置在那里就是开着的。";
+
+"Open the skill folder" = "打开技能文件夹";
+
+/* Claude Code 的使用计数 */
+"Unused" = "未用过";
+"Used %d times by Claude Code" = "Claude Code 用过 %d 次";
+"Never used by Claude Code" = "Claude Code 没用过";
+"No usage record from Claude Code" = "Claude Code 没有使用记录";

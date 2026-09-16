@@ -20,6 +20,8 @@ enum SkillsStyle {
     static let bodyFont = NSFont.systemFont(ofSize: 13)
     static let summaryFont = NSFont.systemFont(ofSize: 12)
     static let sectionFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+    /// Version tags in the source tree; small enough to sit beside a name.
+    static let captionFont = NSFont.systemFont(ofSize: 11)
     static let codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 }
 
@@ -105,7 +107,7 @@ enum SkillDocumentPresentation {
     }
 }
 
-/// Thin separator with a seven-point mouse target; coordinates stay in the parent while dragging.
+/// 无可见分割线的列宽拖动区；保留七点命中宽度与调整光标，列之间由留白区分。
 final class SkillsColumnDivider: NSView {
     var onDrag: ((CGFloat) -> Void)?
     private var grabOffset: CGFloat = 0
@@ -118,11 +120,6 @@ final class SkillsColumnDivider: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    override func draw(_ dirtyRect: NSRect) {
-        ShellStyle.divider.setFill()
-        NSRect(x: 3, y: 0, width: 1, height: bounds.height).fill()
-    }
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .resizeLeftRight)

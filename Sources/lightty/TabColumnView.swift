@@ -12,16 +12,15 @@ enum TabRowKind: Equatable {
     case leaf(tab: UUID, pane: UUID)
 }
 
-/// 双栏侧栏的左栏：标签页 › pane 两级树（cmux 形态的窗口活地图）。
+/// 第二侧栏：标签页 › pane 两级树（窗口的现场导航）。
 /// spec: docs/specs/double-sidebar.md。标签页可折叠，折叠状态仅当前侧栏会话内保留。
 ///
 /// 层级表达（Safari 侧栏标签页组同款）：标签页行 = 容器图标 + semibold 标题 +
-/// pane 计数，活跃时图标/标题染强调色但**不给填充**；pane 行 = 缩进的圆点 +
-/// 常规字重单行。全侧栏唯一的填充高亮是当前 pane（强调色淡底）——当前标签页
-/// 必然包含当前 pane，两级选中不需要两块底色。
+/// pane 计数，活跃时图标/标题染导航色并给弱底色；pane 行 = 缩进的圆点 +
+/// 常规字重名称，下方列出任务 / cwd。当前 pane 的底色比容器更强。
 ///
 /// 标签页行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
-/// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
+/// pane 行：hover 出现关闭操作，长文本通过 tooltip 查看。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
 ///
 /// 叶子标签页：标签页只有一个 pane、且还叫默认名时，容器行和 pane 行合并成一条
@@ -34,16 +33,16 @@ enum TabRowKind: Equatable {
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
-        symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"),
+        symbol: ShellSymbol.splitRight, accessibilityLabel: L("Split right"),
         target: nil, action: nil)
     private let splitDownButton = ShellIconButton(
-        symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"),
+        symbol: ShellSymbol.splitDown, accessibilityLabel: L("Split down"),
         target: nil, action: nil)
     private let newTabButton = ShellIconButton(
-        symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New tab"),
+        symbol: ShellSymbol.newTab, accessibilityLabel: L("New tab"),
         target: nil, action: nil)
     private let clearTabsButton = ShellIconButton(
-        symbol: "ellipsis", accessibilityLabel: L("More actions"), target: nil, action: nil)
+        symbol: ShellSymbol.more, accessibilityLabel: L("More actions"), target: nil, action: nil)
     private let scroll = SidebarListScrollView()
     private let table = NSTableView()
     private struct RowItem {
@@ -68,7 +67,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     init() {
         super.init(frame: .zero)
 
-        sectionLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        sectionLabel.font = ShellStyle.Font.section
         sectionLabel.textColor = ShellStyle.tertiaryText
 
         splitRightButton.target = self
@@ -87,7 +86,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.setAccessibilityLabel(L("Tabs"))
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .none
-        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.intercellSpacing = NSSize(width: 0, height: ShellStyle.listRowGap)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self
         table.delegate = self
@@ -105,20 +104,20 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
             newTabButton.topAnchor.constraint(equalTo: topAnchor),
             newTabButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
-            newTabButton.widthAnchor.constraint(equalToConstant: 28),
-            newTabButton.heightAnchor.constraint(equalToConstant: 28),
+            newTabButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            newTabButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             splitDownButton.trailingAnchor.constraint(
                 equalTo: newTabButton.leadingAnchor, constant: -1),
             splitDownButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            splitDownButton.widthAnchor.constraint(equalToConstant: 28),
-            splitDownButton.heightAnchor.constraint(equalToConstant: 28),
+            splitDownButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            splitDownButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             splitRightButton.trailingAnchor.constraint(
                 equalTo: splitDownButton.leadingAnchor, constant: -1),
             splitRightButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            splitRightButton.widthAnchor.constraint(equalToConstant: 28),
-            splitRightButton.heightAnchor.constraint(equalToConstant: 28),
+            splitRightButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            splitRightButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             // 12 边距 + 行内 10 缩进：标题与行文字左对齐
             sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
@@ -127,8 +126,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
             clearTabsButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             clearTabsButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            clearTabsButton.widthAnchor.constraint(equalToConstant: 28),
-            clearTabsButton.heightAnchor.constraint(equalToConstant: 28),
+            clearTabsButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            clearTabsButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
             // Keep the leading gutter; the shared trailing rail keeps scrolling clear of row actions.
@@ -239,7 +238,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func clearTabs() {
         ShellMenuPopover.present(from: clearTabsButton, items: [
-            .action(L("Close all tabs in this window"), destructive: true) { [weak self] in
+            .action(L("Close all tabs in this window"), destructive: true, symbol: ShellSymbol.close) { [weak self] in
                 self?.controller?.requestClearTabs()
             },
         ])
@@ -343,7 +342,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onMenu = { [weak self, weak row] in
             guard let self, let anchor = row else { return }
             ShellMenuPopover.present(from: anchor, items: [
-                .action(L("Rename tab")) { [weak self] in
+                .action(L("Rename tab"), symbol: ShellSymbol.rename) { [weak self] in
                     guard let controller = self?.controller else { return }
                     NameEditorPopover.present(
                         from: anchor, title: L("Rename tab"),
@@ -393,7 +392,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onRename = rename
         row.onMenu = { [weak row] in
             guard let anchor = row else { return }
-            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), handler: rename)])
+            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), symbol: ShellSymbol.rename, handler: rename)])
         }
         return row
     }
@@ -821,7 +820,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         aligned.origin.x = (frame.origin.x * scale).rounded() / scale
         aligned.origin.y = (frame.origin.y * scale).rounded() / scale
         let card = ReorderDrag.makeSnapshot(image, frame: aligned)
-        card.layer?.cornerRadius = 7
+        card.layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         card.layer?.backgroundColor =
             ShellStyle.sidebarBackground.shellResolvedCGColor(for: effectiveAppearance)
         // 位图层若按 1x 栅格化，2x 屏上等于把文字放大一倍，同样是发虚。
@@ -901,12 +900,12 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         self.isCollapsed = isCollapsed
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         registerForDraggedTypes([.lighttyPaneID])
         HoverCursor.installPointingHand(on: self)
 
         label.stringValue = title
-        label.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        label.font = ShellStyle.Font.groupTitle
         label.textColor = isActive ? ShellStyle.navigationAccent : ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
 
@@ -920,11 +919,11 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyGlyph()
 
         countLabel.stringValue = "\(count)"
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        countLabel.font = ShellStyle.Font.count
         countLabel.textColor = ShellStyle.tertiaryText
 
         menuButton.image = SymbolImages.image(
-            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
+            ShellSymbol.more, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("More actions"))
         menuButton.isBordered = false
         menuButton.imagePosition = .imageOnly
         menuButton.focusRingType = .none
@@ -934,7 +933,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         menuButton.action = #selector(menuTapped)
 
         closeButton.image = SymbolImages.image(
-            "xmark", pointSize: 8.5, weight: .bold, description: L("Close tab"))
+            ShellSymbol.close, pointSize: ShellStyle.closeIconSize, weight: .bold, description: L("Close tab"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -961,12 +960,12 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 20),
-            closeButton.heightAnchor.constraint(equalToConstant: 20),
+            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
+            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
             menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            menuButton.widthAnchor.constraint(equalToConstant: 20),
-            menuButton.heightAnchor.constraint(equalToConstant: 20),
+            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
+            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
         ])
         applyFill()
     }
@@ -1000,8 +999,8 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         guard key != glyphKey else { return }
         glyphKey = key
         disclosureButton.image = SymbolImages.image(
-            isCollapsed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle",
-            pointSize: 10, weight: .medium,
+            isCollapsed ? ShellSymbol.collapsedTab : ShellSymbol.tab,
+            pointSize: ShellStyle.compactIconSize, weight: .medium,
             description: isCollapsed ? L("Collapsed tab") : L("Tab"))
         disclosureButton.contentTintColor =
             isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
@@ -1014,7 +1013,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         if hovered {
             fill = ShellStyle.selectionFill
         } else if isActive {
-            fill = ShellStyle.navigationTint(0.08)
+            fill = ShellStyle.activeContainerFill
         } else {
             fill = .clear
         }
@@ -1213,15 +1212,15 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         tabGlyph = leading == .leafTab ? NSImageView() : nil
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         registerForDraggedTypes([.lighttyPaneID])
         HoverCursor.installPointingHand(on: self)
 
         dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 3
+        dotView.layer?.cornerRadius = ShellStyle.statusDotSize / 2
 
         closeButton.image = SymbolImages.image(
-            "xmark", pointSize: 7.5, weight: .bold, description: L("Close pane"))
+            ShellSymbol.close, pointSize: ShellStyle.closeIconSize, weight: .bold, description: L("Close pane"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -1231,7 +1230,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         closeButton.action = #selector(closeTapped)
 
         menuButton.image = SymbolImages.image(
-            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
+            ShellSymbol.more, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("More actions"))
         menuButton.isBordered = false
         menuButton.imagePosition = .imageOnly
         menuButton.focusRingType = .none
@@ -1241,18 +1240,18 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         menuButton.action = #selector(menuTapped)
 
         nameLabel.stringValue = name
-        nameLabel.font = .systemFont(ofSize: 12)
+        nameLabel.font = ShellStyle.Font.body
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        taskLabel.font = ShellStyle.Font.captionStrong
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(740), for: .horizontal)
 
-        directoryLabel.font = .systemFont(ofSize: 10)
+        directoryLabel.font = ShellStyle.Font.caption
         directoryLabel.textColor = ShellStyle.tertiaryText
         directoryLabel.lineBreakMode = .byTruncatingHead
         directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1262,7 +1261,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
         secondaryStack.orientation = .horizontal
         secondaryStack.alignment = .firstBaseline
-        secondaryStack.spacing = 4
+        secondaryStack.spacing = ShellStyle.inlineGap
 
         statusLabel.isHidden = true
         statusLabel.textColor = ShellStyle.secondaryText
@@ -1280,7 +1279,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         }
         if let tabGlyph {
             tabGlyph.image = SymbolImages.image(
-                "rectangle.on.rectangle", pointSize: 10, weight: .medium, description: L("Tab"))
+                ShellSymbol.tab, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("Tab"))
             tabGlyph.translatesAutoresizingMaskIntoConstraints = false
             addSubview(tabGlyph)
             // 与容器行的图标同列同尺寸（leading 5、宽 18），跟第一行对齐。
@@ -1298,8 +1297,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             // 圆点跟第一行对齐，不悬在两行中间。叶子行同样从子级位起，前面的
             // 标签页图标负责说明"这是一个标签页"。
             dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26),
-            dotView.widthAnchor.constraint(equalToConstant: 6),
-            dotView.heightAnchor.constraint(equalToConstant: 6),
+            dotView.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
+            dotView.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1353,7 +1352,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     private func applyMenuSlot() {
-        menuButtonWidth.constant = onMenu == nil ? 0 : 20
+        menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.compactActionSize
         menuButton.isHidden = !hovered || onMenu == nil
     }
 
@@ -1506,7 +1505,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private func applyFill() {
         // Fill means selection/hover only. Completion is conveyed by the dot and text.
         if isActive {
-            layer?.backgroundColor = ShellStyle.navigationTint(0.14)
+            layer?.backgroundColor = ShellStyle.activeItemFill
                 .shellResolvedCGColor(for: effectiveAppearance)
         } else if hovered {
             layer?.backgroundColor = ShellStyle.controlFill

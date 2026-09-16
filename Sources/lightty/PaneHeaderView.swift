@@ -17,7 +17,7 @@ enum PaneIdentityMetrics {
     static let iconGap: CGFloat = 4
 }
 
-/// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
+/// 每 pane 一条 chromeRowHeight 高的 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
 /// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
 /// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
 /// 并入胶囊，窄时只剩点 + pane 名，信息由展开面板承载。
@@ -171,13 +171,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         wantsLayer = true
 
         capsule.wantsLayer = true
-        capsule.layer?.cornerRadius = 6
+        capsule.layer?.cornerRadius = ShellStyle.capsuleCornerRadius
 
         dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 3.5
+        dotView.layer?.cornerRadius = PaneIdentityMetrics.dotSize / 2
         applyDotColor()
 
-        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        nameLabel.font = ShellStyle.Font.compactTitle
         nameLabel.lineBreakMode = .byTruncatingTail
         // 标题由 agent 写，长度不可信。抗压缩优先级必须**低于** NSSplitView 的
         // holding priority（默认就是 250），否则"标题宽度 + 内边距"会变成整个 pane
@@ -188,14 +188,14 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .init(rawValue: NSLayoutConstraint.Priority.defaultLow.rawValue - 1),
             for: .horizontal)
 
-        taskHintLabel.font = .systemFont(ofSize: 10.5)
+        taskHintLabel.font = ShellStyle.Font.caption
         taskHintLabel.lineBreakMode = .byTruncatingTail
         taskHintLabel.setContentCompressionResistancePriority(
             .defaultLow, for: .horizontal)
 
         closeButton.image = NSImage(
-            systemSymbolName: "xmark", accessibilityDescription: L("Close pane"))?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+            systemSymbolName: ShellSymbol.close, accessibilityDescription: L("Close pane"))?
+            .withSymbolConfiguration(.init(pointSize: ShellStyle.closeIconSize, weight: .bold))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -269,7 +269,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
             taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
-            taskHintLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
+            taskHintLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
             taskHintLabel.trailingAnchor.constraint(
                 equalTo: capsule.trailingAnchor, constant: -7),
         ])
@@ -321,7 +321,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         let text = boundTaskName.map { " · \($0)" } ?? ""
         fullHintWidth = text.isEmpty ? 0 : ceil(
             (text as NSString).size(withAttributes: [
-                .font: taskHintLabel.font ?? NSFont.systemFont(ofSize: 10.5),
+                .font: taskHintLabel.font ?? ShellStyle.Font.caption,
             ]).width)
         needsLayout = true
     }
@@ -718,7 +718,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         NSAttributedString(
             string: title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .font: ShellStyle.Font.compactTitle,
                 .foregroundColor: GhosttyRuntime.shared.configValues.foregroundColor,
             ]
         ).draw(in: rect.insetBy(dx: 12, dy: 10))

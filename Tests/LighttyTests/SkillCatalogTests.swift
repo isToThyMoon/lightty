@@ -43,30 +43,24 @@ struct SkillCatalogTests {
         #expect(record.origin == .installed)
     }
 
-    @Test func pluginManifestSelectsVersionAndCodexCacheRemainsExplicitlyUnconfirmed() throws {
+    @Test func usageComesFromClaudeCodeAndIsAbsentRatherThanZeroElsewhere() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let old = ".claude/plugins/cache/store/tool/1.0"
-        let current = ".claude/plugins/cache/store/tool/2.0"
-        try fixture.skill("\(old)/skills/review", name: "old-version")
-        try fixture.skill("\(current)/skills/review", name: "review")
-        try fixture.json(".claude/plugins/installed_plugins.json", ["version": 2, "plugins": [
-            "tool@store": [["installPath": fixture.url(current).path]],
+        try fixture.skill(".agents/skills/lark-doc", name: "lark-doc")
+        try fixture.skill(".agents/skills/never-run", name: "never-run")
+        try fixture.skill(".codex/skills/.system/imagegen", name: "imagegen")
+        try fixture.json(".claude.json", ["skillUsage": [
+            "lark-doc": ["usageCount": 7, "lastUsedAt": 1_789_462_013_523],
+            "never-run": ["usageCount": 0, "lastUsedAt": 1_789_462_013_523],
         ]])
-        for version in ["1.0", "2.0"] {
-            try fixture.skill(".codex/plugins/cache/store/tool/\(version)/skills/review", name: "review")
-        }
-        try fixture.skill(".codex/plugins/cache/store/other/1.0/skills/review", name: "review")
-        let snapshot = fixture.scan()
-        #expect(snapshot.skills.count == 4)
-        #expect(!snapshot.skills.contains { $0.name == "old-version" })
-        #expect(Set(snapshot.skills.map(\.id)).count == 4)
-        #expect(snapshot.skills.allSatisfy { $0.origin == .plugin })
-        let cached = snapshot.skills.filter { $0.sourceTitle.contains("(cache)") }
-        #expect(cached.count == 3)
-        #expect(cached.allSatisfy { $0.provenanceNote?.contains("unconfirmed") == true })
-        #expect(cached.allSatisfy { $0.issue == nil })
-        #expect(snapshot.skills.first { $0.sourceTitle.hasPrefix("Claude") }?.issue == nil)
+        let skills = fixture.scan().skills
+        let used = try #require(skills.first { $0.name == "lark-doc" })
+        #expect(used.usage?.count == 7)
+        #expect(used.usage?.lastUsed != nil)
+        #expect(try #require(skills.first { $0.name == "never-run" }).usage?.count == 0)
+        // Codex 的内置技能在 Claude 的统计里本来就没有记录，nil 说的是「没有记录」，
+        // 不是「没用过」。
+        #expect(try #require(skills.first { $0.name == "imagegen" }).usage == nil)
     }
 
     @Test func damagedInstallationsAndMetadataAreVisible() throws {

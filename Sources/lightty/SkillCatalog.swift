@@ -1,8 +1,10 @@
 import Foundation
 
 /// Installation provenance, independent of the user's personal organization.
+/// Plugin-provided skills are not listed here: a plugin's contents belong to the
+/// plugin, and the Plugins page reads them from `PluginCatalog`.
 enum SkillOrigin: String, Codable, Sendable {
-    case installed, local, plugin, builtIn
+    case installed, local, builtIn
 }
 
 struct SkillLocation: Equatable, Sendable {
@@ -22,7 +24,9 @@ struct SkillRecord: Identifiable, Equatable, Sendable {
     let origin: SkillOrigin
     var locations: [SkillLocation]
     let issue: String?
-    var provenanceNote: String? = nil
+    /// Claude Code 的使用计数；Codex 不记这个，所以这里为 nil 只代表「没有记录」，
+    /// 不代表「没用过」。
+    var usage: UsageRecord? = nil
 }
 
 struct SkillCatalogSnapshot: Sendable {
@@ -58,8 +62,10 @@ struct SkillCatalog {
         }
         reader.scanSkills(at: codex.appendingPathComponent("skills/.system"), label: "Codex built-in",
                           source: Source(id: "builtin:codex", title: "Codex", url: nil, origin: .builtIn))
-        reader.scanClaudePlugins(at: home.appendingPathComponent(".claude/plugins/installed_plugins.json"))
-        reader.scanCodexCache(at: codex.appendingPathComponent("plugins/cache"))
+        let usage = ClaudeUsage.read(home: home).skills
+        for (id, record) in reader.records {
+            reader.records[id]?.usage = usage[record.name]
+        }
         return SkillCatalogSnapshot(skills: reader.records.values.sorted {
             let order = $0.name.localizedStandardCompare($1.name)
             return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
@@ -76,7 +82,6 @@ struct SkillCatalog {
         let title: String
         let url: URL?
         let origin: SkillOrigin
-        var note: String? = nil
         static let local = Source(id: "local", title: "Local", url: nil, origin: .local)
     }
 
@@ -123,8 +128,7 @@ struct SkillCatalog {
             // when resolving a full path whose SKILL.md leaf does not exist.
             let canonical = directory.resolvingSymlinksInPath()
                 .appendingPathComponent("SKILL.md").resolvingSymlinksInPath().standardizedFileURL
-            // Plugin namespaces must survive even when different plugins share a file.
-            let id = source.origin == .plugin ? "\(source.id):\(canonical.path)" : canonical.path
+            let id = canonical.path
             let location = SkillLocation(label: label, url: file)
             if var existing = records[id] {
                 if !existing.locations.contains(location) { existing.locations.append(location) }
@@ -153,72 +157,7 @@ struct SkillCatalog {
                                       summary: metadata.summary ?? "", content: content, fileURL: canonical,
                                       sourceID: source.id, sourceTitle: source.title, sourceURL: source.url,
                                       origin: source.origin, locations: [location],
-                                      issue: issues.isEmpty ? nil : issues.joined(separator: "\n"),
-                                      provenanceNote: source.note)
-        }
-
-        mutating func scanClaudePlugins(at manifest: URL) {
-            guard let json = jsonObject(at: manifest) else { return }
-            guard let plugins = json["plugins"] as? [String: Any] else {
-                warnings.append("Invalid plugin installation record: \(manifest.path)")
-                return
-            }
-            for key in plugins.keys.sorted() {
-                guard let installs = plugins[key] as? [[String: Any]] else {
-                    warnings.append("Invalid plugin entry: \(key)")
-                    continue
-                }
-                for install in installs {
-                    guard let path = install["installPath"] as? String, path.hasPrefix("/") else {
-                        warnings.append("Missing plugin installPath: \(key)")
-                        continue
-                    }
-                    let root = URL(fileURLWithPath: path, isDirectory: true)
-                    guard files.fileExists(atPath: root.path) else {
-                        warnings.append("Plugin installation is missing: \(root.path)")
-                        continue
-                    }
-                    let source = Source(id: "plugin:claude:\(key)", title: "Claude · \(key)", url: nil, origin: .plugin)
-                    scanPluginSkills(at: root.appendingPathComponent("skills"), label: "Claude plugin", source: source)
-                }
-            }
-        }
-
-        mutating func scanCodexCache(at cache: URL) {
-            // Cache layout is marketplace/plugin/version/skills. Do not recurse through
-            // binaries or infer an installed version from lexical or timestamp ordering.
-            for marketplace in directories(at: cache) {
-                for plugin in directories(at: marketplace) {
-                    for version in directories(at: plugin) {
-                        let source = Source(id: "plugin:codex:\(marketplace.lastPathComponent)/\(plugin.lastPathComponent)",
-                                            title: "Codex · \(plugin.lastPathComponent) (cache)", url: nil, origin: .plugin,
-                                            note: "Cached version \(version.lastPathComponent); installation and loading are unconfirmed.")
-                        scanPluginSkills(at: version.appendingPathComponent("skills"), label: "Codex cache", source: source)
-                    }
-                }
-            }
-        }
-
-        mutating func scanPluginSkills(at root: URL, label: String, source: Source) {
-            var visited = Set<String>()
-            walkPluginSkills(at: root, label: label, source: source, remainingDepth: 5, visited: &visited)
-        }
-
-        private mutating func walkPluginSkills(at root: URL, label: String, source: Source,
-                                               remainingDepth: Int, visited: inout Set<String>) {
-            guard remainingDepth > 0, visited.insert(root.resolvingSymlinksInPath().path).inserted else { return }
-            if files.fileExists(atPath: root.appendingPathComponent("SKILL.md").path) {
-                addSkill(at: root, label: label, source: source)
-                return
-            }
-            for child in directories(at: root) {
-                if directories(at: child).isEmpty {
-                    addSkill(at: child, label: label, source: source)
-                } else {
-                    walkPluginSkills(at: child, label: label, source: source,
-                                     remainingDepth: remainingDepth - 1, visited: &visited)
-                }
-            }
+                                      issue: issues.isEmpty ? nil : issues.joined(separator: "\n"))
         }
 
         private mutating func directories(at root: URL) -> [URL] {
@@ -255,7 +194,8 @@ struct SkillCatalog {
 
 /// Small frontmatter reader for the scalar fields used by Agent Skills. Retains
 /// the original document for preview; unsupported YAML is never rewritten.
-private struct SkillMetadata {
+/// Shared with `PluginCatalog`: a plugin's skills carry the same frontmatter.
+struct SkillMetadata {
     var name: String?
     var summary: String?
     var issue: String?

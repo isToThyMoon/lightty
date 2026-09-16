@@ -78,6 +78,8 @@ struct ClaudeSessionProvider: AgentSessionProvider {
 
     /// `/rename` 往会话记录 `projects/<项目>/<id>.jsonl` 里追加一条 `custom-title`。
     /// 项目目录名是工作目录编码出来的、不可逆，所以按 ID 在各项目目录里找，不从目录反推。
+    var titleSignalRequiresIdleSession: Bool { true }
+
     func titleSignalFiles(for key: AgentSessionKey) -> [URL] {
         guard UUID(uuidString: key.nativeID) != nil else { return [] }
         let projects = URL(fileURLWithPath: key.sourceRoot).appendingPathComponent("projects")

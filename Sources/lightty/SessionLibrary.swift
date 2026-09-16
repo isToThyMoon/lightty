@@ -205,12 +205,14 @@ final class SessionLibrary {
 
     /// 改名文件变了（见 `SessionTitleSignals`）。文件事件晚于写入，读一次就够，不像钩子那样
     /// 要等官方目录跟上；已有待重试的请求不缩短它。
-    /// 只在钩子报过「没在跑」时才读：agent 跑着的时候记录文件每条消息都在写，而这一轮结束的
-    /// Stop 钩子会重读。没有钩子状态（没装插件）说不清在不在跑，也不读，否则一轮对话里
-    /// 会一次接一次地起 helper。
+    /// Transcript 每条消息都写，只在已知空闲时读；独立标题索引则在运行中也读，
+    /// 因为自动生成的标题可能在回合结束前到达。信号性质由 provider 决定。
     private func titleFileChanged(_ key: AgentSessionKey) {
         let states = runtime.panes.values.filter { $0.sessionKey == key }.map { $0.status?.state }
-        guard !states.isEmpty, states.allSatisfy({ $0 != nil && $0 != .thinking && $0 != .tool }) else { return }
+        guard !states.isEmpty,
+              let provider = activeProviders.first(where: { $0.source.agent == key.agent }) else { return }
+        if provider.titleSignalRequiresIdleSession,
+           !states.allSatisfy({ $0 != nil && $0 != .thinking && $0 != .tool }) { return }
         if metadataRequests[key] == nil { metadataRequests[key] = .init(baseline: recordIndex[key], attempts: 1) }
         metadataRefreshes.schedule(delay: 0)
     }

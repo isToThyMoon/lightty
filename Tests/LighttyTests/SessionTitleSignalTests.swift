@@ -30,9 +30,9 @@ final class ManualPathChanges {
 /// 用户自己在终端里敲 `/rename`：没有钩子，只有 agent 写改名文件这一个信号。
 @MainActor
 struct SessionTitleSignalTests {
-    private func fixture() throws -> (SessionModelFixture, ManualPathChanges, URL) {
+    private func fixture(agent: SessionAgent = .codex) throws -> (SessionModelFixture, ManualPathChanges, URL) {
         let changes = ManualPathChanges()
-        let f = try SessionModelFixture(titleChanges: changes.source)
+        let f = try SessionModelFixture(agent: agent, titleChanges: changes.source)
         let file = f.root.appendingPathComponent("session_index.jsonl")
         try Data("{}\n".utf8).write(to: file)
         f.catalog.signalFiles = [file]
@@ -82,7 +82,7 @@ struct SessionTitleSignalTests {
                              : "An ordinary transcript append costs one read, not five")
     }
 
-    /// 只有钩子报过「空闲」的会话才响应文件信号：
+    /// Claude transcript 只有钩子报过「空闲」才响应文件信号：
     enum SessionState: CustomStringConvertible {
         /// 钩子报了 thinking，一个回合正在跑——Stop 钩子到时再重读
         case runningTurn
@@ -93,7 +93,7 @@ struct SessionTitleSignalTests {
 
     @Test(arguments: [SessionState.runningTurn, .noHookState])
     func titleSignalIsIgnoredUnlessSessionIsKnownIdle(state: SessionState) async throws {
-        let (f, changes, file) = try fixture()
+        let (f, changes, file) = try fixture(agent: .claude)
         defer { f.close() }
         let record = f.record(), id = f.pane()
         switch state {
@@ -113,6 +113,26 @@ struct SessionTitleSignalTests {
         #expect(f.catalog.requestCount == reads,
                 state == .runningTurn ? "The Stop hook re-reads when the turn ends"
                                       : "No plugin, no way to tell a running turn from an idle one")
+    }
+
+    @Test(arguments: [PaneActivity.thinking, .tool, nil])
+    func generatedTitleArrivesWhileCodexIsStillRunning(state: PaneActivity?) async throws {
+        let (f, changes, file) = try fixture()
+        defer { f.close() }
+        let record = f.record(title: "icon不对，仓库中有claude code 和codex的icon")
+        let id = f.pane()
+        if let state {
+            try await open(record, in: id, f)
+            try await f.status(state, event: "UserPromptSubmit", pane: id, record: record)
+        } else {
+            f.library.associate(.attached(f.association(record)), with: id)
+            try await f.load([record])
+            try await settle(f)
+        }
+        try await f.wait { changes.watchedPaths == [file] }
+        f.catalog.records = [f.record(title: "修正Claude Code和Codex图标")]
+        changes.fire(file)
+        try await f.wait { f.library.paneState(for: id)?.title == "修正Claude Code和Codex图标" }
     }
 
     @Test func closedSessionsAreNoLongerWatchedAndReplacedFilesAreReopened() async throws {

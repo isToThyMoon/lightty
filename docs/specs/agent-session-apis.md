@@ -37,6 +37,7 @@
 两家都没有「会话改名」的钩子或订阅接口。用户自己敲 `/rename` 之后，lightty 靠监听改名时会写的文件得知
 （`AgentSessionProvider.titleSignalFiles`：Claude 往 `projects/<项目>/<id>.jsonl` 追加 `custom-title`，
 Codex 往配置根的 `session_index.jsonl` 追加 `thread_name`），**只当信号、不解析内容**，标题仍从上表的列表接口读。
+Codex 的索引也会写入自动生成的标题，运行中或没有钩子状态时仍响应；Claude 的转录文件每条消息都会写，只在钩子确认空闲时响应，运行中由 Stop 钩子触发重读。
 这两个位置不是公开契约，将来变了只会退回「等下一轮 Stop 钩子才更新」，不会读错。
 
 **敲命令必须分两步**：先送文本，再单独按一次回车键（`TerminalSurfaceView.sendReturn()`）。

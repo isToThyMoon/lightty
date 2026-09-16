@@ -20,9 +20,9 @@ final class PrimarySidebar: NSView {
     private let handoff = HandoffSidebarContent()
     private lazy var sessions = SessionsSidebarContent(library: library)
     private let library: SessionLibrary
-    private let search = ShellIconButton(symbol: "magnifyingglass", accessibilityLabel: L("Search"), target: nil, action: nil)
-    private let create = ShellIconButton(symbol: "doc.badge.plus", accessibilityLabel: L("New task"), target: nil, action: nil)
-    private let collapse = ShellIconButton(symbol: "sidebar.left", accessibilityLabel: L("Primary sidebar"), target: nil, action: nil)
+    private let search = ShellIconButton(symbol: ShellSymbol.search, accessibilityLabel: L("Search"), target: nil, action: nil)
+    private let create = ShellIconButton(symbol: ShellSymbol.create, accessibilityLabel: L("New task"), target: nil, action: nil)
+    private let collapse = ShellIconButton(symbol: ShellSymbol.sidebar, accessibilityLabel: L("Primary sidebar"), target: nil, action: nil)
 
     init(headerCenterY: CGFloat, mode: PrimarySidebarMode, library: SessionLibrary) {
         self.mode = mode
@@ -30,7 +30,7 @@ final class PrimarySidebar: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         modeSwitch.onSelect = { [weak self] value in self?.selectMode(value) }
-        hint.font = .systemFont(ofSize: 11)
+        hint.font = ShellStyle.Font.hint
         hint.textColor = ShellStyle.tertiaryText
         hint.isSelectable = false
         search.target = self; search.action = #selector(searchContent)
@@ -42,21 +42,21 @@ final class PrimarySidebar: NSView {
         }
         NSLayoutConstraint.activate([
             collapse.centerYAnchor.constraint(equalTo: topAnchor, constant: headerCenterY),
-            collapse.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            collapse.widthAnchor.constraint(equalToConstant: 28), collapse.heightAnchor.constraint(equalToConstant: 28),
+            collapse.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
+            collapse.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight), collapse.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             create.centerYAnchor.constraint(equalTo: collapse.centerYAnchor),
-            create.trailingAnchor.constraint(equalTo: collapse.leadingAnchor, constant: -4),
-            create.widthAnchor.constraint(equalToConstant: 28), create.heightAnchor.constraint(equalToConstant: 28),
+            create.trailingAnchor.constraint(equalTo: collapse.leadingAnchor, constant: -ShellStyle.inlineGap),
+            create.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight), create.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             search.centerYAnchor.constraint(equalTo: collapse.centerYAnchor),
-            search.trailingAnchor.constraint(equalTo: create.leadingAnchor, constant: -4),
-            search.widthAnchor.constraint(equalToConstant: 28), search.heightAnchor.constraint(equalToConstant: 28),
-            modeSwitch.topAnchor.constraint(equalTo: collapse.bottomAnchor, constant: 12),
-            modeSwitch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            modeSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            search.trailingAnchor.constraint(equalTo: create.leadingAnchor, constant: -ShellStyle.inlineGap),
+            search.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight), search.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            modeSwitch.topAnchor.constraint(equalTo: collapse.bottomAnchor, constant: ShellStyle.chromeGap),
+            modeSwitch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sectionInset),
+            modeSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sectionInset),
             modeSwitch.heightAnchor.constraint(equalToConstant: ModeSwitch.height),
             hint.topAnchor.constraint(equalTo: modeSwitch.bottomAnchor, constant: 8),
             hint.leadingAnchor.constraint(equalTo: modeSwitch.leadingAnchor, constant: 4),
-            hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sectionInset),
             host.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 14),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -113,7 +113,7 @@ final class PrimarySidebar: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        layer?.cornerRadius = 16
+        layer?.cornerRadius = ShellStyle.panelCornerRadius
         layer?.borderWidth = 1
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
@@ -208,7 +208,7 @@ final class ModeSwitch: NSView {
         for (value, button) in zip(PrimarySidebarMode.allCases, segments) {
             let active = value == selected
             button.attributedTitle = NSAttributedString(string: value.title, attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: active ? .semibold : .medium),
+                .font: active ? ShellStyle.Font.selectedMode : ShellStyle.Font.mode,
                 .foregroundColor: active ? ShellStyle.primaryText : ShellStyle.secondaryText,
                 .paragraphStyle: { let style = NSMutableParagraphStyle(); style.alignment = .center; style.lineBreakMode = .byTruncatingTail; return style }(),
             ])

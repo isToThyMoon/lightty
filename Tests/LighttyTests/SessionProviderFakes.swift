@@ -7,6 +7,7 @@ import LighttyCore
 protocol CatalogOnlyProvider: AgentSessionProvider {}
 
 extension CatalogOnlyProvider {
+    var titleSignalRequiresIdleSession: Bool { source.makeProvider().titleSignalRequiresIdleSession }
     func rename(_ key: AgentSessionKey, to title: String) throws {
         throw SessionCatalogError.unavailable("Catalog fixture does not rename")
     }
@@ -21,6 +22,7 @@ extension CatalogOnlyProvider {
 
 /// 可编排结果、记录调用的 provider 替身，用来走改名 / 删除 / 占用经 interface 的分支。
 final class FakeSessionProvider: AgentSessionProvider {
+    var titleSignalRequiresIdleSession: Bool { source.makeProvider().titleSignalRequiresIdleSession }
     enum Call: Equatable {
         case rename(AgentSessionKey, String), delete(AgentSessionKey), occupancy(AgentSessionKey)
         case checkDeletable(AgentSessionKey, [AgentProcessIdentity: AgentSessionKey]), observe
@@ -74,6 +76,7 @@ struct DeletionCheckOverride: AgentSessionProvider {
     let check: () throws -> Void
 
     var source: SessionCatalogSource { base.source }
+    var titleSignalRequiresIdleSession: Bool { base.titleSignalRequiresIdleSession }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         try base.page(archived: archived, cursor: cursor, cancelled: cancelled)
     }

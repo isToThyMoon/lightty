@@ -30,6 +30,9 @@ protocol AgentSessionProvider: SessionCatalogProvider {
     /// 没有这个信号，标题要等下一轮对话结束才更新。
     /// 文件还不存在（新会话还没写第一条）返回空，调用方稍后再问。
     func titleSignalFiles(for key: AgentSessionKey) -> [URL]
+    /// Transcript signals also fire for every message; defer those until idle. A dedicated
+    /// title index can announce an automatically generated name during an active turn.
+    var titleSignalRequiresIdleSession: Bool { get }
 }
 
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。

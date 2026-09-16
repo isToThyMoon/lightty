@@ -27,7 +27,7 @@ final class RefreshButton: NSButton {
         isBordered = false
         imagePosition = .imageOnly
         contentTintColor = ShellStyle.secondaryText
-        image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("Refresh"))
+        image = NSImage(systemSymbolName: ShellSymbol.refresh, accessibilityDescription: L("Refresh"))
         wantsLayer = true
         glyph.contentsGravity = .resizeAspect
         layer?.addSublayer(glyph)

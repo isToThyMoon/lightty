@@ -4,19 +4,72 @@ import LighttyCore
 /// lightty 应用壳层的视觉语言。
 ///
 /// 这里有意不读取 Ghostty 的主题：Ghostty config 只负责 terminal surface 与紧贴
-/// surface 的 pane chrome；窗口标题栏、任务侧栏和壳层控件使用独立的 Codex 浅色
-/// palette。否则深色终端会把整套应用导航染黑，壳层也会随 background-opacity 透出
-/// terminal glyph，既不稳定也不符合参考图。
+/// surface 的 pane chrome；窗口标题栏、两级侧栏和壳层控件使用独立的明暗 palette。
+/// 选择依据与组件入口见 docs/UI-harness.md；具体 token 数值只在代码维护。
 enum ShellStyle {
+    /// 操作菜单：行内紧凑、组间留白，尾注从属于操作文字。
+    enum Menu {
+        static let width: CGFloat = 240
+        static let inset: CGFloat = 6
+        static let rowInset: CGFloat = 10
+        static let rowHeight: CGFloat = 28
+        static let subtitleRowHeight: CGFloat = 46
+        static let separatorHeight: CGFloat = 13
+        static let iconSlot: CGFloat = 16
+        static let iconGap: CGFloat = 8
+        static let iconSize: CGFloat = 14
+        static let font = NSFont.systemFont(ofSize: 13)
+        static let surfaceOpacity: CGFloat = 0.90
+        static var separatorColor: NSColor { divider.withAlphaComponent(0.65) }
+    }
+    // MARK: Typography
+
+    /// 两级侧栏共享文字角色；字重表达层级，颜色表达主次或状态。
+    enum Font {
+        static let body = NSFont.systemFont(ofSize: 12)
+        static let listTitle = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        static let groupTitle = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        static let section = NSFont.systemFont(ofSize: 12, weight: .medium)
+        static let caption = NSFont.systemFont(ofSize: 10.5)
+        static let captionStrong = NSFont.systemFont(ofSize: 10.5, weight: .medium)
+        static let hint = NSFont.systemFont(ofSize: 11)
+        static let compactBody = NSFont.systemFont(ofSize: 11)
+        /// terminal 身份胶囊及展开面板的同一行，保持切换时文字不跳动。
+        static let compactTitle = NSFont.systemFont(ofSize: 11, weight: .medium)
+        static let statusEmphasis = NSFont.systemFont(ofSize: 11.5, weight: .semibold)
+        static let count = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        static let mode = NSFont.systemFont(ofSize: 13, weight: .medium)
+        static let selectedMode = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    }
+
+    // MARK: Spacing
+
+    /// 同一文本块的行间距、相邻图标/控件间距、行内容上下留白。
+    static let textLineGap: CGFloat = 2
+    static let inlineGap: CGFloat = 4
+    static let rowVerticalInset: CGFloat = 6
+    static let sectionInset: CGFloat = 16
+    static let listRowGap: CGFloat = 2
+
+    // MARK: Icons
+
+    /// 字形尺寸与命中区域分别定义；紧凑树行保留较小的操作槽位。
+    static let toolbarIconSize: CGFloat = 12.5
+    static let compactIconSize: CGFloat = 10
+    static let closeIconSize: CGFloat = 8.5
+    static let listActionSize: CGFloat = 26
+    static let compactActionSize: CGFloat = 20
+    static let statusDotSize: CGFloat = 6
+
     // MARK: Geometry
 
-    /// 双面板侧栏体系：标签页侧栏（docked）+ 任务浮层卡片（overlay）
+    /// 第二侧栏默认宽度与第一侧栏卡片宽度。
     static let tabColumnWidth: CGFloat = 200
     static let taskPanelWidth: CGFloat = 270
     static let panelInset: CGFloat = 6
     static let sidebarHorizontalInset: CGFloat = 10
     /// 统一行高系统：所有 chrome 行（tab 栏、pane header、侧栏标题带、搜索框）
-    /// 共用 28pt——与 macOS 标题栏同高，这是系统给定的模数基准。行间距统一 12。
+    /// 共用应用的 28pt 模数；原生标题栏的实际位置由窗口测量。
     static let chromeRowHeight: CGFloat = 28
     static let chromeGap: CGFloat = 12
 
@@ -28,7 +81,11 @@ enum ShellStyle {
     static let paletteTopRatio: CGFloat = 0.10
     static let paletteRowGap: CGFloat = 6
     static let rowCornerRadius: CGFloat = 9
+    /// 第二侧栏的紧凑树行；容器、叶子与拖拽快照共用轮廓。
+    static let compactRowCornerRadius: CGFloat = 7
     static let controlCornerRadius: CGFloat = 8
+    static let panelCornerRadius: CGFloat = 16
+    static let capsuleCornerRadius: CGFloat = 6
     static let animationDuration: TimeInterval = 0.22
     /// 侧栏开合专用：ease-in-out cubic（实测手感优于 easeOutExpo）
     static let sidebarAnimationDuration: TimeInterval = 0.28
@@ -53,15 +110,23 @@ enum ShellStyle {
     // MARK: Palette（明暗动态色：浅色为 Codex 参考，深色为配套暖灰紫）
 
     /// 与侧栏同色，拼成一体的应用 chrome；保持完全不透明，不继承 terminal opacity。
-    static let titlebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
+    static let titlebarBackground = sidebarBackground
     /// 侧栏底色；抽屉覆盖 terminal，必须完全不透明。
     static let sidebarBackground = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
+    /// 设置页导航里主分组的常驻底色。hover 与选中都是在导航底色上往「更显眼」一侧走
+    /// （浅色压暗、深色提亮），分组底色与它们同向就只差一两个色阶、分不出来；
+    /// 所以反着走：浅色提亮成浮起的面，深色压暗成下沉的槽。
+    static let navigationGroupFill = NSColor.shellDynamic(light: 0xFCFBFA, dark: 0x1F1D24)
     static let controlFill = NSColor.shellDynamic(light: 0xEFEBE9, dark: 0x323037)
     /// 输入区域需与旧版灰色 popover 和新版玻璃材质都保持明暗差，不依赖描边。
     static let inputFill = NSColor.shellDynamic(light: 0xE2DDDA, dark: 0x424047)
     static let inputHoverFill = NSColor.shellDynamic(light: 0xD8D2CE, dark: 0x4C4952)
     /// 抬升面：浮在 chrome 之上的卡片（搜索浮层预览等），浅色纯白、深色亮一档
     static let raisedSurface = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x2E2C33)
+    /// 多栏浏览器从来源、条目到正文逐级提亮，用连续底色表达层级，避免框线切割。
+    static let browserNavigationBackground = NSColor.shellDynamic(light: 0xF3F0EE, dark: 0x242229)
+    static let browserListBackground = NSColor.shellDynamic(light: 0xFAF8F7, dark: 0x29272E)
+    static let browserDetailBackground = raisedSurface
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
     static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)
@@ -102,6 +167,9 @@ enum ShellStyle {
     static func navigationTint(_ alpha: CGFloat) -> NSColor {
         navigationAccent.withAlphaComponent(alpha)
     }
+    /// 容器提供归属提示，当前终端提供更强的定位提示。
+    static var activeContainerFill: NSColor { navigationTint(0.08) }
+    static var activeItemFill: NSColor { navigationTint(0.14) }
 
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
@@ -278,7 +346,7 @@ final class ShellIconButton: NSButton, HoverResyncing {
         fillLayer.actions = ["backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull()]
         layer?.insertSublayer(fillLayer, at: 0)
         contentTintColor = ShellStyle.secondaryText
-        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .medium)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: ShellStyle.toolbarIconSize, weight: .medium)
         setButtonType(.momentaryChange)
         updateAppearance()
     }
@@ -555,8 +623,12 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
         return !showsSelectionOnlyWhenFocused || isEmphasized
     }
 
+    /// 自带常驻底色的行（设置页的主分组）关掉 hover：浅色 hover 铺满整行，
+    /// 会在较深的分组底色外圈出一道亮边，连组间留白也一起染上。
+    var drawsHover = true
+
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isHovered, !drawsSelection else { return }
+        guard drawsHover, isHovered, !drawsSelection else { return }
         ShellStyle.hoverFill.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: 2, dy: 2),

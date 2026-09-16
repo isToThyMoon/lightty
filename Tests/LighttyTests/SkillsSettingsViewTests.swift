@@ -79,26 +79,25 @@ struct SkillsSettingsViewTests {
         #expect(skills.convert(skills.bounds, to: reopened).minX == 160)
     }
 
-    @Test func agentGroupsCollapseIndependentlyAndRestoreFromDisk() throws {
+    @Test func legacyAgentCollapsePreferencesDoNotHideBuiltInSkills() throws {
         let (fixtureView, root) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let preferences = FilePreferences(fileURL: root.appendingPathComponent("groups.json"))
         let view = SkillsSettingsView(snapshot: fixtureView.snapshot, preferences: preferences)
-        view.selectFilter(.source("Figma"))
+        view.selectFilter(.skill("skill-creator"))
         let initialRows = view.navigationTable.numberOfRows
         let selected = view.selectedID
-        view.toggleGroup("plugin:codex")
-        #expect(view.navigationTable.numberOfRows == initialRows - 1)
-        #expect(view.selectedID == selected)
-        #expect(view.filter == .source("Figma"))
         view.toggleGroup("builtIn:codex")
-        #expect(view.navigationTable.numberOfRows == initialRows - 2)
+        #expect(view.navigationTable.numberOfRows == initialRows)
+        // Old persisted collapse preferences no longer hide built-in skills.
+        #expect(view.selectedID == selected)
+        #expect(view.filter == .skill("skill-creator"))
         preferences.flush()
         let reopened = SkillsSettingsView(snapshot: fixtureView.snapshot,
             preferences: FilePreferences(fileURL: preferences.fileURL))
-        #expect(reopened.navigationTable.numberOfRows == initialRows - 2)
-        reopened.toggleGroup("plugin:codex")
-        #expect(reopened.navigationTable.numberOfRows == initialRows - 1)
+        #expect(reopened.navigationTable.numberOfRows == initialRows)
+        reopened.toggleGroup("builtIn:codex")
+        #expect(reopened.navigationTable.numberOfRows == initialRows)
     }
 
     @Test func builtInNavigationSelectsTheActualSkill() throws {
@@ -114,22 +113,36 @@ struct SkillsSettingsViewTests {
         #expect(!labels.contains(L("Built-in skills")))
     }
 
-    @Test func pluginNavigationSeparatesSources() throws {
+    @Test func theFinderButtonOpensTheSkillFolderRatherThanTheFileItself() throws {
         let (view, root) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        let original = try #require(view.snapshot.skills.first { $0.origin == .plugin })
-        let other = SkillRecord(id: "other-plugin", name: original.name, summary: original.summary,
-                               content: original.content, fileURL: original.fileURL,
-                               sourceID: "plugin:claude:figma", sourceTitle: "Claude · figma",
-                               sourceURL: nil, origin: .plugin, locations: [], issue: nil)
-        view.replaceSnapshot(.init(skills: view.snapshot.skills + [other], warnings: []))
-        for record in [original, other] {
-            view.selectFilter(.source(record.sourceID))
-            #expect(view.filteredSkills.map(\.id) == [record.id])
-            #expect(view.navigationTable.selectedRow >= 0)
-            view.refreshLocalization()
-            #expect(view.filter == .source(record.sourceID))
-        }
+        let skill = try #require(view.snapshot.skills.first { $0.name == "code-review" })
+        view.selectFilter(.all)
+        view.selectList(id: skill.id)
+        // 目录结构交给 Finder：正文栏只讲 SKILL.md。
+        #expect(view.skillFolderURL == skill.fileURL.deletingLastPathComponent())
+        #expect(view.skillFolderURL?.lastPathComponent == "code-review")
+    }
+
+    @Test func theUnusedFilterHoldsOnlyWhatClaudeCodeHasNeverRun() throws {
+        let (view, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let used = try #require(view.snapshot.skills.first { $0.name == "code-review" })
+        var withUsage = used
+        withUsage.usage = UsageRecord(count: 7, lastUsed: Date(timeIntervalSinceNow: -3_600))
+        view.replaceSnapshot(.init(skills: view.snapshot.skills.map { $0.id == used.id ? withUsage : $0 },
+                                   warnings: []))
+        view.selectFilter(.unused)
+        #expect(!view.filteredSkills.contains { $0.name == "code-review" })
+        #expect(view.filteredSkills.contains { $0.name == "tdd" })
+        // 内置技能不进这一批：Claude 的统计里没有它们，缺记录不等于没用过。
+        #expect(!view.filteredSkills.contains { $0.origin == .builtIn })
+        view.selectList(id: withUsage.id)
+        view.selectFilter(.all)
+        view.selectList(id: withUsage.id)
+        let source = descendants(view).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue.contains(used.sourceTitle) }
+        #expect(try #require(source).stringValue.contains("7"))
     }
 
     @Test func dividerDraggingResizesAdjacentColumnsAndClamps() throws {
@@ -173,7 +186,8 @@ struct SkillsSettingsViewTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("skills-view-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         func skill(_ name: String, source: String = "mattpocock/skills", origin: SkillOrigin = .installed,
-                   summary: String = "Review code for clear interfaces and maintainable behavior.") throws -> SkillRecord {
+                   summary: String = "Review code for clear interfaces and maintainable behavior.",
+                   title: String? = nil) throws -> SkillRecord {
             let file = root.appendingPathComponent(name + "/SKILL.md")
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             let content = """
@@ -209,7 +223,8 @@ struct SkillsSettingsViewTests {
             """
             try content.write(to: file, atomically: true, encoding: .utf8)
             return SkillRecord(id: name, name: name, summary: summary, content: content, fileURL: file,
-                               sourceID: source, sourceTitle: source, sourceURL: URL(string: "https://example.com/skills"),
+                               sourceID: source, sourceTitle: title ?? source,
+                               sourceURL: URL(string: "https://example.com/skills"),
                                origin: origin, locations: [.init(label: "Shared", url: file), .init(label: "Claude", url: file)], issue: nil)
         }
         let records = try [
@@ -220,7 +235,6 @@ struct SkillsSettingsViewTests {
             skill("lark-doc", source: "Lark CLI", summary: "读取、创建和编辑飞书云文档。"),
             skill("lark-im", source: "Lark CLI", summary: "收发消息和管理群聊。"),
             skill("weekly-summary", source: "Local", origin: .local, summary: "整理本周工作，记录关键进展。"),
-            skill("figma-use", source: "Figma", origin: .plugin),
             skill("skill-creator", source: "Codex", origin: .builtIn),
         ]
         let store = SkillOrganization(fileURL: root.appendingPathComponent("organization.json"))
@@ -244,8 +258,6 @@ struct SkillsSettingsViewTests {
         view.selectFilter(.source("mattpocock/skills"))
         view.skillTable.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
         #expect(view.selectedSkill?.name == "diagnosing-bugs")
-        view.selectFilter(.source("Figma"))
-        #expect(view.filteredSkills.map(\.name) == ["figma-use"])
         view.selectFilter(.builtIn)
         #expect(view.selectedSkill?.name == "skill-creator")
     }
@@ -328,7 +340,8 @@ struct SkillsSettingsViewTests {
                 let text = try #require(descendants(view).compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "skill-document" })
                 let preview = try #require(text.enclosingScrollView)
                 #expect(preview.frame.width >= 260)
-                #expect(preview.frame.minX > list.frame.maxX)
+                // The preview hangs off the detail column, so compare in one coordinate space.
+                #expect(preview.convert(preview.bounds, to: view).minX > list.convert(list.bounds, to: view).maxX)
                 #expect(text.string.contains("Start with the problem"))
                 #expect(!text.isEditable)
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {

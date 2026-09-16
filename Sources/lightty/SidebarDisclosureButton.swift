@@ -11,10 +11,10 @@ final class SidebarDisclosureButton: NSButton {
         super.init(frame: frame)
         cell = DisclosureCell(textCell: "")
         isBordered = false
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = ShellStyle.Font.section
         imagePosition = .imageTrailing
-        image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        image = NSImage(systemSymbolName: ShellSymbol.disclosure, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: ShellStyle.compactIconSize, weight: .medium))
         contentTintColor = ShellStyle.primaryText
         addSubview(chevron)
         disclosureLayer = chevron.glyph
@@ -80,8 +80,8 @@ final class SidebarDisclosureButton: NSButton {
         override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); applyColors() }
         private func applyColors() {
             let color = NSColor(cgColor: ShellStyle.primaryText.shellResolvedCGColor(for: effectiveAppearance)) ?? ShellStyle.primaryText
-            let symbol = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))?
+            let symbol = NSImage(systemSymbolName: ShellSymbol.disclosure, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: ShellStyle.compactIconSize, weight: .medium))?
                 .withSymbolConfiguration(.init(paletteColors: [color]))
             CATransaction.begin()
             CATransaction.setDisableActions(true)

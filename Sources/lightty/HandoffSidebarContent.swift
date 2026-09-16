@@ -217,7 +217,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         tableView.style = .plain
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.rowHeight = 48
-        tableView.intercellSpacing = NSSize(width: 0, height: 2)
+        tableView.intercellSpacing = NSSize(width: 0, height: ShellStyle.listRowGap)
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         // 单击/双击与拖拽重排都走 ReorderingTableView 的自建循环（跟手、无脱手图）。
@@ -244,7 +244,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         let scroll = SidebarListScrollView()
         scroll.documentView = tableView
 
-        emptyLabel.font = .systemFont(ofSize: 12)
+        emptyLabel.font = ShellStyle.Font.body
         emptyLabel.textColor = ShellStyle.tertiaryText
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
@@ -306,14 +306,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
     }
 
     private func relativeTime(_ date: Date) -> String {
-        let seconds = max(0, -date.timeIntervalSinceNow)
-        if seconds < 60 { return L("just now") }
-        if seconds < 3_600 { return L("%d min ago", Int(seconds / 60)) }
-        if seconds < 86_400 { return L("%d hr ago", Int(seconds / 3_600)) }
-        if seconds < 604_800 { return L("%d days ago", Int(seconds / 86_400)) }
-        let formatter = DateFormatter()
-        formatter.dateFormat = L("MMM d")
-        return formatter.string(from: date)
+        RelativeTime.text(date, localize: { L($0) })
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
@@ -327,7 +320,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         else { return }
 
         var items: [ShellMenuPopover.Item] = [
-            .action(L("Rename task…")) { [weak self, weak sender] in
+            .action(L("Rename task…"), symbol: ShellSymbol.rename) { [weak self, weak sender] in
                 guard let anchor = sender ?? self else { return }
                 NameEditorPopover.present(
                     from: anchor, title: L("Rename task"),
@@ -345,10 +338,10 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         ]
         // 状态不提供手动修改也不展示：活跃/休眠由 pane 绑定派生；
         // 文件 status 字段已弃用（见 docs/task-format.md）。
-        items.append(.action(L("Open handoff document")) {
+        items.append(.action(L("Open handoff document"), symbol: "doc.text") {
             NSWorkspace.shared.open(entry.fileURL)
         })
-        items.append(.action(L("Open with…")) { [weak self, weak sender] in
+        items.append(.action(L("Open with…"), symbol: "arrow.up.forward.app") { [weak self, weak sender] in
             guard let anchor = sender ?? self else { return }
             // 列系统里注册可打开 md 的应用；勾选 = 当前系统默认（想全局换默认
             // 走 Finder 显示简介 →「全部更改」，此处只做单次选择不持久化）。
@@ -376,11 +369,11 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
             }
             ShellMenuPopover.present(from: anchor, items: appItems)
         })
-        items.append(.action(L("Reveal in Finder")) {
+        items.append(.action(L("Reveal in Finder"), symbol: ShellSymbol.project) {
             NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
         })
         items.append(.separator)
-        items.append(.action(L("Archive task")) {
+        items.append(.action(L("Archive task"), symbol: ShellSymbol.archive) {
             do {
                 // 移入 archive/ 子目录（文件保留，列表消失）；绑定中的终端全部解绑。
                 try AppState.shared.taskBindings.archiveTask(at: entry.fileURL)
@@ -461,15 +454,15 @@ private final class HandoffListCell: NSView {
     private var rendered: HandoffRowSnapshot?
 
     init(target: AnyObject, action: Selector) {
-        detailButton = ShellIconButton(symbol: "ellipsis", accessibilityLabel: L("More actions"),
+        detailButton = ShellIconButton(symbol: ShellSymbol.more, accessibilityLabel: L("More actions"),
                                        target: target, action: action)
         super.init(frame: .zero)
         dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3
-        title.font = .systemFont(ofSize: 12.5, weight: .medium)
+        dot.layer?.cornerRadius = ShellStyle.statusDotSize / 2
+        title.font = ShellStyle.Font.listTitle
         title.textColor = ShellStyle.primaryText
         title.lineBreakMode = .byTruncatingTail
-        subtitle.font = .systemFont(ofSize: 10.5)
+        subtitle.font = ShellStyle.Font.caption
         subtitle.textColor = ShellStyle.secondaryText
         subtitle.lineBreakMode = .byTruncatingTail
         for view in [dot, title, subtitle, detailButton] {
@@ -478,23 +471,23 @@ private final class HandoffListCell: NSView {
         }
         NSLayoutConstraint.activate([
             // Align the leading status marker with the other primary-sidebar rows.
-            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
             dot.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
+            dot.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
+            dot.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
             title.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 9),
             title.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: ShellStyle.rowVerticalInset),
 
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: ShellStyle.textLineGap),
 
             detailButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             detailButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            detailButton.widthAnchor.constraint(equalToConstant: 26),
-            detailButton.heightAnchor.constraint(equalToConstant: 26),
+            detailButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            detailButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
         ])
     }
 

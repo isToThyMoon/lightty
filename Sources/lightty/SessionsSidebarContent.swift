@@ -56,21 +56,21 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         SearchPaletteStyle.configure(search)
         newProject.target = self; newProject.action = #selector(createProject)
         more.target = self; more.action = #selector(loadMore)
-        status.font = .systemFont(ofSize: 10.5)
+        status.font = ShellStyle.Font.caption
         status.textColor = ShellStyle.secondaryText
         status.isSelectable = false
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        projectHeading.font = .systemFont(ofSize: 12, weight: .medium)
+        projectHeading.font = ShellStyle.Font.section
         projectHeading.contentTintColor = ShellStyle.primaryText
         projectHeading.isBordered = false
         projectHeading.imagePosition = .imageTrailing
         projectHeading.target = self
         projectHeading.action = #selector(toggleProjects)
-        recentHeading.font = .systemFont(ofSize: 12, weight: .medium)
+        recentHeading.font = ShellStyle.Font.section
         recentHeading.textColor = ShellStyle.primaryText
         newProject.title = ""
-        newProject.image = NSImage(systemSymbolName: "plus", accessibilityDescription: L("New project…"))
+        newProject.image = NSImage(systemSymbolName: ShellSymbol.add, accessibilityDescription: L("New project…"))
         newProject.toolTip = L("New project…")
         newProject.setAccessibilityLabel(L("New project…"))
         management.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: L("Filter sessions"))
@@ -78,7 +78,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         management.setAccessibilityLabel(L("Filter sessions"))
         management.target = self; management.action = #selector(showManagement)
         refresh.target = self; refresh.action = #selector(refreshOrCancel)
-        projectMore.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: L("Project actions"))
+        projectMore.image = NSImage(systemSymbolName: ShellSymbol.more, accessibilityDescription: L("Project actions"))
         projectMore.setAccessibilityLabel(L("Project actions"))
         projectMore.isEnabled = false
         for button in [management, newProject, projectMore, refresh] {
@@ -92,7 +92,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         actions.translatesAutoresizingMaskIntoConstraints = false
         projectHeader.addSubview(actions)
         NSLayoutConstraint.activate([
-            actions.leadingAnchor.constraint(equalTo: projectHeader.leadingAnchor, constant: 10),
+            actions.leadingAnchor.constraint(equalTo: projectHeader.leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
             actions.trailingAnchor.constraint(equalTo: projectHeader.trailingAnchor, constant: -4),
             actions.centerYAnchor.constraint(equalTo: projectHeader.centerYAnchor),
         ])
@@ -116,7 +116,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         recentActions.translatesAutoresizingMaskIntoConstraints = false
         recentHeader.addSubview(recentActions)
         NSLayoutConstraint.activate([
-            recentActions.leadingAnchor.constraint(equalTo: recentHeader.leadingAnchor, constant: 10),
+            recentActions.leadingAnchor.constraint(equalTo: recentHeader.leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
             recentActions.trailingAnchor.constraint(equalTo: recentHeader.trailingAnchor, constant: -4),
             recentActions.centerYAnchor.constraint(equalTo: recentHeader.centerYAnchor),
         ])
@@ -128,7 +128,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self; table.delegate = self
         table.target = self; table.action = #selector(activateRow)
-        table.intercellSpacing = NSSize(width: 0, height: searchMode ? ShellStyle.paletteRowGap : 2)
+        table.intercellSpacing = NSSize(width: 0, height: searchMode ? ShellStyle.paletteRowGap : ShellStyle.listRowGap)
         table.setAccessibilityLabel(L("CLI sessions"))
         table.registerForDraggedTypes([Self.sessionPasteboardType])
         table.setDraggingSourceOperationMask(.move, forLocal: true)
@@ -292,10 +292,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     }
 
     /// 筛选浮层的内容。这个浮层里每一条都是「筛选 / 排序 / 打开哪个选择器」——
-    /// 同一件事的几种选择，所以只用分组标题分段，不画线；也不放当场执行的动作
+    /// 按筛选、排序、原生选择器分组，用带留白的细线分段；不放刷新动作
     /// （刷新在标题行上的按钮里）。
     func managementItems() -> [ShellMenuPopover.Item] {
-        var items: [ShellMenuPopover.Item] = [.header(L("Filter sessions"))]
+        var items: [ShellMenuPopover.Item] = []
         for (index, title) in [L("All agents"), SessionAgent.codex.sourceName, SessionAgent.claude.sourceName].enumerated() {
             items.append(.action(title, checked: agentFilter == index) { [weak self] in
                 self?.agentFilter = index; self?.reload()
@@ -305,13 +305,13 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             .action(L("Archived"), checked: showingArchived) { [weak self] in
                 guard let self else { return }; self.setArchiveFilter(!self.showingArchived)
             },
-            .header(L("Sort sessions")),
+            .separator,
             .action(L("Recently updated"), checked: !sortByTitle) { [weak self] in self?.sortByTitle = false; self?.reload() },
             .action(L("Name"), checked: sortByTitle) { [weak self] in self?.sortByTitle = true; self?.reload() },
-            .header(L("Native resume picker…"))]
+            .separator]
         for agent in SessionAgent.allCases {
             guard let source = library.source(for: agent) else { continue }
-            items.append(.action(agent.sourceName) { [weak self] in
+            items.append(.action(L("Native resume picker…") + " · " + agent.sourceName, symbol: ShellSymbol.terminal) { [weak self] in
                 guard let controller = self?.window?.windowController as? TerminalWindowController else { return }
                 SessionResumeFlow.nativePicker(source: source, in: controller)
             })
@@ -543,7 +543,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             let agent = record.key.agent.sourceName
             let date = record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: Date()) } ?? ""
             let snippet = NSAttributedString(string: [date, record.workingDirectory ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: ShellStyle.secondaryText])
+                attributes: [.font: ShellStyle.Font.hint, .foregroundColor: ShellStyle.secondaryText])
             let result = PaletteRowView(name: record.title.isEmpty ? L("Untitled session") : record.title,
                 tag: agent, tagColor: ShellStyle.tertiaryText, snippet: snippet)
             result.onTap = { [weak self] in self?.open(record) }
@@ -596,13 +596,13 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         case .projectsHeading: break
         case .emptyProjects:
             cell.title.stringValue = L("No projects")
-            cell.title.font = .systemFont(ofSize: 11, weight: .regular)
+            cell.title.font = ShellStyle.Font.hint
             cell.title.textColor = ShellStyle.secondaryText
             cell.indent = 20
             cell.menuButton.isHidden = true
         case .heading:
             cell.title.stringValue = showingArchived ? L("Other archived sessions") : L("Recent sessions")
-            cell.title.font = .systemFont(ofSize: 12, weight: .medium)
+            cell.title.font = ShellStyle.Font.section
             cell.title.textColor = ShellStyle.primaryText
             cell.menuButton.isHidden = true
         case .project(let project):
@@ -611,7 +611,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             cell.projectIcon.isHidden = false
             cell.projectIcon.image = ProjectFolderIcons.image(expanded: !project.collapsed)
             cell.projectIcon.setAccessibilityLabel(project.collapsed ? L("Collapsed") : L("Expanded"))
-            cell.title.font = .systemFont(ofSize: 12, weight: .semibold)
+            cell.title.font = ShellStyle.Font.groupTitle
             cell.onMenu = { [weak self, weak cell] in if let cell { self?.projectMenu(project, from: cell.menuButton) } }
         case .session(let record, let projectID):
             cell.indent = projectID == nil ? 10 : 24
@@ -687,14 +687,14 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         let openPane = AppState.shared?.runningPanes()
             .first { paneIDs.contains($0.pane.dragIdentifier) }?.pane
         var items: [ShellMenuPopover.Item] = openPane == nil ? [
-            .action(L("Continue in new tab")) { [weak self] in self?.open(record) },
-            .action(L("Split in current tab")) { [weak self] in self?.open(record, destination: .split) },
-            .action(L("New window")) { [weak self] in self?.open(record, destination: .window) },
+            .action(L("Continue in new tab"), symbol: ShellSymbol.newTab) { [weak self] in self?.open(record) },
+            .action(L("Split in current tab"), symbol: ShellSymbol.splitRight) { [weak self] in self?.open(record, destination: .split) },
+            .action(L("New window"), symbol: ShellSymbol.newWindow) { [weak self] in self?.open(record, destination: .window) },
         ] : [
-            .action(L("Show terminal")) { [weak self] in self?.open(record) },
+            .action(L("Show terminal"), symbol: ShellSymbol.terminal) { [weak self] in self?.open(record) },
         ]
         if openPane == nil || openPane?.acceptsInjectedCommand == true {
-            items.append(.action(L("Rename session…")) { [weak self, weak openPane, weak anchor] in
+            items.append(.action(L("Rename session…"), symbol: ShellSymbol.rename) { [weak self, weak openPane, weak anchor] in
                 guard let self, let anchor else { return }
                 NameEditorPopover.present(
                     from: anchor, title: L("Rename session"),
@@ -711,25 +711,24 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             let archived = organization.isArchived(record)
             let archivedProject = organization.projectID(for: record).map { organization.archivedProjects.contains($0) } == true
             let title = archived ? (archivedProject ? L("Restore to recent sessions") : L("Restore session")) : L("Archive session")
-            items.append(.action(title) { [weak self] in
+            items.append(.action(title, symbol: archived ? ShellSymbol.restore : ShellSymbol.archive) { [weak self] in
                 self?.library.updateOrganization { $0.setArchived(!archived, session: record) }
             })
             items.append(.separator)
-            items.append(.header(L("Move to project")))
             for project in library.organization.projects where !library.organization.archivedProjects.contains(project.id) {
-                items.append(.action(project.name, checked: library.organization.projectID(for: record) == project.id) { [weak self] in
+                items.append(.action(L("Move to project") + " · " + project.name, checked: library.organization.projectID(for: record) == project.id, symbol: ShellSymbol.project) { [weak self] in
                     self?.library.updateOrganization { $0.move(record, to: project.id) }
                 })
             }
             if organization.projectID(for: record) != nil {
-                items.append(.action(L("Move to recent sessions")) { [weak self] in
+                items.append(.action(L("Move to recent sessions"), symbol: ShellSymbol.restore) { [weak self] in
                     self?.library.updateOrganization { $0.move(record, to: nil) }
                 })
             }
         }
         if !library.saving && library.organizationReady && library.storageError == nil {
             items.append(.separator)
-            items.append(.action(L("Delete session…"), destructive: true) { [weak self] in
+            items.append(.action(L("Delete session…"), destructive: true, symbol: ShellSymbol.delete) { [weak self] in
                 guard let self, let window = self.window else { return }
                 SessionDeletion.confirm(record, library: self.library, window: window)
             })
@@ -744,7 +743,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private func projectMenu(_ project: SessionProject, from anchor: NSView) {
         guard !library.saving, library.storageError == nil else { return }
         var items: [ShellMenuPopover.Item] = [
-            .action(L("Rename project")) { [weak self, weak anchor] in
+            .action(L("Rename project"), symbol: ShellSymbol.rename) { [weak self, weak anchor] in
                 guard let self, let anchor else { return }
                 NameEditorPopover.present(from: anchor, title: L("Rename project"), confirmLabel: L("Save")) { name in
                     self.library.updateOrganization { state in
@@ -752,20 +751,21 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                     }
                 }
             },
-            .action(L("Move project up")) { [weak self] in
+            .action(L("Move project up"), symbol: "arrow.up") { [weak self] in
                 self?.library.updateOrganization { state in
                     if let index = state.projects.firstIndex(where: { $0.id == project.id }), index > 0 {
                         state.projects.swapAt(index, index - 1)
                     }
                 }
             },
-            .action(L("Remove project"), destructive: true) { [weak self] in
+            .separator,
+            .action(L("Remove project"), destructive: true, symbol: ShellSymbol.delete) { [weak self] in
                 self?.library.updateOrganization { $0.removeProject(project.id) }
             },
         ]
         // Existing archives remain recoverable, but new project archiving is not offered.
         if library.organization.archivedProjects.contains(project.id) {
-            items.insert(.action(L("Restore project")) { [weak self] in
+            items.insert(.action(L("Restore project"), symbol: ShellSymbol.restore) { [weak self] in
                 self?.library.updateOrganization { $0.setArchived(false, projectID: project.id) }
             }, at: 0)
         }
@@ -788,7 +788,7 @@ private final class SessionListCell: NSTableCellView {
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.lineBreakMode = .byTruncatingTail
                 (label as NSString).draw(in: NSRect(x: 12, y: 12, width: size.width - 24, height: 18),
-                    withAttributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium),
+                    withAttributes: [.font: ShellStyle.Font.listTitle,
                                      .foregroundColor: ShellStyle.primaryText, .paragraphStyle: paragraph])
             }
             return true
@@ -813,13 +813,13 @@ private final class SessionListCell: NSTableCellView {
         detailLeading.constant = agent == nil ? 0 : 16
     }
     let location = SessionTruncatingLabel(labelWithString: "")
-    let menuButton = ShellIconButton(symbol: "ellipsis", accessibilityLabel: L("Session actions"), target: nil, action: nil)
+    let menuButton = ShellIconButton(symbol: ShellSymbol.more, accessibilityLabel: L("Session actions"), target: nil, action: nil)
     var onMenu: (() -> Void)?
     func resetContent() {
         onMenu = nil
         title.stringValue = ""
         title.fullText = nil
-        title.font = .systemFont(ofSize: 12.5, weight: .medium)
+        title.font = ShellStyle.Font.listTitle
         title.textColor = ShellStyle.primaryText
         detail.stringValue = ""
         setAgent(nil)
@@ -832,15 +832,15 @@ private final class SessionListCell: NSTableCellView {
     }
     override init(frame: NSRect) {
         super.init(frame: frame)
-        title.font = .systemFont(ofSize: 12.5, weight: .medium)
+        title.font = ShellStyle.Font.listTitle
         title.textColor = ShellStyle.primaryText
         title.lineBreakMode = .byTruncatingTail
         projectIcon.isHidden = true
         projectIcon.contentTintColor = ShellStyle.primaryText
-        detail.font = .systemFont(ofSize: 10.5)
+        detail.font = ShellStyle.Font.caption
         detail.textColor = ShellStyle.secondaryText
         detail.lineBreakMode = .byTruncatingTail
-        location.font = .systemFont(ofSize: 10.5)
+        location.font = ShellStyle.Font.caption
         location.textColor = ShellStyle.tertiaryText
         location.lineBreakMode = .byTruncatingMiddle
         menuButton.isBordered = false; menuButton.target = self; menuButton.action = #selector(openMenu)
@@ -848,30 +848,30 @@ private final class SessionListCell: NSTableCellView {
         agentIcon.isHidden = true
         agentIcon.contentTintColor = ShellStyle.secondaryText
         for view in [title, detail, location, menuButton, projectIcon, agentIcon] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
-        titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sidebarHorizontalInset)
         detailLeading = detail.leadingAnchor.constraint(equalTo: title.leadingAnchor)
         NSLayoutConstraint.activate([
             titleLeading,
-            projectIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            projectIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
             projectIcon.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             projectIcon.widthAnchor.constraint(equalToConstant: 18),
             projectIcon.heightAnchor.constraint(equalToConstant: 16),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: ShellStyle.rowVerticalInset),
             title.trailingAnchor.constraint(equalTo: menuButton.leadingAnchor, constant: -4),
             detailLeading,
             agentIcon.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             agentIcon.centerYAnchor.constraint(equalTo: detail.centerYAnchor),
             agentIcon.widthAnchor.constraint(equalToConstant: 11),
             agentIcon.heightAnchor.constraint(equalToConstant: 11),
-            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: ShellStyle.textLineGap),
             detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             location.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             location.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            location.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 2),
+            location.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: ShellStyle.textLineGap),
             menuButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            menuButton.widthAnchor.constraint(equalToConstant: 26),
-            menuButton.heightAnchor.constraint(equalToConstant: 26),
+            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
         ])
     }
     convenience init() { self.init(frame: .zero) }

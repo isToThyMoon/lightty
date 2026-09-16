@@ -185,7 +185,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
         // —— 第一行：与胶囊逐像素同构（dot 领距 6、间距 6、11pt medium、centerY=10）
         dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 3.5
+        dotView.layer?.cornerRadius = PaneIdentityMetrics.dotSize / 2
 
         // 三个输入框都是单行编辑器：usesSingleLineMode 只管显示截断，编辑态
         // 还要 wraps=false + isScrollable=true——否则长文本（尤其 CJK）在 20pt
@@ -194,7 +194,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             ShellTextFieldStyle.configure(field)
         }
 
-        nameField.font = .systemFont(ofSize: 11, weight: .medium)
+        nameField.font = ShellStyle.Font.compactTitle
         nameField.delegate = self
 
         // —— 扩展区
@@ -203,7 +203,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskField.identifier = PaneIdentityPanel.taskFieldIdentifier
         taskField.onTap = { [weak self] in self?.toggleTaskList() }
 
-        taskEditor.font = .systemFont(ofSize: 11)
+        taskEditor.font = ShellStyle.Font.compactBody
         taskEditor.isBordered = false
         taskEditor.drawsBackground = false
         taskEditor.focusRingType = .none
@@ -214,7 +214,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         listContainer.isHidden = true
         listContainer.wantsLayer = true
         listSeparator.wantsLayer = true
-        searchField.font = .systemFont(ofSize: 11)
+        searchField.font = ShellStyle.Font.compactBody
         searchField.isBordered = false
         searchField.drawsBackground = false
         searchField.focusRingType = .none
@@ -495,7 +495,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         nameField.placeholderAttributedString = NSAttributedString(
             string: L("Name this terminal"),
             attributes: [
-                .font: nameField.font ?? NSFont.systemFont(ofSize: 11),
+                .font: nameField.font ?? ShellStyle.Font.compactTitle,
                 .foregroundColor: foreground.withAlphaComponent(0.3),
             ])
         agentIcon.contentTintColor = foreground
@@ -504,7 +504,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         searchField.placeholderAttributedString = NSAttributedString(
             string: L("Search, or type a new task name and press Return"),
             attributes: [
-                .font: searchField.font ?? NSFont.systemFont(ofSize: 11),
+                .font: searchField.font ?? ShellStyle.Font.compactBody,
                 .foregroundColor: foreground.withAlphaComponent(0.3),
             ])
         taskField.apply(taskName: boundTaskName, isOpen: listOpen, foreground: foreground)
@@ -975,7 +975,7 @@ private final class TaskRowView: NSView {
         check.isHidden = !checked
 
         let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 11)
+        label.font = ShellStyle.Font.compactBody
         label.lineBreakMode = .byTruncatingTail
         switch role {
         case .choice: label.textColor = foreground.withAlphaComponent(0.85)
@@ -1094,8 +1094,8 @@ private final class TaskFieldRow: NSView {
         layer?.cornerRadius = 6
         HoverCursor.installPointingHand(on: self)
 
-        caption.font = .systemFont(ofSize: 10.5)
-        value.font = .systemFont(ofSize: 11)
+        caption.font = ShellStyle.Font.caption
+        value.font = ShellStyle.Font.compactBody
         value.lineBreakMode = .byTruncatingTail
         value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         caption.setContentCompressionResistancePriority(.required, for: .horizontal)

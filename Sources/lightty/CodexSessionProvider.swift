@@ -46,6 +46,8 @@ struct CodexSessionProvider: AgentSessionProvider {
 
     /// 线程名追加在配置根下的 `session_index.jsonl`（`{"id","thread_name","updated_at"}`），
     /// 所有会话共用这一份，所以别的会话改名也会让这里多读一次，无妨。
+    var titleSignalRequiresIdleSession: Bool { false }
+
     func titleSignalFiles(for key: AgentSessionKey) -> [URL] {
         let index = URL(fileURLWithPath: key.sourceRoot).appendingPathComponent("session_index.jsonl")
         return FileManager.default.fileExists(atPath: index.path) ? [index] : []
