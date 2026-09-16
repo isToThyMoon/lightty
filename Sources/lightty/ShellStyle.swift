@@ -51,6 +51,13 @@ enum ShellStyle {
     static let sectionInset: CGFloat = 16
     static let listRowGap: CGFloat = 2
 
+    /// 双侧栏的模式/标题带共用高度及列表间距；标题栏红绿灯位置仍由窗口测量。
+    enum SidebarHeader {
+        static let height: CGFloat = 32
+        static let listGap: CGFloat = 12
+        static var offsetFromTrafficLights: CGFloat { chromeRowHeight / 2 + chromeGap }
+    }
+
     // MARK: Icons
 
     /// 字形尺寸与命中区域分别定义；紧凑树行保留较小的操作槽位。
@@ -327,6 +334,26 @@ final class ShellIconButton: NSButton, HoverResyncing {
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { updateAppearance() } }
 
+    /// 行内操作只隐藏绘制，保留布局、键盘及辅助功能入口。
+    var revealsWithRowInteraction = false {
+        didSet { focusRingType = revealsWithRowInteraction ? .exterior : .none; updateAppearance() }
+    }
+    var rowInteractionVisible = false { didSet { updateAppearance() } }
+    var menuPresented = false { didSet { updateAppearance() } }
+    private var hasKeyboardFocus = false
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        hasKeyboardFocus = accepted
+        updateAppearance()
+        return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { hasKeyboardFocus = false }
+        updateAppearance()
+        return accepted
+    }
+
     var isActive = false { didSet { updateAppearance() } }
     var onHoverChange: ((Bool) -> Void)?
 
@@ -426,6 +453,12 @@ final class ShellIconButton: NSButton, HoverResyncing {
     }
 
     private func updateAppearance() {
+        if revealsWithRowInteraction && !rowInteractionVisible && !menuPresented
+            && !hasKeyboardFocus && !isHovered {
+            fillLayer.backgroundColor = NSColor.clear.cgColor
+            contentTintColor = .clear
+            return
+        }
         let fill: NSColor = isHovered
             ? ShellStyle.pressedFill
             : (isActive ? ShellStyle.selectionFill : .clear)
@@ -557,6 +590,10 @@ class ShellDropTargetRowView: NSTableRowView {
     }
 }
 
+protocol SidebarRowActionContent: AnyObject {
+    var rowActionButton: ShellIconButton { get }
+}
+
 /// 任务行的圆角 hover / selection 背景，替换 NSTableView 默认的蓝色高亮。
 final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     private var tracking: NSTrackingArea?
@@ -565,8 +602,22 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     func setSidebarHovered(_ value: Bool) {
         guard isHovered != value else { return }
         isHovered = value
+        updateRowActions()
         needsDisplay = true
     }
+
+    private func updateRowActions() {
+        for case let content as SidebarRowActionContent in subviews {
+            content.rowActionButton.rowInteractionVisible = isHovered || (isSelected && isEmphasized)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateRowActions()
+    }
+
+    override var isSelected: Bool { didSet { updateRowActions() } }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -649,6 +700,7 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     /// 那一行会保持旧样子直到别的原因触发重绘。
     override var isEmphasized: Bool {
         didSet {
+            updateRowActions()
             guard showsSelectionOnlyWhenFocused, isEmphasized != oldValue else { return }
             needsDisplay = true
         }

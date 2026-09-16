@@ -1,11 +1,21 @@
 import Foundation
+import LighttyCore
 
 /// 插件所属的 Agent。两个 Agent 各有自己的安装记录与启用开关，同一个
 /// `name@marketplace` 可能同时装在两边，所以 Agent 是插件身份的一部分。
 enum PluginAgent: String, Codable, Sendable, CaseIterable {
     case claudeCode = "claude", codex
 
-    var title: String { self == .claudeCode ? "Claude Code" : "Codex" }
+    /// 会话侧的同一家。rawValue 已经落进快照与导航键，所以两个枚举不合并；
+    /// 映射用穷举 switch，多一家 Agent 时是编译错误而不是默默当成 Claude Code。
+    var sessionAgent: SessionAgent {
+        switch self {
+        case .claudeCode: return .claude
+        case .codex: return .codex
+        }
+    }
+
+    var title: String { sessionAgent.spec.launchName }
 }
 
 /// 装上不等于开着，缓存里有更不等于装上了。

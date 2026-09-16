@@ -15,13 +15,6 @@ final class SessionModelCatalog: CatalogOnlyProvider {
         set { lock.lock(); defer { lock.unlock() }; values = newValue }
     }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
-    /// `titleSignalFiles` 的答案；默认没有文件，即不监听。
-    var signalFiles: [URL] {
-        get { lock.lock(); defer { lock.unlock() }; return files }
-        set { lock.lock(); defer { lock.unlock() }; files = newValue }
-    }
-    private var files: [URL] = []
-    func titleSignalFiles(for key: AgentSessionKey) -> [URL] { signalFiles }
     init(root: URL, pageSize: Int = 100, agent: SessionAgent = .codex) {
         source = .init(agent: agent, root: root, executable: "/bin/echo", configuration: .custom(root.path))
         self.pageSize = pageSize
@@ -43,18 +36,21 @@ final class SessionModelFixture {
     let catalog: SessionModelCatalog
     let statuses: PaneStatusStore
     let library: SessionLibrary
+    /// 这家的 hook 插件装没装（`SessionLibrary` 的注入点）。默认按「装了」走，标题只看 hook + 目录。
+    final class HookInstalledBox { var value = true }
+    let hookInstalledBox = HookInstalledBox()
+    var hookInstalled: Bool { get { hookInstalledBox.value } set { hookInstalledBox.value = newValue } }
     private var paneIDs: [UUID] = []
 
     init(pageSize: Int = 100, agent: SessionAgent = .codex,
-         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
-         titleChanges: @escaping PathChangeSource = PathWatcher.changeSource) throws {
+         hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         catalog = SessionModelCatalog(root: root, pageSize: pageSize, agent: agent)
         statuses = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lt-\(UUID().uuidString).sock"))
         library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [catalog],
                                  statusStore: statuses, metadataRefreshDelay: 0.01, hostProcessID: hostProcessID,
-                                 titleChanges: titleChanges)
+                                 hookInstalled: { [box = hookInstalledBox] _ in box.value })
     }
     func record(_ id: String = "fixture", title: String = "Conversation", directory: String? = nil,
                 archived: Bool = false, processes: Set<AgentProcessIdentity> = []) -> AgentSession {
@@ -214,6 +210,78 @@ struct SessionModelTests {
         f.library.invalidateMetadata(for: target.key)
         try await f.wait { f.library.paneState(for: id)?.session == changed && !f.library.loading }
         #expect(f.catalog.requestCount == 6, "Re-read the target page, then stop before unrelated older pages")
+    }
+
+    /// 用户自己在终端里敲 `/rename` 不触发任何钩子，官方也没有改名订阅接口。
+    /// 最早的补救时机是他开始下一轮提问（`UserPromptSubmit` → thinking）：这时重读一次官方
+    /// 列表，标题不用等这一轮结束。
+    @Test func aPromptAfterATerminalRenameRereadsTheTitle() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record(title: "旧标题"), id = f.pane()
+        f.library.associate(.attached(f.association(record)), with: id)
+        try await f.load([record])
+        try await f.status(.done, event: "Stop", pane: id, record: record)
+        // 回合结束那条刷新有五次有界重试（每次读 active + archived 两页），等它跑完再改标题，
+        // 之后的读取只可能来自新的一轮提问。
+        try await f.wait { f.catalog.requestCount == 12 && !f.library.loading }
+        f.catalog.records = [f.record(title: "新标题")]
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: id, record: record)
+        try await f.wait { f.library.paneState(for: id)?.title == "新标题" }
+    }
+
+    /// 标题同一时刻只有一个来源，来源之间不穿插。hook 插件**没装**时，标题看得出是 agent 写的就照
+    /// 原文显示（和原生终端一样，看得见状态前缀）、图标按认出的家给；shell 写的标题不显示；agent 退出
+    /// （命令结束标记）后回到 pane 名。装了 hook 时标题走 hook + 目录：启动阶段是图标 + pane 名，
+    /// 绑定后只看目录，agent 退出（SessionEnd）直接回 pane 名、图标一起走，不在中间亮一下旧标题。
+    @Test func agentTitleShowsOnlyWithoutHooksAndTheIconFollowsRecognition() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record(title: "Conversation")
+        let id = f.pane()
+        #expect(f.library.paneState(for: id)?.title == "My terminal")
+
+        // —— 没装 hook：原生终端显示什么就显示什么
+        f.hookInstalled = false
+        f.library.noteTerminalTitle("florian@mac: ~", in: id)
+        #expect(f.library.paneState(for: id)?.title == "My terminal", "shell 的标题不是 agent 的，不显示")
+        f.library.noteTerminalTitle("◑ Shopify 公司介绍", in: id)
+        #expect(f.library.paneState(for: id)?.title == "◑ Shopify 公司介绍")
+        #expect(f.library.paneState(for: id)?.displayAgent == .claude, "没绑定也给图标")
+        #expect(f.library.paneState(for: id)?.sessionKey == nil, "图标不等于关联")
+        f.library.renamePane(id, to: "Build")
+        #expect(f.library.paneState(for: id)?.title == "◑ Shopify 公司介绍", "agent 在跑时 pane 名不显示")
+        f.library.commandFinished(in: id, at: Date())
+        #expect(f.library.paneState(for: id)?.title == "Build", "agent 退出：pane 名回来，那是我们的")
+        #expect(f.library.paneState(for: id)?.displayAgent == nil)
+
+        // Codex：空闲的标题没前缀，认不出；转起来才认，之后没前缀的也按它显示
+        f.library.noteTerminalTitle("回应问候 | florian", in: id)
+        #expect(f.library.paneState(for: id)?.title == "Build")
+        f.library.noteTerminalTitle("⠋ 回应问候 | florian", in: id)
+        #expect(f.library.paneState(for: id)?.displayAgent == .codex)
+        f.library.noteTerminalTitle("回应问候 | florian", in: id)
+        #expect(f.library.paneState(for: id)?.title == "回应问候 | florian")
+        f.library.commandFinished(in: id, at: Date())
+
+        // —— 装了 hook：标题走 hook + 目录，agent 的标题只贡献图标
+        f.hookInstalled = true
+        f.library.noteTerminalTitle("⠋ lightty", in: id)
+        #expect(f.library.paneState(for: id)?.title == "Build", "Codex 启动转圈：pane 名不动")
+        #expect(f.library.paneState(for: id)?.displayAgent == .codex, "但图标已经有了")
+        f.library.noteTerminalTitle("lightty", in: id)
+        #expect(f.library.paneState(for: id)?.title == "Build")
+
+        try await f.load([record])
+        try await f.status(.idle, event: "SessionStart", pane: id, record: record)
+        #expect(f.library.paneState(for: id)?.title == "Conversation", "绑定后只看官方目录")
+        f.library.noteTerminalTitle("⠋ Conversation | lightty", in: id)
+        #expect(f.library.paneState(for: id)?.title == "Conversation", "绑定期间程序标题不穿插进来")
+
+        try await f.status(.idle, event: "SessionEnd", pane: id, record: record)
+        #expect(f.library.paneState(for: id)?.sessionKey == nil)
+        #expect(f.library.paneState(for: id)?.title == "Build", "退出直接回 pane 名，不亮旧标题")
+        #expect(f.library.paneState(for: id)?.displayAgent == nil, "图标一起走")
     }
 
     @Test func hooksDirectoryAndExitUseTheSameBindingState() async throws {

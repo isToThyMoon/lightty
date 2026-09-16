@@ -18,10 +18,38 @@ struct MCPSettingsViewTests {
         #expect(text.string.contains("[mcp_servers.computer-use]"))
         view.selectList(id: "codex:node_repl")
         #expect(text.string.contains("NODE_PATH"))
+        let locations = try #require(descendants(view).compactMap { $0 as? BrowserFileLocationsView }.first)
+        let disclosure = try #require(descendants(locations).compactMap { $0 as? NSButton }.first)
+        let filePath = try #require(view.selectedServer?.sourceURL.path)
+        disclosure.performClick(nil)
+        view.layoutSubtreeIfNeeded()
+        #expect(locations.textView.string == filePath)
+        #expect(!locations.textView.isHiddenOrHasHiddenAncestor)
+        disclosure.performClick(nil)
+        view.layoutSubtreeIfNeeded()
+        #expect(locations.textView.isHiddenOrHasHiddenAncestor)
+        #expect(text.string.contains("NODE_PATH"), "收起文件位置不应改变配置正文")
         view.search("notion")
         #expect(view.servers.isEmpty, "搜索只在当前分类里找")
         view.selectAgent(nil)
         #expect(view.servers.map(\.name) == ["notion"])
+        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"], let window = view.window {
+            defer { window.close() }
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                view.appearance = NSAppearance(named: appearance)
+                for width in [CGFloat(1100), 660] {
+                    window.setContentSize(NSSize(width: width, height: 720))
+                    view.needsLayout = true
+                    try captureSettingsWindow(window, to: URL(fileURLWithPath: path)
+                        .appendingPathComponent("settings-mcp-\(appearance.rawValue)-\(Int(width)).png"))
+                }
+                disclosure.performClick(nil)
+                view.layoutSubtreeIfNeeded()
+                try captureSettingsWindow(window, to: URL(fileURLWithPath: path)
+                    .appendingPathComponent("settings-mcp-\(appearance.rawValue)-expanded.png"))
+                disclosure.performClick(nil)
+            }
+        }
     }
 
     @Test func aDisabledServerReadsAsDisabledAndTheToggleWritesTheConfig() throws {
@@ -48,6 +76,11 @@ struct MCPSettingsViewTests {
         let server = try #require(view.selectedServer)
         #expect(server.name == "notion")
         #expect(!server.canToggle)
+        let toggle = try #require(descendants(view).compactMap { $0 as? ShellToggle }.first)
+        let original = try String(contentsOf: server.sourceURL, encoding: .utf8)
+        #expect(!toggle.accessibilityPerformPress())
+        #expect(toggle.isOn)
+        #expect(try String(contentsOf: server.sourceURL, encoding: .utf8) == original)
         let labels = descendants(view).compactMap { $0 as? NSTextField }.map(\.stringValue)
         #expect(labels.contains { $0.contains("no enabled switch") })
         #expect(labels.contains("Claude Code · http"))

@@ -233,10 +233,10 @@ enum HookInstaller {
         HookAgent.allCases.map { report(for: $0, in: context) }
     }
 
-    /// PATH + 常见安装目录里找可执行文件。
+    /// 在 `searchPath()` 的目录里找可执行文件。
     ///
-    /// 从 Finder 启动时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，用户级安装位置
-    /// （npm global、homebrew、claude 自带 installer）全都看不见，只查 PATH 会误判"没装"。
+    /// 从 Finder 启动时进程 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，用户级安装位置
+    /// （npm global、homebrew、claude 自带 installer）全都看不见，只查进程 PATH 会误判"没装"。
     static func locateExecutable(_ name: String) -> String? {
         let fm = FileManager.default
         for directory in searchPath() {
@@ -249,41 +249,19 @@ enum HookInstaller {
     /// 查找目录清单，同时也是子进程 PATH 的来源——`claude` 是个 node 包装脚本，
     /// PATH 里没有 node 它会自己失败，而 Finder 启动的 PATH 恰恰什么都没有。
     ///
-    /// 顺序：进程 PATH → 用户登录 shell 的 PATH（`LoginShellPath`，覆盖任何版本
-    /// 管理器）→ 写死的常见位置兜底（登录 shell 解析失败或首启还没缓存时靠它）。
+    /// 只有三段：进程 PATH → 用户登录 shell 的 PATH（`LoginShellPath`）→ 系统目录。
+    ///
+    /// **不再写死 homebrew / nvm / volta / fnm / pnpm 那一串常见目录**：pane 里跑的就是
+    /// 这个登录 shell，它的 PATH 看不见的 CLI，用户自己在终端里也敲不出来——我们替他
+    /// 找到了反而更糟（设置页说"已检测到"，真去 pane 里启动却失败）。而且版本管理器
+    /// 的目录约定一直在变，写死的清单永远追不全，追得越多越像能追全。
     static func searchPath() -> [String] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
         var directories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
             .split(separator: ":").map(String.init)
         directories += LoginShellPath.directories
-        directories += [
-            "/opt/homebrew/bin", "/usr/local/bin",
-            "\(home)/.local/bin", "\(home)/.bun/bin", "\(home)/.cargo/bin",
-            "\(home)/.npm-global/bin", "\(home)/.claude/local", "\(home)/bin",
-            // node 版本管理器：npm 全局包（claude / codex 都能这么装）落在它们各自的目录
-            "\(home)/.volta/bin", "\(home)/n/bin", "\(home)/Library/pnpm",
-            "\(home)/.yarn/bin", "\(home)/.asdf/shims", "\(home)/.local/share/mise/shims",
-            "\(home)/.fnm/aliases/default/bin",
-            "\(home)/.local/share/fnm/aliases/default/bin",
-            "\(home)/Library/Application Support/fnm/aliases/default/bin",
-        ]
-        directories += nvmBinDirectories(home: home)
         directories += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         var seen = Set<String>()
         return directories.filter { !$0.isEmpty && seen.insert($0).inserted }
-    }
-
-    /// nvm 每个 node 版本一个 bin 目录，按版本号从高到低排，新装的包通常在最新版下。
-    static func nvmBinDirectories(home: String, fileManager: FileManager = .default) -> [String] {
-        let root = "\(home)/.nvm/versions/node"
-        guard let versions = try? fileManager.contentsOfDirectory(atPath: root) else { return [] }
-        func components(_ name: String) -> [Int] {
-            name.drop(while: { $0 == "v" }).split(separator: ".").map { Int($0) ?? 0 }
-        }
-        return versions
-            .sorted { components($0).lexicographicallyPrecedes(components($1)) }
-            .reversed()
-            .map { "\(root)/\($0)/bin" }
     }
 
     // MARK: - 安装 / 卸载
@@ -426,8 +404,9 @@ enum HookInstaller {
 
 // MARK: - Agent
 
-/// 支持的 agent 及其插件注册约定。只放 hook 安装特有的部分（事件表、声明解析、
-/// 插件命令）；可执行名、配置根等 Agent 描述取自 `SessionAgent`。
+/// 支持的 agent 及其插件注册约定。这里只剩「怎么做」（读声明、拼命令）；
+/// 「是什么」（事件表、配置文件名与格式、插件动词、可执行名、配置根）一律取自
+/// `sessionAgent.spec`，见 `AgentSpec`。
 /// rawValue 已经落盘（`~/.lightty/hook-plugins/<agent>.version`、忽略更新的偏好键），
 /// 所以不与 `SessionAgent` 合并。
 enum HookAgent: String, CaseIterable, Sendable {
@@ -451,8 +430,11 @@ enum HookAgent: String, CaseIterable, Sendable {
         }
     }
 
+    /// 这一家的全部事实，见 `AgentSpec`。
+    var spec: AgentSpec { sessionAgent.spec }
+
     /// PATH 上的可执行文件名
-    var executableName: String { sessionAgent.executableName }
+    var executableName: String { spec.executableName }
 
     /// 配置目录。两家都支持用环境变量改写位置，跟着走才能和 CLI 看到同一份配置。
     var configDirectory: URL {
@@ -471,32 +453,14 @@ enum HookAgent: String, CaseIterable, Sendable {
 
     /// CLI 会往里写声明的那份文件。我们**只读**它，用来判断装没装。
     var configFile: URL {
-        switch self {
-        case .claudeCode: return configDirectory.appendingPathComponent("settings.json")
-        case .codex: return configDirectory.appendingPathComponent("config.toml")
-        }
+        configDirectory.appendingPathComponent(spec.hookConfigFile)
     }
 
-    /// 事件 key **必须是 PascalCase**（实测：snake_case / camelCase 均不触发）。
-    /// 状态机映射见 docs/specs/pane-status.md §4.3。
-    var events: [String] {
-        let shared = [
-            "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd",
-        ]
-        switch self {
-        // Notification 是 Claude Code 侧的「需要用户介入」信号
-        case .claudeCode: return shared + ["Notification"]
-        // Codex 侧同语义的事件叫 PermissionRequest；用户主动停止单独发 Interrupt，
-        // 不会补一发 Stop，漏订阅就会让 pane 永久停在 thinking/tool。
-        case .codex: return shared + ["PermissionRequest", "Interrupt"]
-        }
-    }
+    /// 我们订阅的 hook 事件，见 `AgentSpec.hookEvents`。
+    var events: [String] { spec.hookEvents }
 
-    /// Codex 对 hook **按内容**做信任校验，首次需用户批准；插件来源并不豁免
-    /// （实测：`trustStatus` 与 `marketplaceName` 同属一个结构体）。
-    /// 我们不绕过，也绝不该绕过——但必须**事先**告诉用户，否则下次跑 codex
-    /// 冒出来的审核提示看起来就像中招了。
-    var requiresTrustPrompt: Bool { self == .codex }
+    /// 这一家是否会在首次执行 hook 前要用户批准，见 `AgentSpec.requiresHookTrustPrompt`。
+    var requiresTrustPrompt: Bool { spec.requiresHookTrustPrompt }
 
     // MARK: - 配置里的声明（只读）
 
@@ -506,10 +470,12 @@ enum HookAgent: String, CaseIterable, Sendable {
         var pluginEnabled: Bool
     }
 
+    /// 按配置文件的**格式**分派，不按家分派：多一家 Agent 只要说清它写 JSON 还是 TOML，
+    /// 就不必再来这里补一条 case。
     func readDeclaration(at file: URL) throws -> Declaration {
-        switch self {
-        case .claudeCode: return try claudeDeclaration(at: file)
-        case .codex: return codexDeclaration(at: file)
+        switch spec.hookConfigFormat {
+        case .json: return try jsonDeclaration(at: file)
+        case .toml: return tomlDeclaration(at: file)
         }
     }
 
@@ -518,7 +484,7 @@ enum HookAgent: String, CaseIterable, Sendable {
     /// {"extraKnownMarketplaces":{"lightty":{"source":{…}}},
     ///  "enabledPlugins":{"lightty@lightty":true}}
     /// ```
-    private func claudeDeclaration(at file: URL) throws -> Declaration {
+    private func jsonDeclaration(at file: URL) throws -> Declaration {
         guard let data = try? Data(contentsOf: file) else {
             return Declaration(marketplaceDeclared: false, pluginEnabled: false)
         }
@@ -554,7 +520,7 @@ enum HookAgent: String, CaseIterable, Sendable {
     /// `[plugins."…"]` 表里 `enabled` 是不是 true。为一个布尔值引入 TOML 解析器
     /// （以及它对用户文件的一整套语义假设）不划算；扫不出来最坏是报「没装」，
     /// 用户点一次 Install，CLI 自己会把重复声明处理好。
-    private func codexDeclaration(at file: URL) -> Declaration {
+    private func tomlDeclaration(at file: URL) -> Declaration {
         guard let text = try? String(contentsOf: file, encoding: .utf8) else {
             return Declaration(marketplaceDeclared: false, pluginEnabled: false)
         }
@@ -590,27 +556,16 @@ enum HookAgent: String, CaseIterable, Sendable {
     // MARK: - CLI 命令
 
     /// 安装。两条命令都幂等（实测重复执行只打印"已存在"并以 0 退出）。
-    ///
-    /// Claude Code 的 `install` 在插件已装时是**空操作**，哪怕 marketplace 里的
-    /// 版本变了也不会重新拷贝——所以已装时必须换成 `update`。
-    /// Codex 的 `add` 则每次都重新拷贝，一条命令兼任安装与更新。
+    /// 已装与没装用的动词可能不同，理由见 `AgentSpec.pluginUpdateVerb`。
     func installCommands(marketplaceRoot: URL, isPluginInstalled: Bool) -> [[String]] {
-        switch self {
-        case .claudeCode:
-            return [
-                ["plugin", "marketplace", "add", marketplaceRoot.path],
-                [
-                    "plugin", isPluginInstalled ? "update" : "install",
-                    HookMarketplace.pluginID,
-                ],
-            ]
-        case .codex:
-            return [
-                ["plugin", "marketplace", "add", marketplaceRoot.path],
-                // plugin@marketplace 形式是**强制**的，否则报 "requires --marketplace"
-                ["plugin", "add", HookMarketplace.pluginID],
-            ]
-        }
+        [
+            ["plugin", "marketplace", "add", marketplaceRoot.path],
+            // plugin@marketplace 形式是**强制**的，否则 Codex 报 "requires --marketplace"
+            [
+                "plugin", isPluginInstalled ? spec.pluginUpdateVerb : spec.pluginInstallVerb,
+                HookMarketplace.pluginID,
+            ],
+        ]
     }
 
     /// 卸载。marketplace 声明也一并撤掉——只卸插件的话，用户配置里会留下一条
@@ -618,10 +573,7 @@ enum HookAgent: String, CaseIterable, Sendable {
     func uninstallCommands(declaration: Declaration) -> [[String]] {
         var commands: [[String]] = []
         if declaration.pluginEnabled {
-            switch self {
-            case .claudeCode: commands.append(["plugin", "uninstall", HookMarketplace.pluginID])
-            case .codex: commands.append(["plugin", "remove", HookMarketplace.pluginID])
-            }
+            commands.append(["plugin", spec.pluginRemoveVerb, HookMarketplace.pluginID])
         }
         if declaration.marketplaceDeclared {
             commands.append(
@@ -686,7 +638,7 @@ enum HookCLI {
             process.terminate()
             // 给它两秒体面退出，不走就硬杀——留个孤儿进程占着我们的管道更糟
             if finished.wait(timeout: .now() + 2) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
+                ProcessTree.kill(process.processIdentifier)
             }
             throw HookCLIError.timedOut(command: line, seconds: timeout)
         }

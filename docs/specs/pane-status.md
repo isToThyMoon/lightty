@@ -13,6 +13,35 @@
 - 稳定入口 ~/.lightty/bin/lightty-hook 指向当前 app 内的 helper，启动时刷新。
 - Codex hook trust 由用户与 Codex 管理，lightty 不绕过审核。
 
+### 2.1 哪个进程是 agent、哪一发是子会话
+
+helper 不按进程名认 agent——名字随安装方式变——只看内核里的终端作业结构。
+实测（2026-09-16，Claude Code 2.1.274、Codex 0.154.0，`script` 造 pty 记录 hook 的祖先链）：
+
+| 进程 | 进程组 | 终端前台组 | 控制终端 |
+| --- | --- | --- | --- |
+| Claude 主会话（pty 上） | = 自己 pid | = 自己 pid | 有 |
+| Claude 起的 hook | 自己一组 | 0 | 无（Claude 把 hook 脱离了终端） |
+| Claude 的 Bash 工具子进程 | 自己一组 | 0 | 无 |
+| 工具里起的 `claude -p` | 沿用工具 shell 的组 | 0 | 无 |
+| Codex 主会话（pty 上） | = 自己 pid | = 自己 pid | 有 |
+| Codex 起的 hook | 自己一组 | = codex pid | 有 |
+| Codex 的 shell 工具子进程 | 自己一组 | 0 | 无 |
+| 工具里起的 `codex exec` | 沿用工具 shell 的组 | 0 | 无 |
+
+两家一致：主会话是终端的**前台作业组长**（pid == `e_pgid` == `e_tpgid`、`e_tdev != NODEV`），
+工具子进程一律**脱离终端**。据此：
+
+- **agent 进程** = hook 父进程链上最近的前台作业组长。记 pid + 内核启动时间（`AgentProcessIdentity`），
+  供退出监视、删除核查与「在其他终端中打开」。npm 版 codex 的 node 包装、用户自己的启动脚本，
+  组长就是外层包装进程，监视它退出与监视里面那个等价。
+- **子会话** = 从 hook 的父进程走到组长之前经过了没有控制终端的进程。子会话的事件全部丢弃，
+  不发状态也不注入，否则它的 SessionStart / SessionEnd 会顶掉主会话的状态与绑定。
+- 判定从 hook 的**父进程**起算：Claude 把 hook 自己脱离了终端，hook 没有控制终端不作数，
+  也因此 helper 不能 `open("/dev/tty")` 或 `tcgetpgrp`，只能沿祖先链读 `kinfo_proc`。
+- 链上找不到组长（hook 跑在没有 pty 的环境里）：不记进程身份，**也不按子会话处理**——
+  宁可多报一发状态，不能把主会话的事件丢掉。
+
 ## 3. 数据流
 
 终端启动时注入 LIGHTTY_PANE_ID 与 LIGHTTY_SOCK，shell、Agent、hook 沿进程树继承。
@@ -43,11 +72,34 @@ UTF-8 JSON，版本 v=1；信封含 pane UUID，载荷含 ts（ISO8601）、stat
 
 | 状态 | 触发事件 | 含义 |
 | --- | --- | --- |
-| idle | SessionStart / SessionEnd / Interrupt | 无活跃 turn |
-| thinking | UserPromptSubmit / PostToolUse | turn 进行中 |
+| idle | SessionStart / SessionEnd / Interrupt / 带 `is_interrupt` 的 PostToolUseFailure / Notification `idle_prompt`（旁证，见下） | 无活跃 turn |
+| thinking | UserPromptSubmit / PostToolUse / PostToolUseFailure | turn 进行中 |
 | tool | PreToolUse | 正在调用工具 |
 | attention | Notification / PermissionRequest | 需要用户介入 |
 | done | Stop | turn 完成、待用户查看 |
+
+**忙/闲这条边的第一来源是终端标题（OSC 0）**，hook 只是补充。两家都把状态写进了标题，
+形状写在各家 `AgentSpec.terminalTitle` 里，解析见 `AgentTerminalTitle`：
+
+| | 忙 | 闲 | 等用户处理 |
+| --- | --- | --- | --- |
+| Claude Code | `◐ <会话标题>` / `◑ …`（960 毫秒轮换） | `✳ <会话标题>` | 也是 ✳，分不开 |
+| Codex（默认 `activity`、`thread-name`、`project-name`） | `⠋ <线程名> \| <项目名>`（braille 旋转字符，100 毫秒一帧） | `<线程名> \| <项目名>`，没有前缀 | `[ ! ] Action Required \| …`（与 `[ . ]` 每秒交替） |
+
+按 Esc 中断的那一刻前缀就变，会话改名（`/rename`、自动起名）也即时推送。收方规则
+（`PaneStatusStore.noteTerminalTitle`）：只在 hook 已登记 agent、且未收到 SessionEnd 时采信
+（Codex 的「没前缀」就是闲，agent 退出后 shell 写的标题不能再算数）；忙把 idle / done /
+attention 顶成 thinking（tool 不降级）；闲把 thinking / tool 收回 idle，done / attention 不动；
+等用户处理把 idle / thinking / tool 变成 attention，已是 attention 不动（闪烁相位不重复点亮）。
+正常结束时 `Stop` 与「闲」谁先到结果都是 done；只有用户中断才真的停在 idle。标题正文变了
+则立刻重读官方目录，标题的真值仍在目录里。Codex 用户改了 `tui.terminal_title` 或关了
+`tui.animations`，标题就没有忙的标记，退回只靠 hook（它有 `Interrupt`，不缺边）。
+
+hook 侧的用户中断信号两家不同：Codex 发 `Interrupt`；Claude Code 的 `Stop` 在用户中断时
+**不触发**，只有中断时正在跑的工具会发带 `is_interrupt` 的 `PostToolUseFailure`。标题前缀里
+「等用户处理对话框」和「停在提示符上」都是 ✳，分辨它们只能靠 `Notification` / `PermissionRequest`。
+Claude Code 另有一条私有序列 OSC 21337（`indicator=;status=;status-color=`，带文字状态），
+2.1.274 里开关写死关闭，未启用；启用后值得替换标题前缀这条路。
 
 lightty 在用户下一次查看/交互或全部标记已读时清除 done：切入终端、重复聚焦、点击、
 键盘/输入法输入、粘贴与滚动均走终端的统一交互事件，由 SessionLibrary 标记已读。

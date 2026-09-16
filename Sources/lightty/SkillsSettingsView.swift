@@ -23,8 +23,8 @@ final class SkillsSettingsView: ColumnBrowserView {
     private let detailSource = SkillsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let detailSummary = SkillsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let documentLabel = SkillsSettingsView.label("SKILL.md", font: SkillsStyle.sectionFont, secondary: true)
-    private let pathScroll = NSTextView.scrollableTextView()
-    private var paths: NSTextView { pathScroll.documentView as! NSTextView }
+    private let pathScroll = BrowserFileLocationsView()
+    private var paths: NSTextView { pathScroll.textView }
     private let bodyScroll = NSTextView.scrollableTextView()
     private var body: NSTextView { bodyScroll.documentView as! NSTextView }
     private lazy var favoriteButton = ShellIconButton(symbol: "star", accessibilityLabel: localize("Favorite"), target: self, action: #selector(toggleFavorite))
@@ -65,6 +65,8 @@ final class SkillsSettingsView: ColumnBrowserView {
     }
 
     private func buildDetail() {
+        pathScroll.onResize = { [weak self] in self?.needsLayout = true }
+        pathScroll.title = localize("File locations")
         for view in [detailTitle, detailSource, detailSummary, favoriteButton, moreButton,
                      openButton, revealButton, sourceButton, rawButton, documentLabel,
                      pathScroll, bodyScroll] {
@@ -81,10 +83,6 @@ final class SkillsSettingsView: ColumnBrowserView {
         paths.textContainerInset = .zero
         paths.textContainer?.lineFragmentPadding = 0
         paths.setAccessibilityLabel(localize("File locations"))
-        pathScroll.drawsBackground = false
-        pathScroll.automaticallyAdjustsContentInsets = false
-        pathScroll.hasVerticalScroller = true
-        pathScroll.autohidesScrollers = true
         body.identifier = NSUserInterfaceItemIdentifier("skill-document")
         body.isEditable = false
         body.isSelectable = true
@@ -234,16 +232,18 @@ final class SkillsSettingsView: ColumnBrowserView {
         detailTitle.frame = NSRect(x: inset, y: top, width: max(0, width - 72), height: 28)
         favoriteButton.frame = NSRect(x: rect.width - inset - 64, y: top, width: 28, height: 28)
         moreButton.frame = NSRect(x: rect.width - inset - 28, y: top, width: 28, height: 28)
-        detailSource.frame = NSRect(x: inset, y: top + 36, width: width, height: 18)
-        detailSummary.frame = NSRect(x: inset, y: top + 64, width: width, height: 36)
-        openButton.frame = NSRect(x: inset, y: top + 112, width: 100, height: 28)
-        revealButton.frame = NSRect(x: inset + 108, y: top + 112, width: 28, height: 28)
-        sourceButton.frame = NSRect(x: inset + 144, y: top + 112, width: 28, height: 28)
-        pathScroll.frame = NSRect(x: inset, y: top + 152, width: width, height: 72)
-        documentLabel.frame = NSRect(x: inset, y: top + 248, width: max(0, width - 80), height: 18)
-        rawButton.frame = NSRect(x: rect.width - inset - 68, y: top + 240, width: 68, height: 28)
-        bodyScroll.frame = NSRect(x: inset, y: top + 284, width: width,
-                                  height: max(0, rect.height - top - 284 - SkillsStyle.inset))
+        detailSource.frame = NSRect(x: inset, y: top + 34, width: width, height: 18)
+        detailSummary.frame = NSRect(x: inset, y: top + 58, width: width, height: 36)
+        openButton.frame = NSRect(x: inset, y: top + 100, width: 100, height: 28)
+        revealButton.frame = NSRect(x: inset + 108, y: top + 100, width: 28, height: 28)
+        sourceButton.frame = NSRect(x: inset + 144, y: top + 100, width: 28, height: 28)
+        pathScroll.frame = NSRect(x: inset, y: top + 136, width: width, height: pathScroll.preferredHeight)
+        let documentTop = pathScroll.frame.maxY + 12
+        documentLabel.frame = NSRect(x: inset, y: documentTop + 5, width: max(0, width - 80), height: 18)
+        rawButton.frame = NSRect(x: rect.width - inset - 68, y: documentTop, width: 68, height: 28)
+        let bodyTop = documentTop + 36
+        bodyScroll.frame = NSRect(x: inset, y: bodyTop, width: width,
+                                  height: max(0, rect.height - bodyTop - SkillsStyle.inset))
     }
 
     // MARK: - 技能自己的事
@@ -353,12 +353,12 @@ final class SkillsSettingsView: ColumnBrowserView {
         if paths.string != pathText {
             paths.string = pathText
             paths.scrollToBeginningOfDocument(nil)
+            pathScroll.refreshSummary()
         }
         // 用量只有 Claude Code 记，措辞里点明出处，免得读成全局统计。
         let usage = skill.usage?.summary(localize: localize)
-            ?? localize("No usage record from Claude Code")
-        detailSource.stringValue = "\(skill.sourceTitle) · \(usage)"
-        detailSource.toolTip = ([skill.sourceTitle, usage]
+        detailSource.stringValue = [skill.sourceTitle, usage].compactMap { $0 }.joined(separator: " · ")
+        detailSource.toolTip = ([skill.sourceTitle, usage].compactMap { $0 }
             + skill.locations.map { "\($0.label): \($0.url.path)" }).joined(separator: "\n")
         detailSummary.stringValue = skill.issue ?? skill.summary
         detailSummary.toolTip = skill.issue ?? skill.summary
@@ -377,7 +377,7 @@ final class SkillsSettingsView: ColumnBrowserView {
         guard force || changed else { return }
         let selection = body.selectedRange()
         let scrollOrigin = bodyScroll.contentView.bounds.origin
-        body.textStorage?.setAttributedString(SkillDocumentPresentation.text(skill.content, raw: rawDocument))
+        body.textStorage?.setAttributedString(SkillDocumentPresentation.text(skill.content, raw: rawDocument, hidesFrontmatter: true))
         if changed {
             body.setSelectedRange(NSRange(location: 0, length: 0))
             body.scrollToBeginningOfDocument(nil)
@@ -397,6 +397,7 @@ final class SkillsSettingsView: ColumnBrowserView {
     var skillFolderURL: URL? { selectedSkill?.fileURL.deletingLastPathComponent() }
 
     func refreshLocalization() {
+        pathScroll.title = localize("File locations")
         openButton.label = localize("Open file")
         rawButton.label = rawDocument ? localize("Preview") : localize("Source")
         applyChromeText()

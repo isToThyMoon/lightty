@@ -51,7 +51,7 @@ Sparkle 的 `generate_appcast`，生成 `.delta` 并写进 feed。实测 v0.13.1
 
 - 修复使用补丁版本，新功能使用次版本；发布前核对远端 tag 和 Releases，不能覆盖已发布 tag。
 - `main` 推送也构建打包、填充内核缓存，但不创建 Release；其构建版本为 `0.0.0-ci`。
-- 应用版本取 tag 去掉 `v`，build number 取 `git rev-list --count HEAD` 加 200（`BUILD_NUMBER_OFFSET`）。历史改写后提交数从 236 降到 63，而 v0.14.1 的 build number 是 236，Sparkle 按它判断新旧，偏移不能减小。正式发布沿 main 前进，保持 build number 递增。
+- 应用版本取 tag 去掉 `v`，build number 取 `git rev-list --count HEAD` 加 210（`BUILD_NUMBER_OFFSET`）。历史改写后提交数从 236 降到 63，而 v0.14.1 的 build number 是 236；2026-09-17 再次 squash 后提交数从 83 降到 77，而已装的 v0.19.1 是 283，偏移从 200 提到 210。Sparkle 按 build number 判断新旧，偏移只能加不能减。正式发布沿 main 前进，保持 build number 递增。
 - 手动运行 workflow 不等于正式发布；只有 tag ref 执行 Release 和 appcast 步骤。
 
 ## 发布前检查

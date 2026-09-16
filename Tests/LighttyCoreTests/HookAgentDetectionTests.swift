@@ -1,64 +1,36 @@
 import XCTest
 @testable import LighttyCore
 
+/// `HookAgentDetection.agent(...)` 只是**兼容退路**：hook 命令行里带了 `--agent` 就用不上它，
+/// 只有用户装的还是旧版插件时才走到这里。这一组用例照旧全留——退路失灵是静默的
+/// （agent 字段留空或认错家），没人会去看。
+///
+/// 按父进程链上的可执行路径猜哪一家那一段已经删了（随安装方式变），
+/// 找 agent 进程与判断子会话见 `AgentProcessStructureTests`。
 final class HookAgentDetectionTests: XCTestCase {
-    private func agent(paths: [String] = [], transcript: String? = nil, env: [String: String] = [:]) -> String? {
-        HookAgentDetection.agent(ancestorExecutablePaths: paths, transcriptPath: transcript, environment: env)
+    private func agent(transcript: String? = nil, env: [String: String] = [:]) -> String? {
+        HookAgentDetection.agent(transcriptPath: transcript, environment: env)
     }
 
     func testCodexPayloadWithoutEnvironmentHintsIsCodex() {
         // 实测：Codex 不给 hook 设 CODEX_HOME / CODEX_SANDBOX，但载荷带 Claude 同款 transcript_path。
-        XCTAssertEqual(agent(paths: ["/bin/zsh", "/Users/u/.codex/packages/standalone/current/bin/codex", "/bin/zsh"],
-                             transcript: "/Users/u/.codex/sessions/2026/09/07/rollout-x.jsonl"), "codex")
         XCTAssertEqual(agent(transcript: "/Users/u/.codex/sessions/2026/09/07/rollout-x.jsonl"), "codex")
         XCTAssertEqual(agent(transcript: "/custom/codex-home/sessions/rollout-x.jsonl"), "codex",
                        "自定义 CODEX_HOME 下没有 .codex 段，靠 rollout- 文件名认")
+        // 上层 Claude 会话里启动 codex：CLAUDECODE 泄漏进来了，但载荷形状更可靠。
+        XCTAssertEqual(agent(transcript: "/Users/u/.codex/sessions/rollout-1.jsonl",
+                             env: ["CLAUDECODE": "1"]), "codex")
     }
 
-    func testClaudeIsDetectedDespiteVersionedBinaryName() {
-        // claude 经 symlink 解析后可执行名是版本号，靠路径里的 claude 段认。
-        XCTAssertEqual(agent(paths: ["/bin/zsh", "/Users/u/.local/share/claude/versions/2.1.263", "/bin/zsh"],
-                             transcript: nil), "claude")
-        XCTAssertEqual(agent(paths: ["/bin/sh", "/opt/homebrew/bin/claude"]), "claude")
+    func testClaudeIsDetectedFromItsTranscriptShape() {
         XCTAssertEqual(agent(transcript: "/Users/u/.claude/projects/-Users-u-p/1234.jsonl"), "claude")
         XCTAssertEqual(agent(transcript: "/somewhere/else/1.jsonl"), "claude",
                        "认不出路径形状时，带 transcript_path 仍按旧约定视为 claude")
-    }
-
-    func testAncestorChainBeatsLeakedEnvironment() {
-        // 上层 Claude 会话里启动 codex：环境有 CLAUDECODE，但父进程链里 codex 更近。
-        XCTAssertEqual(agent(paths: ["/bin/zsh", "/Users/u/.codex/packages/x/bin/codex", "/bin/zsh", "/Users/u/.local/share/claude/versions/2.1.263"],
-                             transcript: "/Users/u/.codex/sessions/rollout-1.jsonl",
-                             env: ["CLAUDECODE": "1"]), "codex")
-        // 反过来 codex 里跑 claude：最近的祖先优先。
-        XCTAssertEqual(agent(paths: ["/bin/sh", "/Users/u/.local/share/claude/versions/2.1.263", "/bin/sh", "/Users/u/.codex/packages/x/bin/codex"]), "claude")
-    }
-
-    func testSessionLaunchedFromAnotherSessionsToolIsNested() {
-        let claude = "/Users/u/.local/share/claude/versions/2.1.270"
-        let codex = "/Users/u/.codex/packages/x/bin/codex"
-        // 主会话：hook ← claude ← pane 的 zsh ← login（到 lightty 为止）
-        XCTAssertFalse(HookAgentDetection.isNestedSession(
-            ancestorExecutablePaths: [claude, "/bin/zsh", "/usr/bin/login"]))
-        // Codex 经 shell 拉起 hook
-        XCTAssertFalse(HookAgentDetection.isNestedSession(
-            ancestorExecutablePaths: ["/bin/zsh", codex, "/bin/zsh", "/usr/bin/login"]))
-        // 主会话 Bash 工具里的脚本跑 `claude -p`
-        XCTAssertTrue(HookAgentDetection.isNestedSession(
-            ancestorExecutablePaths: [claude, "/bin/bash", "/bin/zsh", claude, "/bin/zsh", "/usr/bin/login"]))
-        // 跨家嵌套同样算
-        XCTAssertTrue(HookAgentDetection.isNestedSession(
-            ancestorExecutablePaths: ["/bin/zsh", codex, "/bin/zsh", claude, "/bin/zsh"]))
-        // 紧挨着的 agent 进程是启动器或 re-exec，仍是同一个会话
-        XCTAssertFalse(HookAgentDetection.isNestedSession(
-            ancestorExecutablePaths: [codex, "/opt/homebrew/bin/codex", "/bin/zsh"]))
-        XCTAssertFalse(HookAgentDetection.isNestedSession(ancestorExecutablePaths: ["/bin/zsh", "/usr/bin/login"]))
     }
 
     func testEnvironmentIsOnlyAFallback() {
         XCTAssertEqual(agent(env: ["CODEX_HOME": "/x"]), "codex")
         XCTAssertEqual(agent(env: ["CLAUDE_CODE_ENTRYPOINT": "cli"]), "claude")
         XCTAssertNil(agent(), "没有任何证据就留空")
-        XCTAssertNil(agent(paths: ["/bin/zsh", "/Applications/lightty.app/Contents/MacOS/lightty", "/sbin/launchd"]))
     }
 }

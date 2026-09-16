@@ -160,14 +160,36 @@ final class HookMarketplaceTests: XCTestCase {
             ("plugins/lightty/hooks.json", HookAgent.codex),
         ] {
             let hooks = try self.hooks(path)
+            let command = HookMarketplace.hookCommand(for: agent, shim: shim)
             XCTAssertEqual(
                 hooks.keys.sorted(), agent.events.sorted(), "\(path) 的事件表不完整")
             for event in agent.events {
-                XCTAssertEqual(hooks[event], [shim], "\(path) 的 \(event) 没指向 shim")
+                XCTAssertEqual(hooks[event], [command], "\(path) 的 \(event) 没指向 shim")
             }
         }
         XCTAssertNil(try hooks("plugins/lightty/hooks/hooks.json")["Interrupt"])
-        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Interrupt"], [shim])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Interrupt"],
+                       [HookMarketplace.hookCommand(for: .codex, shim: shim)])
+    }
+
+    /// 每条命令都把自家名字带给 helper，两家带的名字不同——helper 靠它认是谁调的，
+    /// 两家写成一样就等于没说，而认错家是静默失败（快照里会生成另一家的 resume 命令）。
+    func testEveryHookCommandNamesItsOwnAgent() throws {
+        try generate()
+
+        for (path, agent) in [
+            ("plugins/lightty/hooks/hooks.json", HookAgent.claudeCode),
+            ("plugins/lightty/hooks.json", HookAgent.codex),
+        ] {
+            let suffix = " --agent \(agent.sessionAgent.rawValue)"
+            for (event, commands) in try hooks(path) {
+                for command in commands {
+                    XCTAssertTrue(command.hasSuffix(suffix), "\(path) 的 \(event): \(command)")
+                }
+            }
+        }
+        XCTAssertNotEqual(HookAgent.claudeCode.sessionAgent.rawValue,
+                          HookAgent.codex.sessionAgent.rawValue)
     }
 
     func testEventKeysArePascalCase() throws {
@@ -220,9 +242,10 @@ final class HookMarketplaceTests: XCTestCase {
 
         let generation = try generate(other)
 
-        XCTAssertEqual(
-            try hooks("plugins/lightty/hooks/hooks.json")["Stop"], [other])
-        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Stop"], [other])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks/hooks.json")["Stop"],
+                       [HookMarketplace.hookCommand(for: .claudeCode, shim: other)])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Stop"],
+                       [HookMarketplace.hookCommand(for: .codex, shim: other)])
         // 只有两份 hooks 与带版本的两份插件清单需要重写，marketplace 清单不含路径
         XCTAssertEqual(generation.rewritten.sorted(), [
             "plugins/lightty/.claude-plugin/plugin.json",
@@ -275,7 +298,9 @@ final class HookMarketplaceTests: XCTestCase {
             case .events:
                 // 假装新增一个两家都支持的事件
                 return HookMarketplace.version(
-                    hooks: HookMarketplace.hooksDocument(events: agent.events + ["PreCompact"], command: shim),
+                    hooks: HookMarketplace.hooksDocument(
+                        events: agent.events + ["PreCompact"],
+                        command: HookMarketplace.hookCommand(for: agent, shim: shim)),
                     manifests: HookMarketplace.manifestBytes(for: agent))
             case .shimPath:
                 return HookMarketplace.version(for: agent, command: "/elsewhere/lightty-hook")
@@ -306,7 +331,9 @@ final class HookMarketplaceTests: XCTestCase {
             XCTAssertEqual(
                 baseline,
                 HookMarketplace.version(
-                    hooks: HookMarketplace.hooksDocument(events: agent.events, command: shim),
+                    hooks: HookMarketplace.hooksDocument(
+                        events: agent.events,
+                        command: HookMarketplace.hookCommand(for: agent, shim: shim)),
                     manifests: HookMarketplace.manifestBytes(for: agent)),
                 "\(agent.rawValue) 的版本掺进了自己 hooks、那份技能、自己两份清单之外的东西")
             for c in cases {

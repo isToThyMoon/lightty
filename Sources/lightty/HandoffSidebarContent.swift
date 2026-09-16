@@ -39,15 +39,15 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
         HandoffRowSnapshot(
             id: entry.fileURL.lastPathComponent,
             name: entry.task.name,
-            subtitle: "\(entry.running ? L("Active") : L("Dormant"))  ·  \(relativeTime(entry.task.updated))",
-            running: entry.running)
+            subtitle: "\(entry.running ? L("Opened") : L("Not open"))  ·  \(relativeTime(entry.task.updated))",
+            running: entry.running, updated: entry.task.updated)
     }
 
     // MARK: - 列表页
 
     private let listPage = NSView()
     private let tableView = ReorderingTableView()
-    private let emptyLabel = NSTextField(labelWithString: L("No tasks yet"))
+    private let emptyLabel = NSTextField(wrappingLabelWithString: "")
     private var allEntries: [Entry] = []
     private var filtered: [Entry] = []
 
@@ -150,6 +150,9 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
                 .map { $0.0 }
         }
 
+        emptyLabel.stringValue = query.isEmpty
+            ? L("No tasks yet") + "\n" + L("Create a task with the toolbar to save progress for an agent to pick up.")
+            : L("No matching tasks.")
         render(HandoffState(rows: filtered.map(snapshot(of:)), showsEmpty: filtered.isEmpty))
     }
 
@@ -260,7 +263,8 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
             scroll.trailingAnchor.constraint(equalTo: listPage.trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
             scroll.bottomAnchor.constraint(equalTo: listPage.bottomAnchor, constant: -8),
 
-            emptyLabel.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            emptyLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
+            emptyLabel.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
             emptyLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor, constant: -24),
         ])
     }
@@ -440,11 +444,13 @@ private struct HandoffRowSnapshot: Equatable {
     let name: String
     let subtitle: String
     let running: Bool
+    let updated: Date
 }
 
 /// Handoff 列表的单元格。**建一次、复用、只改变了的字段**——原来是每行每次新建
 /// 一整棵视图树加十三条约束，任务一变就全表重来。
-private final class HandoffListCell: NSView {
+private final class HandoffListCell: NSView, SidebarRowActionContent {
+    var rowActionButton: ShellIconButton { detailButton }
     private let dot = NSView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
@@ -457,6 +463,7 @@ private final class HandoffListCell: NSView {
         detailButton = ShellIconButton(symbol: ShellSymbol.more, accessibilityLabel: L("More actions"),
                                        target: target, action: action)
         super.init(frame: .zero)
+        detailButton.revealsWithRowInteraction = true
         dot.wantsLayer = true
         dot.layer?.cornerRadius = ShellStyle.statusDotSize / 2
         title.font = ShellStyle.Font.listTitle
@@ -493,6 +500,16 @@ private final class HandoffListCell: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override func rightMouseDown(with event: NSEvent) { detailButton.performClick(nil) }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if let rendered {
+            dot.layer?.backgroundColor = ShellStyle.dotColor(bound: rendered.running, activity: nil)
+                .shellResolvedCGColor(for: effectiveAppearance)
+        }
+    }
+
     func configure(_ snapshot: HandoffRowSnapshot) {
         rowID = snapshot.id
         guard rendered != snapshot else { return }
@@ -500,8 +517,10 @@ private final class HandoffListCell: NSView {
         rendered = snapshot
         if previous?.name != snapshot.name { title.stringValue = snapshot.name }
         if previous?.subtitle != snapshot.subtitle { subtitle.stringValue = snapshot.subtitle }
+        title.toolTip = snapshot.name
+        subtitle.toolTip = L("Task document updated") + " · " + snapshot.updated.formatted(date: .abbreviated, time: .standard)
         if previous?.running != snapshot.running {
-            dot.layer?.backgroundColor = ShellStyle.dotColor(bound: snapshot.running, activity: nil).cgColor
+            dot.layer?.backgroundColor = ShellStyle.dotColor(bound: snapshot.running, activity: nil).shellResolvedCGColor(for: effectiveAppearance)
         }
     }
 }

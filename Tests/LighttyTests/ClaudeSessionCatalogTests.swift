@@ -58,6 +58,45 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         XCTAssertThrowsError(try provider.page(archived: false, cursor: nil, cancelled: { false }))
     }
 
+    /// `decodeLiveSessions`：活会话表的输入 → 结果查表。这张表是占用检测唯一的证据来源。
+    ///
+    /// 认不出来必须是「问不出来」（nil），不能是空表——空表会被读成「一个都没在跑」，
+    /// 于是一段正开着的会话会被当成可以删。
+    func testClaudeLiveRegistryDecodesOrRefuses() {
+        let id = "01a07a5f-6811-7f12-94c5-dc0f0f92f40a"
+        typealias Row = (pid: Int32, sessionID: String, cwd: String?)
+        let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
+        let cases: [(name: String, text: String, expected: [Row]?)] = [
+            // 正例：pid → 会话，cwd 也要读出来——官方开发包偶尔给不出会话目录，靠这张表补空
+            ("two sessions", """
+             [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
+              {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
+             """, [(51228, id, "/w"), (51233, other, "/w")]),
+            // 空表是合法的「一个都没在跑」
+            ("empty array", "[]", []),
+            // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信
+            ("missing cwd", "[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]", [(7, id, nil)]),
+            // 反例：八种坏输入都必须是 nil 而非空表
+            ("empty", "", nil),
+            ("not json", "not json", nil),
+            ("object not array", "{\"pid\":1}", nil),
+            ("row without pid", "[{\"cwd\":\"/w\"}]", nil),
+            ("pid 0", "[{\"pid\":0,\"sessionId\":\"\(id)\"}]", nil),
+            ("session id not a uuid", "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]", nil),
+            ("pid as string", "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]", nil),
+            ("one good row beside a bad one", "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]", nil),
+        ]
+        for c in cases {
+            let decoded = ClaudeSessionProvider.decodeLiveSessions(Data(c.text.utf8))
+            guard let expected = c.expected else {
+                XCTAssertNil(decoded, c.name)
+                continue
+            }
+            let rows = decoded?.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }
+            XCTAssertEqual(rows, expected.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }, c.name)
+        }
+    }
+
     func testHelperProcessCancellationTimeoutOutputLimitAndExitCode() throws {
         func run(_ script: String, timeout: TimeInterval = 1, limit: Int = 1024, cancelled: () -> Bool = { false }) throws -> Data {
             try SessionHelperProcess.readPage(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script],
@@ -72,6 +111,23 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 2)
         let cancelledAt = Date().addingTimeInterval(0.05)
         XCTAssertThrowsError(try run("while :; do :; done", cancelled: { Date() > cancelledAt }))
+    }
+
+    /// npm 版 codex 是 node 包装进程再起原生进程。包装进程没按时响应 SIGTERM 时，
+    /// 强杀要连它的子进程一起杀，不能留下 PPID 1 的孤儿。
+    func testForcedStopAlsoKillsTheWrappedChild() throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("helper-child-\(UUID()).pid")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        // 包装进程忽略 SIGTERM，逼出强杀那一步；子进程在后台跑，不是 exec 替换掉包装进程。
+        let script = "trap '' TERM; sleep 30 & echo $! > '\(pidFile.path)'; wait"
+        XCTAssertThrowsError(try SessionHelperProcess.readPage(
+            executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script],
+            directory: URL(fileURLWithPath: "/tmp"), environment: ["PATH": "/usr/bin:/bin"],
+            cancelled: { false }, timeout: 0.5))
+        let child = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        // 失败时不在这里补杀：pid 可能已被复用。`sleep 30` 自己会退出。
+        try waitUntil("wrapped child is gone") { kill(child, 0) != 0 }
     }
 
     /// 官方开发包列会话时只在转录文件的**头 64KB** 里找工作目录。用户第一句话里

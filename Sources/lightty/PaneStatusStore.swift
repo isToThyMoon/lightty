@@ -384,18 +384,55 @@ final class PaneStatusStore {
     private func acknowledge(_ paneID: UUID) -> Bool {
         guard let current = statuses[paneID] else { return false }
         switch unreadActivity(for: paneID) {
-        case .done: statuses[paneID] = Self.markedRead(current)
+        case .done: statuses[paneID] = Self.idled(current)
         case .attention: readAttention.insert(paneID)
         default: return false
         }
         return true
     }
 
-    private static func markedRead(_ status: PaneStatus) -> PaneStatus {
+    // MARK: - 终端标题（OSC 0）
+
+    /// agent 写进终端标题的状态（`AgentTerminalTitle`，按这家的形状解析过）。
+    ///
+    /// 这是忙/闲这条边的**第一来源**：Claude Code 的 `Stop` 跳过用户中断，而标题前缀在按 Esc 的
+    /// 那一刻就变回 ✳。只在 hook 已经登记过这个 pane 的 agent、且 agent 还没退出时采信——
+    /// Codex 的形状里「没前缀」就是闲，agent 退出后 shell 写的标题不能再算数。
+    ///
+    /// - busy：idle / done / attention → thinking。done 被顶掉等于用户已经开始下一轮，
+    ///   `UserPromptSubmit` 也会这么做；tool 比 thinking 更具体，不降级。
+    /// - settled：thinking / tool → idle。正常结束时 `Stop` 已经（或紧接着）把它变成 done，
+    ///   两种到达顺序结果一样；只有用户中断才真的停在 idle。done / attention 不动：
+    ///   done 是 lightty 侧才清的粘滞态，attention 要等下一个生命周期事件解决
+    ///   （Claude 等对话框时前缀也是 ✳，不能据此清掉「等待你处理」）。
+    /// - attention（Codex 的 `Action Required`）：idle / thinking / tool → attention；
+    ///   已是 attention 时不动，闪烁的两个相位不能把用户已读的提醒再点亮一次。
+    func noteTerminalTitle(_ title: AgentTerminalTitle, in paneID: UUID) {
+        assertMain()
+        guard let current = statuses[paneID], current.event != "SessionEnd" else { return }
+        switch (title.phase, current.state) {
+        case (.busy, .idle), (.busy, .done), (.busy, .attention):
+            statuses[paneID] = Self.restated(current, as: .thinking)
+        case (.settled, .thinking), (.settled, .tool):
+            statuses[paneID] = Self.restated(current, as: .idle)
+        case (.attention, .idle), (.attention, .thinking), (.attention, .tool):
+            readAttention.remove(paneID)
+            statuses[paneID] = Self.restated(current, as: .attention)
+        default:
+            return
+        }
+        postChange(paneID)
+    }
+
+    /// 同一份状态收回 idle，其余字段原样保留。
+    private static func idled(_ status: PaneStatus) -> PaneStatus { restated(status, as: .idle) }
+
+    /// 同一份状态换个 state，其余字段（会话、进程身份、原事件名）原样保留。
+    private static func restated(_ status: PaneStatus, as state: PaneActivity) -> PaneStatus {
         PaneStatus(
             v: status.v,
             ts: status.ts,
-            state: .idle,
+            state: state,
             agent: status.agent,
             sessionID: status.sessionID,
             sourceRoot: status.sourceRoot,

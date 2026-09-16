@@ -16,8 +16,8 @@ final class MCPSettingsView: ColumnBrowserView {
     private let noteLabel = MCPSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let stateLabel = MCPSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let documentLabel = MCPSettingsView.label("", font: SkillsStyle.sectionFont, secondary: true)
-    private let pathScroll = NSTextView.scrollableTextView()
-    private var paths: NSTextView { pathScroll.documentView as! NSTextView }
+    private let pathScroll = BrowserFileLocationsView()
+    private var paths: NSTextView { pathScroll.textView }
     private let bodyScroll = NSTextView.scrollableTextView()
     private var body: NSTextView { bodyScroll.documentView as! NSTextView }
     private lazy var enableToggle = ShellToggle(isOn: false)
@@ -55,6 +55,8 @@ final class MCPSettingsView: ColumnBrowserView {
     }
 
     private func buildDetail() {
+        pathScroll.onResize = { [weak self] in self?.needsLayout = true }
+        pathScroll.title = localize("File locations")
         for view in [detailTitle, metaLabel, noteLabel, stateLabel, enableToggle, openButton,
                      revealButton, copyButton, documentLabel, pathScroll, bodyScroll] {
             detailArea.addSubview(view)
@@ -78,7 +80,7 @@ final class MCPSettingsView: ColumnBrowserView {
         body.identifier = NSUserInterfaceItemIdentifier("mcp-document")
         body.textColor = ShellStyle.primaryText
         body.setAccessibilityLabel(localize("MCP server configuration"))
-        for scroll in [pathScroll, bodyScroll] {
+        for scroll in [bodyScroll] {
             scroll.drawsBackground = false
             scroll.automaticallyAdjustsContentInsets = false
             scroll.hasVerticalScroller = true
@@ -120,7 +122,7 @@ final class MCPSettingsView: ColumnBrowserView {
         }
         return ColumnBrowserCell(title: item.title, subtitle: nil, symbol: "",
                                  trailing: String(item.count),
-                                 image: AgentSessionIcon.image(for: agent == .claudeCode ? .claude : .codex),
+                                 image: AgentSessionIcon.image(for: agent.sessionAgent),
                                  inTree: true)
     }
 
@@ -154,20 +156,26 @@ final class MCPSettingsView: ColumnBrowserView {
         let width = max(0, rect.width - inset * 2)
         let top = SkillsStyle.topInset
         let toggle = ShellToggle.size
-        detailTitle.frame = NSRect(x: inset, y: top, width: max(0, width - 160), height: 28)
-        enableToggle.frame = NSRect(x: rect.width - inset - toggle.width, y: top + 4,
+        // 状态在标题下方，窄栏再独占一行，不挤压名称。
+        let narrow = width < 380
+        let extra: CGFloat = narrow ? 26 : 0
+        detailTitle.frame = NSRect(x: inset, y: top, width: width, height: 28)
+        metaLabel.frame = NSRect(x: inset, y: top + 34, width: narrow ? width : max(0, width - 154), height: 18)
+        let stateTop = top + 34 + extra
+        enableToggle.frame = NSRect(x: rect.width - inset - toggle.width, y: stateTop,
                                     width: toggle.width, height: toggle.height)
-        stateLabel.frame = NSRect(x: max(inset, rect.width - inset - toggle.width - 116),
-                                  y: top + 5, width: 108, height: 18)
-        metaLabel.frame = NSRect(x: inset, y: top + 36, width: width, height: 18)
-        noteLabel.frame = NSRect(x: inset, y: top + 58, width: width, height: 36)
-        openButton.frame = NSRect(x: inset, y: top + 102, width: 100, height: 28)
-        revealButton.frame = NSRect(x: inset + 108, y: top + 102, width: 28, height: 28)
-        copyButton.frame = NSRect(x: inset + 144, y: top + 102, width: 28, height: 28)
-        pathScroll.frame = NSRect(x: inset, y: top + 142, width: width, height: 36)
-        documentLabel.frame = NSRect(x: inset, y: top + 194, width: width, height: 18)
-        bodyScroll.frame = NSRect(x: inset, y: top + 226, width: width,
-                                  height: max(0, rect.height - top - 226 - SkillsStyle.inset))
+        stateLabel.frame = NSRect(x: rect.width - inset - toggle.width - 116,
+                                  y: stateTop + 1, width: 108, height: 18)
+        noteLabel.frame = NSRect(x: inset, y: top + 58 + extra, width: width, height: 36)
+        openButton.frame = NSRect(x: inset, y: top + 100 + extra, width: 100, height: 28)
+        revealButton.frame = NSRect(x: inset + 108, y: top + 100 + extra, width: 28, height: 28)
+        copyButton.frame = NSRect(x: inset + 144, y: top + 100 + extra, width: 28, height: 28)
+        pathScroll.frame = NSRect(x: inset, y: top + 136 + extra, width: width, height: pathScroll.preferredHeight)
+        let documentTop = pathScroll.frame.maxY + 12
+        documentLabel.frame = NSRect(x: inset, y: documentTop + 5, width: max(0, width - 0), height: 18)
+        let bodyTop = documentTop + 36
+        bodyScroll.frame = NSRect(x: inset, y: bodyTop, width: width,
+                                  height: max(0, rect.height - bodyTop - SkillsStyle.inset))
     }
 
     // MARK: - server 自己的事
@@ -201,7 +209,7 @@ final class MCPSettingsView: ColumnBrowserView {
     }
 
     private func setEnabled(_ value: Bool) {
-        guard let server = selectedServer, server.enabled != value else { return }
+        guard let server = selectedServer, server.canToggle, server.enabled != value else { return }
         do {
             try catalog.setEnabled(value, for: server)
             actionError = nil
@@ -229,11 +237,13 @@ final class MCPSettingsView: ColumnBrowserView {
         noteLabel.toolTip = noteLabel.stringValue
         stateLabel.stringValue = server.enabled ? localize("Enabled") : localize("Disabled")
         enableToggle.isOn = server.enabled
-        enableToggle.alphaValue = server.canToggle ? 1 : 0.4
+        enableToggle.isEnabled = server.canToggle
+        enableToggle.toolTip = server.toggleNote.map(localize)
         documentLabel.stringValue = server.sourceURL.lastPathComponent
         if paths.string != server.sourceURL.path {
             paths.string = server.sourceURL.path
             paths.scrollToBeginningOfDocument(nil)
+            pathScroll.refreshSummary()
         }
         guard renderedID != server.id else { return }
         renderedID = server.id
@@ -242,6 +252,7 @@ final class MCPSettingsView: ColumnBrowserView {
     }
 
     func refreshLocalization() {
+        pathScroll.title = localize("File locations")
         openButton.label = localize("Open file")
         applyChromeText()
         refreshButton.toolTip = localize("Refresh MCP servers")

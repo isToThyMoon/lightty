@@ -140,7 +140,14 @@ final class ShellToggle: NSView {
     static let size = NSSize(width: 34, height: 20)
 
     var isOn: Bool {
-        didSet { applyLook(animated: true) }
+        didSet { if isOn != oldValue { applyLook(animated: window?.isVisible == true) } }
+    }
+    var isEnabled = true {
+        didSet {
+            alphaValue = isEnabled ? 1 : 0.4
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
     }
     var onChange: ((Bool) -> Void)?
 
@@ -151,7 +158,6 @@ final class ShellToggle: NSView {
         super.init(frame: NSRect(origin: .zero, size: Self.size))
         wantsLayer = true
         layer?.cornerRadius = Self.size.height / 2
-        HoverCursor.installPointingHand(on: self)
         knob.wantsLayer = true
         knob.layer?.cornerRadius = 8
         knob.frame = knobFrame(on: isOn)
@@ -171,10 +177,26 @@ final class ShellToggle: NSView {
         NSRect(x: on ? Self.size.width - 18 : 2, y: 2, width: 16, height: 16)
     }
 
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override var focusRingMaskBounds: NSRect { bounds.insetBy(dx: -3, dy: -3) }
+
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: focusRingMaskBounds, xRadius: 12, yRadius: 12).fill()
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == " " { _ = accessibilityPerformPress() }
+        else { super.keyDown(with: event) }
+    }
+
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        isOn.toggle()
-        onChange?(isOn)
+        guard isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        window?.makeFirstResponder(self)
+        _ = accessibilityPerformPress()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -208,7 +230,9 @@ final class ShellToggle: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .checkBox }
     override func accessibilityValue() -> Any? { isOn ? 1 : 0 }
+    override func isAccessibilityEnabled() -> Bool { isEnabled }
     override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
         isOn.toggle()
         onChange?(isOn)
         return true

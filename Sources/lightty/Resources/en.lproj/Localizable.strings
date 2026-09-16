@@ -246,11 +246,7 @@
 "Purple" = "Purple";
 "White" = "White";
 
-"Injected when an agent starts, written back as it works." = "Injected when an agent starts, written back as it works.";
-"Click to resume your last session." = "Click to resume your last session.";
 "Primary sidebar" = "Primary sidebar";
-"Manage handoff tasks" = "Manage handoff tasks";
-"Continue local CLI sessions" = "Continue local CLI sessions";
 "The CLI session interface is not supported by this version." = "The CLI session interface is not supported by this version.";
 "Reading CLI sessions timed out. Try refreshing." = "Reading CLI sessions timed out. Try refreshing.";
 "The session catalog exceeded the loading limit." = "The session catalog exceeded the loading limit.";
@@ -486,3 +482,19 @@
 "Used %d times by Claude Code" = "Used %d times by Claude Code";
 "Never used by Claude Code" = "Never used by Claude Code";
 "No usage record from Claude Code" = "No usage record from Claude Code";
+
+"Save task progress for an agent to pick up." = "Save task progress for an agent to pick up.";
+
+"Browse and continue local Agent sessions." = "Browse and continue local Agent sessions.";
+
+"Create a task with the toolbar to save progress for an agent to pick up." = "Create a task with the toolbar to save progress for an agent to pick up.";
+
+"No matching tasks." = "No matching tasks.";
+
+"Not open" = "Not open";
+
+"Task document updated" = "Task document updated";
+
+"No local sessions yet. Start a session with the toolbar; return here to continue it." = "No local sessions yet. Start a session with the toolbar; return here to continue it.";
+
+"Opened" = "Opened";

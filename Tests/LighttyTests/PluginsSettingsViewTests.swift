@@ -236,10 +236,7 @@ struct PluginsSettingsViewTests {
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
                     let directory = URL(fileURLWithPath: path)
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                    view.cacheDisplay(in: view.bounds, to: bitmap)
-                    let data = try #require(bitmap.representation(using: .png, properties: [:]))
-                    try data.write(to: directory.appendingPathComponent(
+                    try captureSettingsWindow(window, to: directory.appendingPathComponent(
                         "settings-plugins-\(language)-\(appearance.rawValue)-\(Int(width)).png"))
                 }
             }

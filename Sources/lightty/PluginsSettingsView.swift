@@ -13,13 +13,12 @@ final class PluginsSettingsView: ColumnBrowserView {
     private var renderedRaw = false
 
     private let detailTitle = PluginsSettingsView.label("", font: SkillsStyle.titleFont)
-    private let identityLabel = PluginsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let metaLabel = PluginsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let noteLabel = PluginsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
     private let documentLabel = PluginsSettingsView.label("", font: SkillsStyle.sectionFont, secondary: true)
     private let stateLabel = PluginsSettingsView.label("", font: SkillsStyle.summaryFont, secondary: true)
-    private let pathScroll = NSTextView.scrollableTextView()
-    private var paths: NSTextView { pathScroll.documentView as! NSTextView }
+    private let pathScroll = BrowserFileLocationsView()
+    private var paths: NSTextView { pathScroll.textView }
     private let bodyScroll = NSTextView.scrollableTextView()
     private var body: NSTextView { bodyScroll.documentView as! NSTextView }
     private lazy var enableToggle = ShellToggle(isOn: false)
@@ -62,7 +61,9 @@ final class PluginsSettingsView: ColumnBrowserView {
     }
 
     private func buildDetail() {
-        for view in [detailTitle, identityLabel, metaLabel, noteLabel, stateLabel, enableToggle,
+        pathScroll.onResize = { [weak self] in self?.needsLayout = true }
+        pathScroll.title = localize("File locations")
+        for view in [detailTitle, metaLabel, noteLabel, stateLabel, enableToggle,
                      openButton, revealButton, copyButton, rawButton, documentLabel,
                      pathScroll, bodyScroll] {
             detailArea.addSubview(view)
@@ -81,10 +82,6 @@ final class PluginsSettingsView: ColumnBrowserView {
         paths.textContainerInset = .zero
         paths.textContainer?.lineFragmentPadding = 0
         paths.setAccessibilityLabel(localize("File locations"))
-        pathScroll.drawsBackground = false
-        pathScroll.automaticallyAdjustsContentInsets = false
-        pathScroll.hasVerticalScroller = true
-        pathScroll.autohidesScrollers = true
         body.identifier = NSUserInterfaceItemIdentifier("plugin-document")
         body.isEditable = false
         body.isSelectable = true
@@ -130,7 +127,7 @@ final class PluginsSettingsView: ColumnBrowserView {
                     // Claude Code 没有这个字段，退回长描述，放不下就截断，全文在 tooltip。
                     let blurb = plugin.tagline.isEmpty ? plugin.summary : plugin.tagline
                     rows.append(.init(title: plugin.name,
-                                      symbol: "puzzlepiece.extension", key: key(for: plugin),
+                                      key: key(for: plugin),
                                       count: plugin.contents.count, depth: 0,
                                       note: blurb.isEmpty ? nil : blurb,
                                       version: plugin.state == .cachedOnly ? localize("Cached only") : plugin.version,
@@ -151,17 +148,31 @@ final class PluginsSettingsView: ColumnBrowserView {
         return super.tableView(tableView, heightOfRow: row)
     }
 
+    /// 每一级都挂在上一级的文字下面，层级才读得出来：市场小标题与 Agent 标题同列，
+    /// 插件再缩一级。插件行不放图标——整列都是插件，同一个图标逐行重复只占宽度。
+    /// lane 是图标槽起点，文字在它后面 24pt（16 槽 + 8 间距）。
+    /// Agent 行只有一个窄箭头，槽贴到行首，箭头离底框左缘约 8pt，后面各级跟着前移。
+    private static let agentLane: CGFloat = 0
+    private static let marketplaceLane = agentLane + 24
+    private static let pluginLane = marketplaceLane + 16 - 24
+
     override func navigationCell(for item: NavigationItem) -> NSView? {
+        // 数量只标在插件上：Agent 和市场的合计读不出含义，一列数字只是噪音。
         if item.disclosure != nil {
             return ColumnBrowserCell(title: item.title, subtitle: nil, symbol: item.symbol,
-                                     trailing: String(item.count), inTree: true,
+                                     trailing: "", inTree: true,
                                      titleFont: ShellStyle.Font.groupTitle, groupSurface: true,
-                                     topSpacing: item.disclosure == "agent:codex" && navigation.first?.disclosure != item.disclosure ? 12 : 0)
+                                     topSpacing: item.disclosure == "agent:codex" && navigation.first?.disclosure != item.disclosure ? 12 : 0,
+                                     lane: Self.agentLane)
         }
-        guard item.key == nil else { return super.navigationCell(for: item) }
-        return ColumnBrowserCell(title: item.title, subtitle: nil, symbol: "", trailing: String(item.count),
-                                 heading: true, tooltip: item.qualifiedName, inTree: true,
-                                 headingFont: ShellStyle.Font.body, headingColor: ShellStyle.secondaryText)
+        guard item.key != nil else {
+            return ColumnBrowserCell(title: item.title, subtitle: nil, symbol: "", trailing: "",
+                                     heading: true, tooltip: item.qualifiedName, inTree: true,
+                                     lane: Self.marketplaceLane)
+        }
+        return ColumnBrowserCell(title: item.title, subtitle: item.note, symbol: item.symbol,
+                                 trailing: String(item.count), version: item.version,
+                                 tooltip: item.qualifiedName, inTree: true, lane: Self.pluginLane)
     }
 
     /// 中栏按类型分组，顺序照两族排：先是进上下文的文本（技能、命令、子 Agent），
@@ -215,23 +226,28 @@ final class PluginsSettingsView: ColumnBrowserView {
         let inset = detailInset
         let width = max(0, rect.width - inset * 2)
         let top = SkillsStyle.topInset
-        let toggleSize = ShellToggle.size
-        detailTitle.frame = NSRect(x: inset, y: top, width: max(0, width - 160), height: 28)
-        enableToggle.frame = NSRect(x: rect.width - inset - toggleSize.width, y: top + 4,
-                                    width: toggleSize.width, height: toggleSize.height)
-        stateLabel.frame = NSRect(x: max(inset, rect.width - inset - toggleSize.width - 116),
-                                  y: top + 5, width: 108, height: 18)
-        identityLabel.frame = NSRect(x: inset, y: top + 36, width: width, height: 18)
-        metaLabel.frame = NSRect(x: inset, y: top + 58, width: width, height: 18)
-        noteLabel.frame = NSRect(x: inset, y: top + 80, width: width, height: 36)
-        openButton.frame = NSRect(x: inset, y: top + 124, width: 100, height: 28)
-        revealButton.frame = NSRect(x: inset + 108, y: top + 124, width: 28, height: 28)
-        copyButton.frame = NSRect(x: inset + 144, y: top + 124, width: 28, height: 28)
-        pathScroll.frame = NSRect(x: inset, y: top + 164, width: width, height: 72)
-        documentLabel.frame = NSRect(x: inset, y: top + 254, width: max(0, width - 80), height: 18)
-        rawButton.frame = NSRect(x: rect.width - inset - 68, y: top + 246, width: 68, height: 28)
-        bodyScroll.frame = NSRect(x: inset, y: top + 290, width: width,
-                                  height: max(0, rect.height - top - 290 - SkillsStyle.inset))
+        let toggle = ShellToggle.size
+        // 状态在标题下方，窄栏再独占一行，不挤压名称。
+        let narrow = width < 380
+        let extra: CGFloat = narrow ? 26 : 0
+        detailTitle.frame = NSRect(x: inset, y: top, width: width, height: 28)
+        metaLabel.frame = NSRect(x: inset, y: top + 34, width: narrow ? width : max(0, width - 154), height: 18)
+        let stateTop = top + 34 + extra
+        enableToggle.frame = NSRect(x: rect.width - inset - toggle.width, y: stateTop,
+                                    width: toggle.width, height: toggle.height)
+        stateLabel.frame = NSRect(x: rect.width - inset - toggle.width - 116,
+                                  y: stateTop + 1, width: 108, height: 18)
+        noteLabel.frame = NSRect(x: inset, y: top + 58 + extra, width: width, height: 36)
+        openButton.frame = NSRect(x: inset, y: top + 100 + extra, width: 100, height: 28)
+        revealButton.frame = NSRect(x: inset + 108, y: top + 100 + extra, width: 28, height: 28)
+        copyButton.frame = NSRect(x: inset + 144, y: top + 100 + extra, width: 28, height: 28)
+        pathScroll.frame = NSRect(x: inset, y: top + 136 + extra, width: width, height: pathScroll.preferredHeight)
+        let documentTop = pathScroll.frame.maxY + 12
+        documentLabel.frame = NSRect(x: inset, y: documentTop + 5, width: max(0, width - 80), height: 18)
+        rawButton.frame = NSRect(x: rect.width - inset - 68, y: documentTop, width: 68, height: 28)
+        let bodyTop = documentTop + 36
+        bodyScroll.frame = NSRect(x: inset, y: bodyTop, width: width,
+                                  height: max(0, rect.height - bodyTop - SkillsStyle.inset))
     }
 
     // MARK: - 插件自己的事
@@ -331,7 +347,7 @@ final class PluginsSettingsView: ColumnBrowserView {
     private func updateDetail() {
         let plugin = selectedPlugin
         let item = selectedContent
-        for view in [detailTitle, identityLabel, metaLabel, stateLabel, openButton,
+        for view in [detailTitle, metaLabel, stateLabel, openButton,
                      revealButton, copyButton, pathScroll] {
             view.isHidden = plugin == nil
         }
@@ -348,12 +364,10 @@ final class PluginsSettingsView: ColumnBrowserView {
         }
         detailTitle.stringValue = plugin.name
         detailTitle.toolTip = plugin.identifier
-        identityLabel.stringValue = plugin.identifier
-        identityLabel.toolTip = plugin.identifier
         // 用量只有 Claude Code 记；Codex 侧没有这份数据，就什么都不说，
         // 而不是让它显示成「从没用过」。
         let usage = plugin.agent == .claudeCode
-            ? (plugin.usage?.summary(localize: localize) ?? localize("No usage record from Claude Code"))
+            ? plugin.usage?.summary(localize: localize)
             : nil
         let meta = ([plugin.version, plugin.marketplace, plugin.agent.title, usage].compactMap { $0 })
             .filter { !$0.isEmpty }.joined(separator: " · ")
@@ -370,12 +384,13 @@ final class PluginsSettingsView: ColumnBrowserView {
         noteLabel.stringValue = note ?? (plugin.tagline.isEmpty ? plugin.summary : plugin.tagline)
         noteLabel.toolTip = note ?? (plugin.summary.isEmpty ? plugin.tagline : plugin.summary)
         var seen: Set<String> = []
-        let locations = (plugin.roots.map(\.path) + (item?.locations.map(\.path) ?? []))
+        let locations = ((item?.locations.map(\.path) ?? []) + plugin.roots.map(\.path))
             .filter { seen.insert($0).inserted }
         let pathText = locations.joined(separator: "\n")
         if paths.string != pathText {
             paths.string = pathText
             paths.scrollToBeginningOfDocument(nil)
+            pathScroll.refreshSummary()
         }
         let target = item?.fileURL ?? plugin.root
         openButton.isEnabled = target.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
@@ -401,7 +416,7 @@ final class PluginsSettingsView: ColumnBrowserView {
         guard force || changed else { return }
         let selection = body.selectedRange()
         let scrollOrigin = bodyScroll.contentView.bounds.origin
-        body.textStorage?.setAttributedString(SkillDocumentPresentation.text(item.content, raw: raw))
+        body.textStorage?.setAttributedString(SkillDocumentPresentation.text(item.content, raw: raw, hidesFrontmatter: true))
         if changed {
             body.setSelectedRange(NSRange(location: 0, length: 0))
             body.scrollToBeginningOfDocument(nil)
@@ -416,6 +431,7 @@ final class PluginsSettingsView: ColumnBrowserView {
     }
 
     func refreshLocalization() {
+        pathScroll.title = localize("File locations")
         openButton.label = localize("Open file")
         rawButton.label = rawDocument ? localize("Preview") : localize("Source")
         applyChromeText()

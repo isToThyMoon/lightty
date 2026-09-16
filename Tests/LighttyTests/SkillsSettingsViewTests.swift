@@ -347,10 +347,8 @@ struct SkillsSettingsViewTests {
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
                     let directory = URL(fileURLWithPath: path)
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    let bitmap = try #require(settings.bitmapImageRepForCachingDisplay(in: settings.bounds))
-                    settings.cacheDisplay(in: settings.bounds, to: bitmap)
-                    let data = try #require(bitmap.representation(using: .png, properties: [:]))
-                    try data.write(to: directory.appendingPathComponent("settings-skills-\(language)-\(appearance.rawValue)-\(Int(width)).png"))
+                    try captureSettingsWindow(window, to: directory.appendingPathComponent(
+                        "settings-skills-\(language)-\(appearance.rawValue)-\(Int(width)).png"))
                 }
             }
         }
@@ -389,12 +387,12 @@ struct SkillsSettingsViewTests {
 
     @Test func documentPreviewPreservesCodeAndRawViewPreservesFrontmatter() {
         let text = "---\nname: example\n---\n# Title\n```swift\n# this is code\n```"
-        let preview = SkillDocumentPresentation.text(text, raw: false)
+        let preview = SkillDocumentPresentation.text(text, raw: false, hidesFrontmatter: true)
         #expect(preview.string.contains("# this is code"))
-        #expect(preview.string.contains("name: example"))
+        #expect(!preview.string.contains("name: example"))
         #expect(SkillDocumentPresentation.text(text, raw: true).string == text)
-        let styled = SkillDocumentPresentation.text("\u{feff}---\r\nname: example\r\n...\r\n**中文** and `code`", raw: false)
-        #expect(styled.string == "---\nname: example\n...\n中文 and code\n")
+        let styled = SkillDocumentPresentation.text("\u{feff}---\r\nname: example\r\n...\r\n**中文** and `code`", raw: false, hidesFrontmatter: true)
+        #expect(styled.string == "中文 and code\n")
         let bodyOffset = (styled.string as NSString).range(of: "中文").location
         let bold = styled.attribute(.font, at: bodyOffset, effectiveRange: nil) as? NSFont
         #expect(bold.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) } == true)

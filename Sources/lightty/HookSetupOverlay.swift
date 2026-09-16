@@ -657,11 +657,7 @@ extension HookInstaller.Report {
 }
 
 extension HookAgent {
-    /// 产品名，不走本地化以外的加工——用户在自己机器上看到的就是这两个名字
-    var displayName: String {
-        switch self {
-        case .claudeCode: return L("Claude Code")
-        case .codex: return L("Codex")
-        }
-    }
+    /// 产品名，不走本地化以外的加工——用户在自己机器上看到的就是这两个名字。
+    /// 名字本身取自 spec，和启动浮层、设置页用的是同一个。
+    var displayName: String { L(spec.launchName) }
 }

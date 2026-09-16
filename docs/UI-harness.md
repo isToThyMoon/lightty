@@ -6,7 +6,7 @@
 
 | 区域 | 职责与视觉依据 | 实现入口 |
 | --- | --- | --- |
-| 第一侧栏 | Handoff / Sessions 资料库；浮起的卡片，标题、说明、分组和多行列表 | [PrimarySidebar](../Sources/lightty/PrimarySidebar.swift)、[HandoffSidebarContent](../Sources/lightty/HandoffSidebarContent.swift)、[SessionsSidebarContent](../Sources/lightty/SessionsSidebarContent.swift) |
+| 第一侧栏 | Handoff / Sessions 资料库；浮起的卡片，模式切换、分组和多行列表 | [PrimarySidebar](../Sources/lightty/PrimarySidebar.swift)、[HandoffSidebarContent](../Sources/lightty/HandoffSidebarContent.swift)、[SessionsSidebarContent](../Sources/lightty/SessionsSidebarContent.swift) |
 | 第二侧栏 | 当前窗口的标签页与终端树；用缩进、容器字重和导航色表达归属及当前位置 | [TabColumnView](../Sources/lightty/TabColumnView.swift)、[TabSidebarView](../Sources/lightty/TabSidebarView.swift) |
 | Terminal 区 | 终端内容由 Ghostty 配置；身份胶囊贴合终端，展开面板延续同一身份行 | [PaneHeaderView](../Sources/lightty/PaneHeaderView.swift)、[PaneIdentityPanel](../Sources/lightty/PaneIdentityPanel.swift)、[PaneLayoutView](../Sources/lightty/PaneLayoutView.swift) |
 
@@ -26,6 +26,8 @@
 | 导航与活动 | `activeContainerFill` / `activeItemFill` 区分所在容器与当前终端；`navigationAccent` 表达位置，`accent` 表达控件强调。任务绑定与 agent 活动通过 `dotColor` / `statusColor` 取色，避免混同导航与活动状态。 |
 | 间距 | `textLineGap` 属于同一文本块，`inlineGap` 属于相邻元素，`rowVerticalInset` 是行内留白，`listRowGap` 是行间留白。`sidebarHorizontalInset`、`sectionInset`、`chromeGap` 分别服务于行内容、分组内容和 chrome 区块。 |
 | 尺寸与圆角 | `chromeRowHeight` 是工具栏/终端头部的共同模数；`listActionSize`、`compactActionSize` 是不同密度下的操作区域。`panelCornerRadius`、`rowCornerRadius`、`compactRowCornerRadius`、`controlCornerRadius`、`capsuleCornerRadius` 按容器角色选择。 |
+
+两级侧栏的模式/标题带共用 `ShellStyle.SidebarHeader`，对齐头部中心和列表起点；第一侧栏的模式说明放在 tooltip 与空状态，不常驻占一行。第一侧栏保留浮卡的外框与阴影，窗口外轮廓由系统负责。行内更多操作在悬停、键盘聚焦或菜单打开时显示，操作槽位始终保留。
 
 两级侧栏共享颜色与文字角色，允许列表密度不同。第一侧栏多行列表与第二侧栏紧凑树行的行高、缩进和操作区域不必相同。`PaneIdentityMetrics` 则同时服务胶囊与展开面板，它们的身份行需要保持同构。
 

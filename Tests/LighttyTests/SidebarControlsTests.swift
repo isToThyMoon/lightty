@@ -9,7 +9,10 @@ final class SidebarControlsTests: XCTestCase {
             .appendingPathComponent("sidebar-detached-titlebar-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
+        let library = SessionLibrary(fileURL: taskDirectory.appendingPathComponent("sessions.json"),
+            providers: [SidebarSnapshotCatalog(source: .init(agent: .codex, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path))),
+                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))])
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false, sessionLibrary: library)
         ensureTerminalRuntime()
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -55,7 +58,10 @@ final class SidebarControlsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
 
         _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
+        let library = SessionLibrary(fileURL: taskDirectory.appendingPathComponent("sessions.json"),
+            providers: [SidebarSnapshotCatalog(source: .init(agent: .codex, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path))),
+                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))])
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false, sessionLibrary: library)
         ensureTerminalRuntime()
 
         let controller = TerminalWindowController()
@@ -133,6 +139,17 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(closeControls.allSatisfy { !$0.isHidden })
         XCTAssertEqual(
             try XCTUnwrap(closeControls.first).frame.maxX, sidebar.frame.maxX, accuracy: 0.5)
+        let tabIDs = controller.tabOverview().map(\.id)
+        let paneIDs = controller.panes().map(\.dragIdentifier)
+        let activePane = controller.activePane
+        taskPanel.selectMode(.sessions, animated: false)
+        taskPanel.selectMode(.handoff, animated: false)
+        XCTAssertEqual(controller.tabOverview().map(\.id), tabIDs)
+        XCTAssertEqual(controller.panes().map(\.dragIdentifier), paneIDs)
+        XCTAssertTrue(controller.activePane === activePane, "切换资料模式不改变终端现场")
+        if let directory = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            try captureSidebarVariants(controller, panel: taskPanel, directory: URL(fileURLWithPath: directory))
+        }
     }
 
     private func descendantIconButtons(of view: NSView) -> [ShellIconButton] {

@@ -25,6 +25,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private var agentFilter = 0
     private var showingArchived = false
     private let status = NSTextField(labelWithString: "")
+    private let introduction = NSTextField(wrappingLabelWithString: L("No local sessions yet. Start a session with the toolbar; return here to continue it."))
     private let table = NSTableView()
     private let scroll = SidebarListScrollView()
     private var rows: [Row] = []
@@ -56,6 +57,12 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         SearchPaletteStyle.configure(search)
         newProject.target = self; newProject.action = #selector(createProject)
         more.target = self; more.action = #selector(loadMore)
+        introduction.font = ShellStyle.Font.body
+        introduction.textColor = ShellStyle.secondaryText
+        introduction.alignment = .center
+        introduction.isHidden = true
+        introduction.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(introduction)
         status.font = ShellStyle.Font.caption
         status.textColor = ShellStyle.secondaryText
         status.isSelectable = false
@@ -153,6 +160,9 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 constant: searchMode ? 14 : 0),
             scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -4),
             status.heightAnchor.constraint(equalToConstant: 16),
+            introduction.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 12),
+            introduction.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -20),
+            introduction.centerYAnchor.constraint(equalTo: scroll.centerYAnchor, constant: 24),
             status.bottomAnchor.constraint(equalTo: more.topAnchor, constant: -4),
             more.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
@@ -219,6 +229,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         var projectNames: [UUID: String]
         /// 相对时间的语种。变了同样要让所有单元格重排一次。
         var language: String
+        var showsIntroduction: Bool
         var messages: [String]
         var showMore: Bool
         var canLoadMore: Bool
@@ -256,6 +267,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 table.selectRowIndexes([index], byExtendingSelection: false)
             }
         }
+        introduction.isHidden = !state.showsIntroduction
         if previous?.messages != state.messages {
             status.stringValue = state.messages.joined(separator: " · ")
             status.toolTip = state.messages.isEmpty ? nil : state.messages.joined(separator: "\n")
@@ -376,8 +388,11 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             rows.append(.heading)
             rows += (membersByProject[nil] ?? []).map { .session($0.0, nil) }
         } else { rows = grouped.map { .session($0.0, $0.1) } }
+        let showsIntroduction = !searchMode && !library.loading && library.records.isEmpty
+            && library.errors.isEmpty && library.storageError == nil && organization.projects.isEmpty
+            && query.isEmpty && agentFilter == 0 && !showingArchived
         var messages: [String] = []
-        if !library.loading && filtered.isEmpty { messages.append(L("No matching sessions.")) }
+        if !library.loading && filtered.isEmpty && !showsIntroduction { messages.append(L("No matching sessions.")) }
         if library.hasMore() {
             messages.append(L("More sessions are available. Search covers loaded sessions."))
         }
@@ -392,6 +407,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             rows: rows,
             projectNames: projectNames,
             language: LanguagePreference.current().rawValue,
+            showsIntroduction: showsIntroduction,
             messages: messages,
             showMore: library.hasMore(),
             canLoadMore: !library.loading && library.hasMore(),
@@ -774,7 +790,8 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
 
 }
 
-private final class SessionListCell: NSTableCellView {
+private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
+    var rowActionButton: ShellIconButton { menuButton }
     override var draggingImageComponents: [NSDraggingImageComponent] {
         let size = NSSize(width: min(max(bounds.width, 180), 260), height: 40)
         let label = title.stringValue
@@ -843,6 +860,7 @@ private final class SessionListCell: NSTableCellView {
         location.font = ShellStyle.Font.caption
         location.textColor = ShellStyle.tertiaryText
         location.lineBreakMode = .byTruncatingMiddle
+        menuButton.revealsWithRowInteraction = true
         menuButton.isBordered = false; menuButton.target = self; menuButton.action = #selector(openMenu)
         menuButton.setAccessibilityLabel(L("Session actions"))
         agentIcon.isHidden = true
@@ -876,6 +894,7 @@ private final class SessionListCell: NSTableCellView {
     }
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError() }
+    override func rightMouseDown(with event: NSEvent) { onMenu?() }
     @objc private func openMenu() { onMenu?() }
 }
 

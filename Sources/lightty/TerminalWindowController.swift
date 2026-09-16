@@ -703,6 +703,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             // terminal was already first responder when the Stop hook arrived.
             self.sessionLibrary.markRead(pane.dragIdentifier)
         }
+        // agent 经 OSC 0 推送的忙/闲前缀与会话标题（见 AgentTerminalTitle）。
+        pane.terminal.onTitleChange = { [weak self, weak pane] title in
+            guard let self, let pane else { return }
+            self.sessionLibrary.noteTerminalTitle(title, in: pane.dragIdentifier)
+        }
     }
 
     /// 窗口内全部 pane（跨所有 tab，树序）：任务管理、跨窗口拖拽等全局操作用。
@@ -1053,11 +1058,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         return lastTrafficLightRowCenterFromTop
     }
 
-    /// 标签页侧栏（docked）的顶部避让：表头行中线对齐 task 卡片的「任务」小节
-    /// 标签（卡片顶 6 + 头部行 28 高居中于红绿灯行 + 标签上距 14 + 标签半高 7），
-    /// 两栏并排时是一排表头；不与红绿灯同行，卡片收起后侧栏贴窗左缘也不会撞三键。
+    /// 与第一侧栏模式切换带共享顶边，单独展开时也避让红绿灯。
     private func tabSidebarTopInset(in window: NSWindow) -> CGFloat {
-        trafficLightRowCenterFromTop(in: window) + 21
+        trafficLightRowCenterFromTop(in: window) + ShellStyle.SidebarHeader.offsetFromTrafficLights
     }
 
     /// 红绿灯所在的私有标题栏容器（themeFrame 直属子视图），侧栏 chrome 必须垫在

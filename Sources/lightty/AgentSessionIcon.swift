@@ -7,15 +7,13 @@ import LighttyCore
 /// 站得住，所以不做 template——它不跟随任何前景色。OpenAI 的标识本身就是单色，
 /// 黑底反白、白底纯黑才是它的原样，所以只有它保持 template 由调用方着色。
 enum AgentSessionIcon {
-    private static let claude = load("claude")
-    private static let openAI = load("openai")
-
-    static func image(for agent: SessionAgent) -> NSImage? {
-        switch agent {
-        case .claude: return claude
-        case .codex: return openAI
+    /// 资源名写在各家的 spec 里；这里只负责加载与缓存，不认识任何一家的名字。
+    private static let images: [SessionAgent: NSImage] = SessionAgent.allCases
+        .reduce(into: [:]) { images, agent in
+            images[agent] = load(agent.spec.iconAssetName)
         }
-    }
+
+    static func image(for agent: SessionAgent) -> NSImage? { images[agent] }
 
     private static func load(_ name: String) -> NSImage? {
         guard let url = Bundle.module.url(forResource: "agent-" + name, withExtension: "svg"),

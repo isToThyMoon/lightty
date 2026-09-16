@@ -178,34 +178,51 @@ enum HookMarketplace {
     // MARK: - 文件内容
 
     /// 整棵树的全部文件（相对 root 的路径 + 字节）。顺序稳定，测试直接对着断言。
+    ///
+    /// 每家读哪个路径写在它自己的 spec 里，这里只按「清单 → 插件清单 → hooks」
+    /// 三组各遍历一遍两家：多一家 Agent 时这个函数一个字都不用改。
     static func files(command: String) -> [(path: String, data: Data)] {
-        [
-            (".claude-plugin/marketplace.json", claudeMarketplaceManifest()),
-            (".agents/plugins/marketplace.json", codexMarketplaceManifest()),
-            // 两份清单同处一个插件目录，但各自带各自的版本号——它们本来就是
-            // 两家分开读的文件，谁也看不见对方那份
-            ("plugins/\(pluginName)/.claude-plugin/plugin.json",
-             pluginManifest(for: .claudeCode, version: version(for: .claudeCode, command: command))),
-            ("plugins/\(pluginName)/.codex-plugin/plugin.json",
-             pluginManifest(for: .codex, version: version(for: .codex, command: command))),
-            // 两家读的是**不同的文件**，所以各给各的事件表：把 Codex 的
-            // `PermissionRequest` 塞给 Claude Code（反之亦然）只是噪音。
-            ("plugins/\(pluginName)/hooks/hooks.json",
-             hooksDocument(for: .claudeCode, command: command)),
-            ("plugins/\(pluginName)/hooks.json",
-             hooksDocument(for: .codex, command: command)),
-            // 技能反过来只有一份：SKILL.md 的格式与 skills/<名>/SKILL.md 的布局
-            // 两家一致，两份清单指的是同一个目录。
-            ("plugins/\(pluginName)/skills/\(HandoffProtocol.skillName)/SKILL.md",
-             skillDocument),
-        ]
+        let plugin = "plugins/\(pluginName)"
+        return HookAgent.allCases.map {
+            (path: $0.spec.marketplaceManifestPath, data: marketplaceManifest(for: $0))
+        }
+        // 两份插件清单同处一个插件目录，但各自带各自的版本号——它们本来就是
+        // 两家分开读的文件，谁也看不见对方那份
+        + HookAgent.allCases.map {
+            (path: "\(plugin)/\($0.spec.pluginManifestPath)",
+             data: pluginManifest(for: $0, version: version(for: $0, command: command)))
+        }
+        // 两家读的是**不同的文件**，所以各给各的事件表：把 Codex 的
+        // `PermissionRequest` 塞给 Claude Code（反之亦然）只是噪音。
+        + HookAgent.allCases.map {
+            (path: "\(plugin)/\($0.spec.hooksDocumentPath)",
+             data: hooksDocument(for: $0, command: command))
+        }
+        // 技能反过来只有一份：SKILL.md 的格式与 skills/<名>/SKILL.md 的布局
+        // 两家一致，两份清单指的是同一个目录。
+        + [(path: "\(plugin)/skills/\(HandoffProtocol.skillName)/SKILL.md", data: skillDocument)]
     }
 
     /// hook 定义。事件 key **必须 PascalCase**（实测 snake_case / camelCase 不触发），
     /// 不带 `matcher`——缺省即匹配全部，我们对所有工具/来源都要状态。
     /// 两家都不支持通配 key，每个事件必须独立成键。
     static func hooksDocument(for agent: HookAgent, command: String) -> Data {
-        hooksDocument(events: agent.events, command: command)
+        hooksDocument(events: agent.events, command: hookCommand(for: agent, shim: command))
+    }
+
+    /// 写进 hooks 的那一行：shim 路径 + `--agent <名>`。
+    ///
+    /// **这份文件是我们自己生成的，哪一家读它是确定的**，所以直接告诉 hook，而不是
+    /// 让它从父进程链上的可执行路径反推——那条路的形状随安装方式变（原生 claude 解析后
+    /// 是 `versions/<版本号>`，npm 装的是 `claude.exe`），每出一种装法就得补一次。
+    ///
+    /// 参数能到达 hook，是因为两家都把 `command` 当**命令串**执行：Claude Code 不给
+    /// `args` 时走 `sh -c`（官方文档「Shell form」）；Codex 官方插件 codex-plugin-cc 的
+    /// hooks.json 里同样在 command 串里带位置参数与 `${…}` 展开。
+    ///
+    /// 路径不加引号：`~/.lightty/bin` 是我们自己定的固定位置，不含空格。
+    static func hookCommand(for agent: HookAgent, shim: String) -> String {
+        "\(shim) --agent \(agent.sessionAgent.rawValue)"
     }
 
     /// 事件表参数化的版本：测试用它构造"事件表变了"的假设情形，
@@ -220,6 +237,11 @@ enum HookMarketplace {
 
     /// 这一家读哪份 marketplace 清单。两家读的是两个不同路径上的两份文件，
     /// 内容也不同（Codex 那份多 `policy` 与 `category`）。
+    ///
+    /// 清单**内容**没有跟着路径进 `AgentSpec`：它引用 marketplace / 插件名这两个
+    /// 应用侧常量，而且是任意嵌套的 JSON 值——塞进纯数据 spec 只会换来一个
+    /// 不 Sendable 的字段。加一家 Agent 时这两个 switch 各要补一段，见
+    /// `docs/specs/agent-integration-cleanup.md`。
     static func marketplaceManifest(for agent: HookAgent) -> Data {
         switch agent {
         case .claudeCode: return claudeMarketplaceManifest()

@@ -12,6 +12,7 @@ import LighttyCore
 final class HookHandoffTests: XCTestCase {
     private var paneID: UUID!
     private var taskDir: URL!
+    private var launcher: HookLauncher!
 
     override func setUpWithError() throws {
         paneID = UUID()
@@ -19,20 +20,19 @@ final class HookHandoffTests: XCTestCase {
         taskDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("lightty-handoff-\(paneID.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: taskDir, withIntermediateDirectories: true)
+        let hook = HookLauncher.builtHookBinary()
         XCTAssertTrue(
-            FileManager.default.isExecutableFile(atPath: hookBinary.path),
-            "先 swift build 出 lightty-hook：\(hookBinary.path)")
+            FileManager.default.isExecutableFile(atPath: hook.path),
+            "先 swift build 出 lightty-hook：\(hook.path)")
+        let scratch = taskDir.appendingPathComponent("runs", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        launcher = HookLauncher(scratch: scratch, hook: hook)
     }
 
     override func tearDownWithError() throws {
+        launcher?.reclaimSpawnedProcesses()
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
         try? FileManager.default.removeItem(at: taskDir)
-    }
-
-    private var hookBinary: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/debug/lightty-hook")
     }
 
     // MARK: - 工具
@@ -55,26 +55,19 @@ final class HookHandoffTests: XCTestCase {
     }
 
     /// 跑一发 hook，返回它注入的 additionalContext（没输出 → nil）。
+    ///
+    /// 走 `HookLauncher` 造 pty 把 hook 摆成「主会话」的形状：hook 每一发都先判断自己是不是
+    /// 工具里拉起的子会话，判据是祖先链的终端结构，直接 `Process` 起的话形状取决于谁在跑测试。
     private func fire(_ event: String, session: String) throws -> String? {
-        let p = Process()
-        p.executableURL = hookBinary
-        p.environment = [
-            "LIGHTTY_PANE_ID": paneID.uuidString,
-            // 不存在的 socket：sendto 立即 ENOENT，hook 照样往下走
-            "LIGHTTY_SOCK": "/tmp/lightty-handoff-test-nonexistent.sock",
-            "PATH": "/usr/bin:/bin",
-        ]
-        let stdin = Pipe(), stdout = Pipe()
-        p.standardInput = stdin
-        p.standardOutput = stdout
-        p.standardError = FileHandle.nullDevice
-        try p.run()
-        stdin.fileHandleForWriting.write(
-            Data(#"{"hook_event_name":"\#(event)","session_id":"\#(session)"}"#.utf8))
-        try stdin.fileHandleForWriting.close()
-        let out = stdout.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        XCTAssertEqual(p.terminationStatus, 0, "hook 永远 exit 0")
+        let run = try launcher.run(
+            payload: #"{"hook_event_name":"\#(event)","session_id":"\#(session)"}"#,
+            environment: [
+                "LIGHTTY_PANE_ID": paneID.uuidString,
+                // 不存在的 socket：sendto 立即 ENOENT，hook 照样往下走
+                "LIGHTTY_SOCK": "/tmp/lightty-handoff-test-nonexistent.sock",
+                "PATH": "/usr/bin:/bin",
+            ])
+        let out = run.output
         guard !out.isEmpty else { return nil }
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: out) as? [String: Any], "输出不是 JSON")

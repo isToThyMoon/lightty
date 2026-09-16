@@ -4,12 +4,9 @@ import Darwin
 
 
 /// codex 的会话操作都走它自己的 CLI：列表与改名用 `codex app-server`（stdio JSON-RPC），
-/// 删除用 `codex delete --force`。占用与存活进程没有官方接口，只能读操作系统的文件表。
+/// 删除用 `codex delete --force`。占用与存活进程没有官方接口，于是一律不报。
 struct CodexSessionProvider: AgentSessionProvider {
     let source: SessionCatalogSource
-
-    /// 会话记录文件所在的目录（相对配置根）。
-    private static let transcriptDirectories = ["sessions", "archived_sessions"]
 
     // MARK: - 列表
 
@@ -44,15 +41,6 @@ struct CodexSessionProvider: AgentSessionProvider {
         }
     }
 
-    /// 线程名追加在配置根下的 `session_index.jsonl`（`{"id","thread_name","updated_at"}`），
-    /// 所有会话共用这一份，所以别的会话改名也会让这里多读一次，无妨。
-    var titleSignalRequiresIdleSession: Bool { false }
-
-    func titleSignalFiles(for key: AgentSessionKey) -> [URL] {
-        let index = URL(fileURLWithPath: key.sourceRoot).appendingPathComponent("session_index.jsonl")
-        return FileManager.default.fileExists(atPath: index.path) ? [index] : []
-    }
-
     // MARK: - 改名、删除
 
     /// app-server 的 `thread/name/set`。
@@ -71,50 +59,16 @@ struct CodexSessionProvider: AgentSessionProvider {
 
     // MARK: - 占用与存活进程
 
-    func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result {
-        guard let data = SessionOccupancy.openFiles(command: SessionAgent.codex.executableName, timeout: 2)
-        else { return .unknown }
-        return Self.inspect(data, for: key)
-    }
+    /// codex 没有可问的活会话表：`codex agents` 要先连上一个共用的后台服务，而 lightty
+    /// 是直接在终端里跑 codex，不连那个服务。所以占用一律「问不出来」——别处开着的会话
+    /// 不再标「在其他终端中打开」，删除时由 codex 自己的写锁拒绝。
+    func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result { .unknown }
 
-    /// 没有 Claude 那样的进程表核查：codex 自己的写锁拒绝（含被占用的子会话）是权威。
+    /// 没有 Claude 那样的额外核查：codex 自己的写锁拒绝（含被占用的子会话）是权威。
     func checkDeletable(_ key: AgentSessionKey, known: [AgentProcessIdentity: AgentSessionKey]) throws {}
 
-    /// 保留当前写入会话的进程身份。是否属于本应用、是否已经退出由 SessionLibrary
-    /// 统一归并；来源不能把某次读取的进程证据压成永久的“在其他终端中打开”布尔值。
-    ///
-    /// codex 没有 Claude 那样的活会话表（那要先连上共用的后台服务），只能读操作系统
-    /// 的文件表。一次 `lsof -c codex` 实测 0.01 秒、4KB 输出，挂在刷新上不算负担。
-    func observeLiveSessions() -> LiveSessionObservation? {
-        guard let data = SessionOccupancy.openFiles(command: SessionAgent.codex.executableName, timeout: 4)
-        else { return nil }
-        return LiveSessionObservation(processes: Self.decodeOpenSessionPIDs(data, root: source.root.path)
-            .mapValues { pids in Set(pids.compactMap(AgentProcessIdentity.read)) })
-    }
-
-    static func inspect(_ data: Data, for key: AgentSessionKey) -> SessionOccupancy.Result {
-        guard UUID(uuidString: key.nativeID) != nil else { return .unknown }
-        return SessionOccupancy.firstWriter(data, command: SessionAgent.codex.executableName,
-                                            root: key.sourceRoot, directories: transcriptDirectories) {
-            $0.hasPrefix("rollout-") && $0.hasSuffix("-" + key.nativeID + ".jsonl")
-        }
-    }
-
-    /// 单独拆出来是为了能用固定样本测。文件名里的会话 id 是最后 36 个字符，
-    /// 前面还带着时间戳（`rollout-<时间>-<id>.jsonl`）。
-    static func decodeOpenSessionPIDs(_ data: Data, root: String) -> [String: Set<Int32>] {
-        var processes: [String: Set<Int32>] = [:]
-        SessionOccupancy.forEachWritableSessionFile(data, command: SessionAgent.codex.executableName,
-                                                    root: root, directories: transcriptDirectories) { pid, name in
-            guard name.hasSuffix(".jsonl"), name.hasPrefix("rollout-") else { return }
-            let stem = String(name.dropLast(".jsonl".count))
-            guard stem.count >= 36 else { return }
-            let id = String(stem.suffix(36))
-            guard UUID(uuidString: id) != nil else { return }
-            processes[id, default: []].insert(pid)
-        }
-        return processes
-    }
+    /// 同上：没有官方接口能说出此刻哪些会话开着，也就不补工作目录。
+    func observeLiveSessions() -> LiveSessionObservation? { nil }
 }
 
 /// Bounded stdio client for one `codex app-server` conversation; not an app-wide RPC
@@ -211,7 +165,7 @@ final class CatalogJSONRPC {
         if process.isRunning { process.terminate() }
         let termination = Date().addingTimeInterval(0.2)
         while process.isRunning, Date() < termination { Thread.sleep(forTimeInterval: 0.005) }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        if process.isRunning { ProcessTree.kill(process.processIdentifier) }
         try? output.fileHandleForReading.close()
     }
     deinit { close() }

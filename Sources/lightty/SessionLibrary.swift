@@ -67,21 +67,22 @@ final class SessionLibrary {
         refresh()
     }
 
-    private let titleChanges: PathChangeSource
-    private lazy var titleSignals = SessionTitleSignals(changes: titleChanges) { [weak self] key in
-        self?.titleFileChanged(key)
-    }
+    /// 这家的 hook 插件是不是 lightty 装好的（版本台账）。装好了，pane 标题就走 hook + 官方目录
+    /// 那条路，agent 写的终端标题只用来推状态、催目录重读，不显示；没装的才把终端标题原样显示。
+    /// Codex 装好之后还要用户批准一次信任，批没批准 lightty 看不到——没批准的表现就是「终端 N」
+    /// 加图标一直不变，和今天一样。
+    private let hookInstalled: (SessionAgent) -> Bool
 
     init(fileURL: URL, providers: [AgentSessionProvider]? = nil,
          statusStore: PaneStatusStore = .shared, metadataRefreshDelay: TimeInterval = 1.5,
          hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
-         titleChanges: @escaping PathChangeSource = PathWatcher.changeSource) {
+         hookInstalled: @escaping (SessionAgent) -> Bool = { HookInstaller.installedVersion(of: HookAgent($0)) != nil }) {
         self.hostProcessID = hostProcessID
         self.fileURL = fileURL
         self.providers = providers
         self.statusStore = statusStore
         self.metadataRefreshDelay = metadataRefreshDelay
-        self.titleChanges = titleChanges
+        self.hookInstalled = hookInstalled
         NotificationCenter.default.addObserver(self, selector: #selector(statusDidChange(_:)),
             name: .lighttyPaneStatusDidChange, object: nil)
         diskQueue.async { [weak self] in
@@ -114,6 +115,9 @@ final class SessionLibrary {
         else { hydrateAssociatedSessions() }
     }
 
+    /// 每个 pane 上次从终端标题里读到的会话标题，只用来判断有没有变。
+    private var terminalTitleNames: [UUID: String] = [:]
+
     func paneState(for id: UUID) -> PaneSessionState? { runtime.panes[id] }
     func markRead(_ id: UUID) { statusStore.markRead(id) }
     var openedSessionKeys: Set<AgentSessionKey> { runtime.openedSessionKeys }
@@ -131,7 +135,6 @@ final class SessionLibrary {
     func selectedSession(in window: UUID) -> AgentSessionKey? {
         selectedPane(in: window).flatMap { runtime.panes[$0]?.sessionKey }
     }
-
     func updateWindow(_ window: UUID, panes: Set<UUID>, selected: UUID?) {
         let next = SessionRuntime.Window(panes: panes, selected: selected.flatMap { panes.contains($0) ? $0 : nil })
         guard runtime.windows[window] != next else { return }
@@ -153,8 +156,37 @@ final class SessionLibrary {
         reconcilePane(id)
     }
 
+    /// 终端标题变了。agent 写的标题带状态前缀和会话标题（各家形状在 `AgentSpec.terminalTitle`）。
+    ///
+    /// 哪家写的：hook 登记过就以它为准；没登记（hook 没装、没信任）就按形状认——只认带前缀的
+    /// 形状（Claude 的 ◐ ◑ ✳、Codex 的旋转字符和 `Action Required`），Codex 空闲那种没前缀的
+    /// 和 shell 的标题分不开，宁可不认。认出来之后这个 pane 就记住是这家，后续没前缀的标题
+    /// （Codex 空闲）也按它解析并原样显示，直到 agent 退出（`commandFinished`）。
+    ///
+    /// 认出 agent 的标题：哪家在跑记下来（图标从这里来——Codex 到第一句提交才跑 `SessionStart`，
+    /// 启动那一段只有标题能说明它是谁）；这家的 hook 插件**没装**时原文落到模型直接显示，
+    /// 和原生终端一样，此时 pane 头的改名是只读的；装了就不显示，标题走 hook + 官方目录，
+    /// 启动阶段是图标 + pane 名，目录到达换一次。有 hook 状态时状态交给 store 推忙/闲这条边；
+    /// 正文变了（`/rename`、自动起名）就重读官方目录——标题的真值仍在目录里，
+    /// 这里只是把「什么时候该重读」提前到改名那一刻。
+    func noteTerminalTitle(_ title: String, in id: UUID) {
+        guard runtime.inputs[id] != nil else { return }
+        let registered = statusStore.status(for: id)?.agent.flatMap(SessionAgent.init(rawValue:))
+        let agent = registered ?? runtime.inputs[id]?.titleAgent
+            ?? SessionAgent.allCases.first { AgentTerminalTitle.parse(title, shape: $0.spec.terminalTitle)?.recognizedByPrefix == true }
+        guard let agent, let parsed = AgentTerminalTitle.parse(title, shape: agent.spec.terminalTitle) else { return }
+        runtime.inputs[id]?.titleAgent = agent
+        runtime.inputs[id]?.agentTitle = hookInstalled(agent) ? nil : title
+        reconcilePane(id)
+        if registered != nil { statusStore.noteTerminalTitle(parsed, in: id) }
+        guard terminalTitleNames[id] != parsed.body else { return }
+        terminalTitleNames[id] = parsed.body
+        if let key = runtime.panes[id]?.sessionKey { invalidateMetadata(for: key) }
+    }
+
     func removePane(_ id: UUID) {
         runtime.inputs.removeValue(forKey: id)
+        terminalTitleNames.removeValue(forKey: id)
         reconcilePane(id)
         for (window, state) in runtime.windows where state.panes.contains(id) {
             updateWindow(window, panes: state.panes.subtracting([id]),
@@ -184,10 +216,18 @@ final class SessionLibrary {
     }
 
     func commandFinished(in id: UUID, at date: Date) {
+        // 前台命令回到了 shell：agent 已退出，它写的标题不再算数，pane 名回来
+        forgetAgentTitle(in: id)
         guard let input = runtime.inputs[id], date >= input.associatedAt,
-              statusStore.commandFinished(for: id, at: date) else { return }
+              statusStore.commandFinished(for: id, at: date) else { reconcilePane(id); return }
         runtime.inputs[id]?.intent = .none
         reconcilePane(id)
+    }
+
+    private func forgetAgentTitle(in id: UUID) {
+        runtime.inputs[id]?.titleAgent = nil
+        runtime.inputs[id]?.agentTitle = nil
+        terminalTitleNames.removeValue(forKey: id)
     }
 
     func reconcileProcess(in id: UUID, terminalExited: Bool = false) {
@@ -203,29 +243,22 @@ final class SessionLibrary {
         metadataRefreshes.schedule()
     }
 
-    /// 改名文件变了（见 `SessionTitleSignals`）。文件事件晚于写入，读一次就够，不像钩子那样
-    /// 要等官方目录跟上；已有待重试的请求不缩短它。
-    /// Transcript 每条消息都写，只在已知空闲时读；独立标题索引则在运行中也读，
-    /// 因为自动生成的标题可能在回合结束前到达。信号性质由 provider 决定。
-    private func titleFileChanged(_ key: AgentSessionKey) {
-        let states = runtime.panes.values.filter { $0.sessionKey == key }.map { $0.status?.state }
-        guard !states.isEmpty,
-              let provider = activeProviders.first(where: { $0.source.agent == key.agent }) else { return }
-        if provider.titleSignalRequiresIdleSession,
-           !states.allSatisfy({ $0 != nil && $0 != .thinking && $0 != .tool }) { return }
-        if metadataRequests[key] == nil { metadataRequests[key] = .init(baseline: recordIndex[key], attempts: 1) }
-        metadataRefreshes.schedule(delay: 0)
-    }
-
+    /// 钩子是标题唯一的刷新时机（两家都没有「会话改名」的订阅接口）。三种情况重读元数据：
+    /// 关联变了、一个回合结束（`.done`）、以及用户开始下一轮（状态从非 thinking 变 thinking）。
+    /// 最后这条是为了用户自己在终端里敲的 `/rename`：那不触发任何钩子，而他改完名通常紧接着
+    /// 提问，这时顺带重读，标题不必等到这一轮结束。
     @objc private func statusDidChange(_ notification: Notification) {
         guard PaneStatusStore.source(from: notification) === statusStore else { return }
         let ids = PaneStatusStore.paneID(from: notification).map { [$0] } ?? Array(runtime.inputs.keys)
         for id in ids where runtime.inputs[id] != nil {
             let previous = runtime.panes[id]
+            // agent 退出：它的标题和图标一起走，别在目录标题和 pane 名之间再亮一下旧标题
+            if statusStore.status(for: id)?.event == "SessionEnd" { forgetAgentTitle(in: id) }
             reconcilePane(id)
             guard let next = runtime.panes[id], let key = next.sessionKey else { continue }
             if next.sessionKey != previous?.sessionKey ||
-                (next.status?.state == .done && next.status != previous?.status) {
+                (next.status?.state == .done && next.status != previous?.status) ||
+                (next.status?.state == .thinking && previous?.status?.state != .thinking) {
                 invalidateMetadata(for: key)
             }
         }
@@ -236,17 +269,6 @@ final class SessionLibrary {
                                     isUnread: statusStore.unreadActivity(for: id) != nil, records: recordIndex,
                                     home: FileManager.default.homeDirectoryForCurrentUser)
         emit(change)
-        // 关联变了要换监听；钩子到了（活动变化）顺带重找还没找到的文件——新会话写下第一条记录
-        // 之后才有文件，而那时一定有钩子。
-        if let fields = change.panes[id], !fields.isDisjoint(with: [.identity, .activity]) { syncTitleSignals() }
-    }
-
-    /// 用列表读取时建好的 provider，不用 `provider(for:)`：那个要扫 PATH。
-    /// 还没读过列表就先不监听，`refresh` 建好 provider 后会再调。
-    private func syncTitleSignals() {
-        titleSignals.watch(Set(runtime.panes.values.compactMap(\.sessionKey))) { [unowned self] agent in
-            self.activeProviders.first { $0.source.agent == agent }
-        }
     }
 
     private func emit(_ change: SessionChange) {
@@ -278,7 +300,6 @@ final class SessionLibrary {
         errors = [:]
         let sources = SessionAgent.allCases.compactMap { source(for: $0) }
         activeProviders = providers ?? sources.map { $0.makeProvider() }
-        syncTitleSignals()
         for agent in SessionAgent.allCases where !sources.contains(where: { $0.agent == agent }) {
             errors[agent] = L("CLI was not found on this Mac.")
         }

@@ -33,14 +33,10 @@ enum LaunchAgent: String, CaseIterable {
         sessionAgent?.executableName ?? ""
     }
 
-    /// 每家 CLI 表达「跳过权限确认」的原生写法。开关是一个而不是每家一个：
-    /// 用户表达的是意图，具体参数是 lightty 对内部 Agent 的翻译。
+    /// 每家 CLI 表达「跳过权限确认」的原生写法，见 `AgentSpec.bypassArguments`；
+    /// 纯终端没有 Agent，自然什么都不加。
     var bypassArguments: [String] {
-        switch self {
-        case .claudeCode: return ["--permission-mode", "bypassPermissions"]
-        case .codex: return ["--yolo"]
-        case .terminal: return []
-        }
+        sessionAgent?.spec.bypassArguments ?? []
     }
 
     var launchTitle: String {

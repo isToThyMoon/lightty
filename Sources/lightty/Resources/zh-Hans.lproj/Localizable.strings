@@ -250,11 +250,7 @@
 "Purple" = "紫色";
 "White" = "白色";
 
-"Injected when an agent starts, written back as it works." = "启动 Agent 自动注入、写回 Handoff";
-"Click to resume your last session." = "点击继续上次会话";
 "Primary sidebar" = "第一侧栏";
-"Manage handoff tasks" = "管理 Handoff 任务";
-"Continue local CLI sessions" = "继续本机 CLI 会话";
 "The CLI session interface is not supported by this version." = "当前 CLI 版本不支持此会话接口。";
 "Reading CLI sessions timed out. Try refreshing." = "读取 CLI 会话超时，请刷新重试。";
 "The session catalog exceeded the loading limit." = "会话目录超出加载上限。";
@@ -503,3 +499,19 @@
 "Used %d times by Claude Code" = "Claude Code 用过 %d 次";
 "Never used by Claude Code" = "Claude Code 没用过";
 "No usage record from Claude Code" = "Claude Code 没有使用记录";
+
+"Save task progress for an agent to pick up." = "保存任务进展，供 Agent 接手。";
+
+"Browse and continue local Agent sessions." = "浏览并继续本地 Agent 会话。";
+
+"Create a task with the toolbar to save progress for an agent to pick up." = "从顶部新建任务，保存进展供 Agent 接手。";
+
+"No matching tasks." = "没有匹配的任务。";
+
+"Not open" = "未打开";
+
+"Task document updated" = "任务文档更新于";
+
+"No local sessions yet. Start a session with the toolbar; return here to continue it." = "还没有本地会话。从顶部新建会话，之后可在这里继续。";
+
+"Opened" = "已打开";

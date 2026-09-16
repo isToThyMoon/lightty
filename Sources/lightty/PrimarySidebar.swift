@@ -4,8 +4,8 @@ enum PrimarySidebarMode: String, Codable, CaseIterable {
     case handoff, sessions
     var title: String { self == .handoff ? "Handoff" : "Sessions" }
     var hint: String {
-        self == .handoff ? L("Injected when an agent starts, written back as it works.")
-            : L("Click to resume your last session.")
+        self == .handoff ? L("Save task progress for an agent to pick up.")
+            : L("Browse and continue local Agent sessions.")
     }
 }
 
@@ -15,7 +15,6 @@ final class PrimarySidebar: NSView {
     var onModeChanged: ((PrimarySidebarMode) -> Void)?
     private(set) var mode: PrimarySidebarMode
     private let modeSwitch = ModeSwitch()
-    private let hint = NSTextField(wrappingLabelWithString: "")
     private let host = NSView()
     private let handoff = HandoffSidebarContent()
     private lazy var sessions = SessionsSidebarContent(library: library)
@@ -30,13 +29,10 @@ final class PrimarySidebar: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         modeSwitch.onSelect = { [weak self] value in self?.selectMode(value) }
-        hint.font = ShellStyle.Font.hint
-        hint.textColor = ShellStyle.tertiaryText
-        hint.isSelectable = false
         search.target = self; search.action = #selector(searchContent)
         create.target = self; create.action = #selector(newTask)
         collapse.target = self; collapse.action = #selector(closePanel)
-        for view in [modeSwitch, hint, host, search, create, collapse] {
+        for view in [modeSwitch, host, search, create, collapse] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -51,13 +47,10 @@ final class PrimarySidebar: NSView {
             search.trailingAnchor.constraint(equalTo: create.leadingAnchor, constant: -ShellStyle.inlineGap),
             search.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight), search.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             modeSwitch.topAnchor.constraint(equalTo: collapse.bottomAnchor, constant: ShellStyle.chromeGap),
-            modeSwitch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sectionInset),
-            modeSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sectionInset),
+            modeSwitch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarListScrollView.leadingMargin + 2),
+            modeSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(SidebarListScrollView.trailingMargin + SidebarListScrollView.railWidth + 2)),
             modeSwitch.heightAnchor.constraint(equalToConstant: ModeSwitch.height),
-            hint.topAnchor.constraint(equalTo: modeSwitch.bottomAnchor, constant: 8),
-            hint.leadingAnchor.constraint(equalTo: modeSwitch.leadingAnchor, constant: 4),
-            hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sectionInset),
-            host.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 14),
+            host.topAnchor.constraint(equalTo: modeSwitch.bottomAnchor, constant: ShellStyle.SidebarHeader.listGap),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -66,18 +59,17 @@ final class PrimarySidebar: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func selectMode(_ value: PrimarySidebarMode) {
+    func selectMode(_ value: PrimarySidebarMode, animated: Bool = true) {
         guard value != mode else { return }
         ShellMenuPopover.dismiss()
         LaunchComposer.dismiss()
         mode = value
-        applyMode()
+        applyMode(animated: animated)
         onModeChanged?(value)
     }
 
-    private func applyMode() {
-        modeSwitch.select(mode)
-        hint.stringValue = mode.hint
+    private func applyMode(animated: Bool = true) {
+        modeSwitch.select(mode, animated: animated)
         create.isHidden = false
         create.setAccessibilityLabel(mode == .handoff ? L("New task") : L("New session"))
         create.toolTip = mode == .handoff ? L("New task") : L("New session")
@@ -114,6 +106,7 @@ final class PrimarySidebar: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         layer?.cornerRadius = ShellStyle.panelCornerRadius
+        layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
@@ -134,7 +127,7 @@ final class PrimarySidebar: NSView {
 
 /// 两段式模式切换：灰底圆角轨道，当前模式的一段铺白色滑块，点另一段即切换。
 final class ModeSwitch: NSView {
-    static let height: CGFloat = 32
+    static let height: CGFloat = ShellStyle.SidebarHeader.height
     private static let inset: CGFloat = 3
     var onSelect: ((PrimarySidebarMode) -> Void)?
     private(set) var selected: PrimarySidebarMode = .handoff
@@ -158,11 +151,11 @@ final class ModeSwitch: NSView {
         segments = PrimarySidebarMode.allCases.map { value in
             let button = NSButton()
             button.isBordered = false
-            button.focusRingType = .none
+            button.focusRingType = .exterior
             button.lineBreakMode = .byTruncatingTail
             button.target = self
             button.action = #selector(segmentClicked(_:))
-            button.toolTip = value == .handoff ? L("Manage handoff tasks") : L("Continue local CLI sessions")
+            button.toolTip = value.hint
             button.setAccessibilityRole(.radioButton)
             HoverCursor.installPointingHand(on: button)
             addSubview(button)
@@ -173,11 +166,15 @@ final class ModeSwitch: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func select(_ value: PrimarySidebarMode) {
+    func select(_ value: PrimarySidebarMode, animated: Bool = true) {
         guard value != selected else { return }
         selected = value
         applyState()
-        guard window != nil else { return needsLayout = true }
+        guard animated, window?.isVisible == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            knob.frame = segmentFrame(selectedIndex)
+            needsLayout = true
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = ShellStyle.animationDuration
             context.timingFunction = ShellStyle.easeInOutCubic

@@ -68,7 +68,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         super.init(frame: .zero)
 
         sectionLabel.font = ShellStyle.Font.section
-        sectionLabel.textColor = ShellStyle.tertiaryText
+        sectionLabel.textColor = ShellStyle.secondaryText
 
         splitRightButton.target = self
         splitRightButton.action = #selector(splitRight)
@@ -101,8 +101,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         NSLayoutConstraint.activate([
-            // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
-            newTabButton.topAnchor.constraint(equalTo: topAnchor),
+            // 与第一侧栏的模式切换共享标题带，按钮在带内居中。
+            newTabButton.topAnchor.constraint(equalTo: topAnchor,
+                constant: (ShellStyle.SidebarHeader.height - ShellStyle.chromeRowHeight) / 2),
             newTabButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
             newTabButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             newTabButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
@@ -129,7 +130,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             clearTabsButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             clearTabsButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
-            scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: topAnchor,
+                constant: ShellStyle.SidebarHeader.height + ShellStyle.SidebarHeader.listGap),
             // Keep the leading gutter; the shared trailing rail keeps scrolling clear of row actions.
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
@@ -418,7 +420,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             workingDirectory: state.workingDirectory)
         paneRow.configure(paneID: pane.dragIdentifier, name: state.title,
             taskName: taskName, isActive: isActive,
-            workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent)
+            workingDirectory: state.workingDirectory, sessionAgent: state.displayAgent)
         // 标签页语义的回调只有叶子行会装；普通 pane 行复用时必须清掉。
         paneRow.onMenu = nil
         paneRow.onRename = nil
@@ -1175,10 +1177,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private let nameLabel = NSTextField(labelWithString: "")
     private let agentIcon = NSImageView()
     private var displayedAgent: SessionAgent?
-    private var agentIconWidth: NSLayoutConstraint!
-    private var agentIconGap: NSLayoutConstraint!
     private let taskLabel = NSTextField(labelWithString: "")
-    private let directoryLabel = NSTextField(labelWithString: "")
+    private let directoryLabel = SidebarDirectoryLabel(labelWithString: "")
     private let statusLabel = PaneStatusLabel()
     private var status: PaneStatus?
     private var isUnread = false
@@ -1270,8 +1270,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         agentIcon.contentTintColor = ShellStyle.primaryText
-        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
-        agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
         menuButtonWidth = menuButton.widthAnchor.constraint(equalToConstant: 0)
         for v in [dotView, closeButton, menuButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -1313,8 +1311,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
             agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
             agentIcon.heightAnchor.constraint(equalToConstant: 12),
-            agentIconWidth,
-            agentIconGap,
+            // Agent 有无变化不推动名称与副标题左右跳动。
+            agentIcon.widthAnchor.constraint(equalToConstant: 12),
+            nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor, constant: 5),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
@@ -1325,12 +1324,11 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
                 equalTo: menuButton.leadingAnchor, constant: -4),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
-            // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
-            // 路径也能多拿到 13pt 的有效宽度。
-            secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
+            // 副标题与名称共用文字轴，图标及状态点不参与文字缩进。
+            secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
                 lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
-            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: ShellStyle.textLineGap),
             secondaryStack.bottomAnchor.constraint(
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
@@ -1381,8 +1379,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         nameLabel.stringValue = name
         displayedAgent = sessionAgent
         agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
-        agentIconWidth.constant = sessionAgent == nil ? 0 : 12
-        agentIconGap.constant = sessionAgent == nil ? 0 : 5
         applyDotColor()
         applyStatusLabel()
         applyMetadataLine()
@@ -1402,12 +1398,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             nameLabel.stringValue = state.title
             applyToolTips()
         }
-        let agent = state.sessionKey?.agent
+        let agent = state.displayAgent
         if displayedAgent != agent {
             displayedAgent = agent
             agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
-            agentIconWidth.constant = agent == nil ? 0 : 12
-            agentIconGap.constant = agent == nil ? 0 : 5
         }
         applyWorkingDirectory(state.workingDirectory)
         applyStatus(state.status, isUnread: state.isUnread)
@@ -1479,7 +1473,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             displayDirectory == nil ? $0 : "\($0) ·"
         } ?? ""
         directoryLabel.isHidden = displayDirectory == nil
-        directoryLabel.stringValue = displayDirectory ?? ""
+        directoryLabel.path = displayDirectory ?? ""
         applyToolTips()
     }
 

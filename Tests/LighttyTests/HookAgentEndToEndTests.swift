@@ -2,99 +2,39 @@ import XCTest
 import LighttyCore
 @testable import lightty
 
-/// 端到端：真实 `lightty-hook` 二进制 + 真实 store socket，验证 agent 判定用的是
-/// 父进程链而不是环境变量。复现的是用户报的场景：Codex 的 hook 环境里没有任何
-/// CODEX_* 变量、载荷带 Claude 同款 transcript_path，之前一律被认成 claude，
-/// 重开 app 时生成 `claude --resume <codex id>`，Codex 会话恢复不了。
+/// 端到端：真实 `lightty-hook` 二进制 + 真实 store socket。两件事——
+///
+/// - **哪一家**：命令行里的 `--agent` 是主路径（hooks 文件由我们自己生成，名字写死在里面），
+///   没给时才退回载荷里 `transcript_path` 的形状。退路复现的是用户报的场景：Codex 的 hook
+///   环境里没有任何 CODEX_* 变量、载荷带 Claude 同款 transcript_path，之前一律被认成 claude，
+///   重开 app 时生成 `claude --resume <codex id>`，Codex 会话恢复不了。
+/// - **哪个进程、是不是子会话**：只看终端作业结构，不认进程名。`HookLauncher` 用
+///   `script -q /dev/null` 造真 pty，把 hook 摆到四种位置上跑真实二进制。
 final class HookAgentEndToEndTests: XCTestCase {
     private var store: PaneStatusStore!
     private var socketPath: URL!
-    private var wrapperDir: URL!
+    private var scratch: URL!
+    private var launcher: HookLauncher!
 
     override func setUpWithError() throws {
-        // sun_path 104 字节上限，别用 NSTemporaryDirectory。文件名和 app 一样用本进程 pid：
-        // hook 按它确定父进程链走到哪为止，否则在 agent 会话里跑测试会被判成子会话。
+        // sun_path 104 字节上限，别用 NSTemporaryDirectory
         let socketDirectory = URL(fileURLWithPath: "/tmp/lightty-agent-\(getpid())")
         try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
         socketPath = socketDirectory.appendingPathComponent("\(getpid()).sock")
         store = PaneStatusStore(socketPath: socketPath)
         XCTAssertTrue(store.start(), "store 没能绑定 \(socketPath.path)")
-        wrapperDir = FileManager.default.temporaryDirectory.appendingPathComponent("lightty-agent-wrappers-\(getpid())")
-        try FileManager.default.createDirectory(at: wrapperDir, withIntermediateDirectories: true)
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: hookBinary.path), "先 swift build 出 lightty-hook：\(hookBinary.path)")
+        scratch = FileManager.default.temporaryDirectory.appendingPathComponent("lightty-agent-\(getpid())")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let hook = HookLauncher.builtHookBinary()
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: hook.path), "先 swift build 出 lightty-hook：\(hook.path)")
+        launcher = HookLauncher(scratch: scratch, hook: hook)
     }
 
     override func tearDownWithError() throws {
+        launcher?.reclaimSpawnedProcesses()
         store?.stop()
         if let socketPath { try? FileManager.default.removeItem(at: socketPath.deletingLastPathComponent()) }
-        if let wrapperDir { try? FileManager.default.removeItem(at: wrapperDir) }
-    }
-
-    private var hookBinary: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/debug/lightty-hook")
-    }
-
-    /// 编一个 fork + `execv(argv[1], argv + 1)` 的小程序，起成指定名字，让 hook 的父进程链上
-    /// 出现一个叫这个名字的可执行文件。不能拿 /bin/zsh 复制改名：平台二进制拷出
-    /// 系统卷会被直接 SIGKILL。没有 cc 的机器跳过这组用例。
-    private func wrapper(named name: String) throws -> URL {
-        let url = wrapperDir.appendingPathComponent(name)
-        if FileManager.default.fileExists(atPath: url.path) { return url }
-        let source = wrapperDir.appendingPathComponent("exec-wrapper.c")
-        // 必须 fork 出子进程再 exec：直接 exec 会用 hook 换掉本进程映像，
-        // 父进程链上就不再有这个名字了。真实 agent 也是 spawn 子进程跑 hook。
-        try """
-        #include <unistd.h>
-        #include <sys/wait.h>
-        int main(int argc, char **argv) {
-            if (argc < 2) return 2;
-            pid_t child = fork();
-            if (child == 0) { execv(argv[1], argv + 1); _exit(127); }
-            int status = 0;
-            waitpid(child, &status, 0);
-            return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-        }
-        """.write(to: source, atomically: true, encoding: .utf8)
-        let cc = Process()
-        cc.executableURL = URL(fileURLWithPath: "/usr/bin/cc")
-        cc.arguments = ["-O0", "-o", url.path, source.path]
-        cc.standardOutput = FileHandle.nullDevice
-        cc.standardError = FileHandle.nullDevice
-        do { try cc.run() } catch { throw XCTSkip("没有 cc，跳过父进程链端到端用例") }
-        cc.waitUntilExit()
-        guard cc.terminationStatus == 0 else { throw XCTSkip("cc 编译失败，跳过父进程链端到端用例") }
-        return url
-    }
-
-    /// 经假 `<parent>` 拉起 hook（parent → hook，和 agent 直接 spawn 或经 shell spawn 同构），
-    /// 等 store 收到这一 pane 的报文，返回它记下的 agent。
-    private func agentReported(parent: String, payload: String, environment: [String: String] = [:]) throws -> String? {
-        let pane = UUID()
-        store.attach(pane)  // store 只收登记过的 pane；attach 会建运行时目录，detach 负责清
-        defer { store.detach(pane) }
-        let received = expectation(description: "datagram for \(pane)")
-        var didReceive = false
-        let observer = NotificationCenter.default.addObserver(forName: .lighttyPaneStatusDidChange, object: nil, queue: .main) { note in
-            if PaneStatusStore.paneID(from: note) == pane, !didReceive {
-                didReceive = true
-                received.fulfill()
-            }
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
-        let env = hookEnvironment(pane: pane, extra: environment)
-        let p = try runHook(through: [parent], payload: payload, environment: env)
-        wait(for: [received], timeout: 5)
-        XCTAssertEqual(p.terminationStatus, 0, "hook 应静默退出 0")
-        XCTAssertEqual(store.status(for: pane)?.agentProcess?.pid, p.processIdentifier,
-                       "The hook must identify its Agent parent, not the hook subprocess")
-        if let agentName = store.status(for: pane)?.agent, let agent = SessionAgent(rawValue: agentName) {
-            let expectedRoot = SessionConfigurationLocation.resolve(agent: agent, environment: env)
-                .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
-            XCTAssertEqual(store.status(for: pane)?.sourceRoot, expectedRoot)
-        }
-        return store.status(for: pane)?.agent
+        if let scratch { try? FileManager.default.removeItem(at: scratch) }
     }
 
     private func hookEnvironment(pane: UUID, extra: [String: String] = [:]) -> [String: String] {
@@ -103,79 +43,126 @@ final class HookAgentEndToEndTests: XCTestCase {
         return env
     }
 
-    /// 按 `chain` 从外到内一层层拉起，最里层再拉起 hook，等它退出。
-    @discardableResult
-    private func runHook(through chain: [String], payload: String, environment: [String: String]) throws -> Process {
-        let wrappers = try chain.map { try wrapper(named: $0) }
-        let p = Process()
-        p.executableURL = wrappers[0]
-        p.arguments = wrappers.dropFirst().map(\.path) + [hookBinary.path]
-        p.environment = environment
-        let stdin = Pipe()
-        p.standardInput = stdin
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try p.run()
-        stdin.fileHandleForWriting.write(Data(payload.utf8))
-        try stdin.fileHandleForWriting.close()
-        p.waitUntilExit()
-        return p
+    /// 起一发 hook，等 store 收到这一 pane 的报文，返回它记下的状态与前台作业组长的 pid。
+    private func statusReported(
+        shape: HookLauncher.Shape = .foreground, payload: String, arguments: [String] = [],
+        environment: [String: String] = [:]
+    ) throws -> (status: PaneStatus?, leaderPID: pid_t?) {
+        let pane = UUID()
+        store.attach(pane)  // store 只收登记过的 pane；attach 会建运行时目录，detach 负责清
+        defer { store.detach(pane) }
+        let env = hookEnvironment(pane: pane, extra: environment)
+        let run = try launcher.run(shape, payload: payload, arguments: arguments, environment: env)
+        try waitUntil("datagram for \(pane)") { [store] in store?.status(for: pane) != nil }
+        if shape == .detached {  // 孤儿进程不在 launcher 手里，得自己等它走干净
+            try waitUntil("orphan shell exits") { kill(run.hookParent, 0) != 0 }
+        }
+        let status = store.status(for: pane)
+        if let agentName = status?.agent, let agent = SessionAgent(rawValue: agentName) {
+            let expectedRoot = SessionConfigurationLocation.resolve(agent: agent, environment: env)
+                .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
+            XCTAssertEqual(status?.sourceRoot, expectedRoot)
+        }
+        return (status, run.leader)
     }
 
-    /// 主会话工具里拉起的子会话（claude → shell → claude → hook）不发状态，
+    private let claudePayload = #"{"hook_event_name":"PreToolUse","session_id":"7d3c1e2a-1111-4222-8333-444455556666","transcript_path":"/Users/u/.claude/projects/-Users-u-p/7d3c1e2a.jsonl","tool_name":"Edit","cwd":"/tmp"}"#
+    private let codexPayload = #"{"hook_event_name":"PreToolUse","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","transcript_path":"/Users/u/.codex/sessions/2026/09/07/rollout-2026-09-07T18-26-43-01a07e9f.jsonl","tool_name":"shell","cwd":"/tmp"}"#
+
+    /// 命令行里的 `--agent` 是主路径，压过载荷与环境；没给（旧版插件）才退回 `transcript_path`。
+    func testDeclaredAgentWinsAndTheTranscriptPathIsOnlyTheFallback() throws {
+        struct Case {
+            let name: String
+            let environment: [String: String]
+            let payload: String
+            let arguments: [String]
+            let expected: String
+        }
+        let cases: [Case] = [
+            // 载荷与环境都指向 claude，`--agent codex` 仍然说了算：hooks 文件是我们写的，
+            // 里面那个名字比任何推断都确定。
+            Case(name: "declared codex beats a claude payload and environment",
+                 environment: ["CLAUDECODE": "1"], payload: claudePayload,
+                 arguments: ["--agent", "codex"], expected: "codex"),
+            // 反过来同理，免得「声明优先」只是碰巧在一个方向上成立
+            Case(name: "declared claude beats a codex payload and environment",
+                 environment: ["CODEX_HOME": "/x"], payload: codexPayload,
+                 arguments: ["--agent", "claude"], expected: "claude"),
+            // 旧版插件装着的用户：没有 `--agent`，退回 `transcript_path` 的形状。这正是
+            // 用户报的场景——Codex 的 hook 环境里一个 CODEX_* 都没有。
+            Case(name: "no --agent falls back to the transcript path shape",
+                 environment: [:], payload: codexPayload, arguments: [], expected: "codex"),
+        ]
+        for c in cases {
+            let reported = try statusReported(
+                payload: c.payload, arguments: c.arguments, environment: c.environment)
+            XCTAssertEqual(reported.status?.agent, c.expected, c.name)
+        }
+    }
+
+    /// 记下的 agent 进程是终端的**前台作业组长**，不是转瞬即逝的 hook、也不是中间那层 shell——
+    /// 记错了退出监视就盯着一个早已退出的 pid，会话被当成已结束。
+    /// `.wrapped` 那条是 npm 版 codex（node 包装脚本再起原生 codex）：组长是外层包装进程，
+    /// 监视它退出与监视里面那个等价。
+    func testAgentProcessIsTheForegroundJobLeader() throws {
+        for shape in [HookLauncher.Shape.foreground, .wrapped] {
+            let reported = try statusReported(
+                shape: shape,
+                payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"7d3c1e2a-1111-4222-8333-444455556666","cwd":"/tmp"}"#,
+                arguments: ["--agent", "claude"])
+            XCTAssertEqual(reported.status?.agentProcess?.pid, reported.leaderPID, "\(shape)")
+        }
+    }
+
+    /// 用户在 Claude Code 里按 Esc 中断了正在跑的工具：`Stop` 不触发，只来一发带 `is_interrupt`
+    /// 的 `PostToolUseFailure`，要过真 hook 二进制落成 idle；普通工具失败回合还在继续。
+    /// 用无终端形状：pty 里的组长跑完即退，退出监视会把状态改写成 SessionEnd，看不到原样。
+    func testInterruptedToolFailureArrivesAsIdle() throws {
+        let interrupted = try statusReported(
+            shape: .detached,
+            payload: #"{"hook_event_name":"PostToolUseFailure","session_id":"s","tool_name":"Bash","error":"interrupted","is_interrupt":true,"cwd":"/tmp"}"#,
+            arguments: ["--agent", "claude"])
+        XCTAssertEqual(interrupted.status?.state, .idle)
+        XCTAssertEqual(interrupted.status?.event, "PostToolUseFailure")
+        let failed = try statusReported(
+            shape: .detached,
+            payload: #"{"hook_event_name":"PostToolUseFailure","session_id":"s","tool_name":"Bash","error":"exit 1","cwd":"/tmp"}"#,
+            arguments: ["--agent", "claude"])
+        XCTAssertEqual(failed.status?.state, .thinking)
+    }
+
+    /// 没有 pty（hook 跑在没有控制终端的环境里）：照发报文，只是没有进程身份。
+    /// 宁可多报一发状态，也不能把事件当成子会话丢掉。
+    func testWithoutAnyTerminalTheStatusStillArrivesWithoutAProcessIdentity() throws {
+        let reported = try statusReported(
+            shape: .detached,
+            payload: #"{"hook_event_name":"Stop","session_id":"7d3c1e2a-1111-4222-8333-444455556666","cwd":"/tmp"}"#,
+            arguments: ["--agent", "claude"])
+        XCTAssertEqual(reported.status?.state, .done)
+        XCTAssertNil(reported.status?.agentProcess)
+    }
+
+    /// 主会话工具里拉起的子会话（组长 → 脱离终端的工具 shell → hook）不发状态，
     /// 否则它的 SessionStart / SessionEnd 会顶掉主会话的状态和会话绑定。
     func testSessionLaunchedInsideAnotherSessionStaysSilent() throws {
         let pane = UUID()
         store.attach(pane)
         defer { store.detach(pane) }
         var received: [PaneStatus] = []
-        let arrived = expectation(description: "main session datagram")
         let observer = NotificationCenter.default.addObserver(forName: .lighttyPaneStatusDidChange, object: nil, queue: .main) { [store] note in
             guard PaneStatusStore.paneID(from: note) == pane, let status = store?.status(for: pane) else { return }
             // 同一发报文之后还会因 agent 进程退出再通知一次，只记会话变化
             guard received.last?.sessionID != status.sessionID else { return }
             received.append(status)
-            if status.sessionID == "main" { arrived.fulfill() }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         let env = hookEnvironment(pane: pane)
         // 报文按发送顺序到达：子会话若发了，一定排在主会话那发前面
-        try runHook(through: ["claude", "tool-shell", "claude"],
-                    payload: #"{"hook_event_name":"SessionStart","session_id":"child","cwd":"/tmp"}"#, environment: env)
-        try runHook(through: ["claude"],
-                    payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"main","cwd":"/tmp"}"#, environment: env)
-        wait(for: [arrived], timeout: 5)
+        try launcher.run(.nested, payload: #"{"hook_event_name":"SessionStart","session_id":"child","cwd":"/tmp"}"#,
+                         arguments: ["--agent", "claude"], environment: env)
+        try launcher.run(payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"main","cwd":"/tmp"}"#,
+                         arguments: ["--agent", "claude"], environment: env)
+        try waitUntil("main session datagram") { received.contains { $0.sessionID == "main" } }
         XCTAssertEqual(received.map(\.sessionID), ["main"])
     }
-
-    /// agent 身份只看父进程链：parent × 环境变量 × 载荷 → 记下的 agent。
-    func testAgentIsIdentifiedByTheParentProcessChain() throws {
-        struct Case {
-            let name: String
-            let parent: String
-            let environment: [String: String]
-            let payload: String
-            let expected: String
-        }
-        let cases: [Case] = [
-            // 用户报的场景：Codex 的 hook 环境里没有任何 CODEX_* 变量、载荷带 Claude 同款
-            // transcript_path，之前一律被认成 claude。
-            Case(name: "codex parent without environment hints", parent: "codex", environment: [:],
-                 payload: #"{"hook_event_name":"PreToolUse","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","transcript_path":"/Users/u/.codex/sessions/2026/09/07/rollout-2026-09-07T18-26-43-01a07e9f.jsonl","tool_name":"shell","cwd":"/tmp"}"#,
-                 expected: "codex"),
-            // 从 Claude 会话里开出的 Codex：泄漏进来的 CLAUDECODE 环境变量不能压过父进程链。
-            Case(name: "codex parent beats leaked claude environment", parent: "codex", environment: ["CLAUDECODE": "1"],
-                 payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"01a07e9f-e508-7940-a848-240e00170c7f","cwd":"/tmp"}"#,
-                 expected: "codex"),
-            // 反面：Claude 父进程照样认成 claude。
-            Case(name: "claude parent", parent: "claude", environment: [:],
-                 payload: #"{"hook_event_name":"PreToolUse","session_id":"7d3c1e2a-1111-4222-8333-444455556666","transcript_path":"/Users/u/.claude/projects/-Users-u-p/7d3c1e2a.jsonl","tool_name":"Edit","cwd":"/tmp"}"#,
-                 expected: "claude"),
-        ]
-        for c in cases {
-            XCTAssertEqual(try agentReported(parent: c.parent, payload: c.payload, environment: c.environment),
-                           c.expected, c.name)
-        }
-    }
-
 }

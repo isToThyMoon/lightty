@@ -36,7 +36,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         var isBrowser: Bool { self != .general && self != .appearance }
     }
 
-    static let sidebarWidth: CGFloat = 240
+    static let sidebarWidth: CGFloat = 200
     static let minimumSidebarWidth: CGFloat = 160
     let sidebarDivider = SkillsColumnDivider()
     private var adjustableSidebarWidth: NSLayoutConstraint?
@@ -813,11 +813,6 @@ final class ThemePreview: NSView {
             ring.lineWidth = 2
             ShellStyle.primaryText.setStroke()
             ring.stroke()
-        } else {
-            let edge = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
-            edge.lineWidth = 1
-            ShellStyle.divider.setStroke()
-            edge.stroke()
         }
     }
 }

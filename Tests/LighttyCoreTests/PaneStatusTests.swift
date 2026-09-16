@@ -86,6 +86,10 @@ final class PaneStatusTests: XCTestCase {
         XCTAssertEqual(PaneActivity(hookEventName: "Interrupt"), .idle)
         XCTAssertEqual(PaneActivity(hookEventName: "UserPromptSubmit"), .thinking)
         XCTAssertEqual(PaneActivity(hookEventName: "PostToolUse"), .thinking)
+        // 工具失败回合照常继续；Claude Code 没有 Interrupt，用户中断正在跑的工具时
+        // 只有这一发带 is_interrupt 的失败事件（Stop 在中断时不触发）
+        XCTAssertEqual(PaneActivity(hookEventName: "PostToolUseFailure"), .thinking)
+        XCTAssertEqual(PaneActivity(hookEventName: "PostToolUseFailure", interrupted: true), .idle)
         XCTAssertEqual(PaneActivity(hookEventName: "PreToolUse"), .tool)
         XCTAssertEqual(PaneActivity(hookEventName: "Notification"), .attention)
         XCTAssertEqual(PaneActivity(hookEventName: "PermissionRequest"), .attention)

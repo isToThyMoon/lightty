@@ -30,6 +30,11 @@ struct PaneSessionState: Equatable {
 
     let paneID: UUID
     var terminalName: String
+    /// 没有 hook 绑定时，从终端标题的形状认出来的这家 agent（见 `SessionLibrary.noteTerminalTitle`）。
+    /// agent 退出（shell 集成的命令结束标记）后清空。
+    var titleAgent: SessionAgent?
+    /// agent 经 OSC 0 写的标题原文（带它自己的状态前缀），只在 `titleAgent` 期间保留。
+    var agentTitle: String?
     var shellDirectory: String?
     var binding: Binding = .none
     var status: PaneStatus?
@@ -37,9 +42,22 @@ struct PaneSessionState: Equatable {
     var session: AgentSession?
 
     var sessionKey: AgentSessionKey? { binding.sessionKey }
+    /// 图标用的 agent：hook 绑定了会话就是它；没有绑定但标题认出了 agent 在跑，也给图标——
+    /// Codex TUI 到第一句提交才建线程、才跑 `SessionStart`，启动那一段只有标题能说明它是谁。
+    /// 只用于显示，会话关联与恢复仍只认 `sessionKey`。
+    var displayAgent: SessionAgent? { sessionKey?.agent ?? titleAgent }
+    /// 显示的标题，同一时刻只有一个来源，来源之间不穿插（穿插就是闪）：
+    /// - hook 绑定了会话：官方目录的标题；目录还没读到时用 pane 名，目录到达换一次。
+    /// - 没有绑定、但标题看得出是 agent 写的：原文照显示，和原生终端一样，hook 没装也看得见
+    ///   它的状态前缀；改名走 `/rename`，前缀由 agent 自己更新。
+    /// - 都没有：pane 名，完全归 lightty 和用户。shell 写的标题不显示。
     var title: String {
-        let title = session?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return title.isEmpty ? terminalName : title
+        if binding.sessionKey != nil {
+            let title = session?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return title.isEmpty ? terminalName : title
+        }
+        let agentTitle = agentTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return agentTitle.isEmpty ? terminalName : agentTitle
     }
     var workingDirectory: String? { shellDirectory ?? binding.association?.workingDirectory ?? session?.workingDirectory }
     var acceptsInput: Bool { status?.state != .thinking && status?.state != .tool }
@@ -79,6 +97,8 @@ struct SessionChange {
 struct SessionRuntime {
     struct Input {
         var name: String
+        var titleAgent: SessionAgent?
+        var agentTitle: String?
         var directory: String?
         var intent: PaneSessionState.Binding = .none
         var associatedAt = Date.distantPast
@@ -118,14 +138,15 @@ struct SessionRuntime {
                 }
             } else { binding = .attached(association) }
         } else { binding = .none }
-        let next = PaneSessionState(paneID: id, terminalName: input.name, shellDirectory: input.directory,
+        let next = PaneSessionState(paneID: id, terminalName: input.name, titleAgent: input.titleAgent,
+            agentTitle: input.agentTitle, shellDirectory: input.directory,
             binding: binding, status: currentStatus, isUnread: currentStatus != nil && isUnread,
             session: binding.sessionKey.flatMap { records[$0] })
         panes[id] = next
         guard previous != next else { return SessionChange() }
         var fields: SessionChange.Fields = []
         if previous?.binding != next.binding { fields.insert(.identity) }
-        if previous?.session != next.session || previous?.terminalName != next.terminalName { fields.insert(.metadata) }
+        if previous?.session != next.session || previous?.title != next.title { fields.insert(.metadata) }
         if previous?.status != next.status || previous?.isUnread != next.isUnread { fields.insert(.activity) }
         if previous?.workingDirectory != next.workingDirectory { fields.insert(.directory) }
         return SessionChange(panes: [id: fields],

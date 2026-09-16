@@ -433,8 +433,11 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     // MARK: - 数据与主题
 
-    func update(paneName: String, taskName: String?, dot: NSColor, agent: SessionAgent?) {
+    /// `nameEditable` 为 false 时第一行只读：没有 hook 绑定、显示的是 agent 自己写的标题时，
+    /// lightty 既改不了它（那是 agent 的会话名），也不该把用户打的字存成看不见的 pane 名。
+    func update(paneName: String, taskName: String?, dot: NSColor, agent: SessionAgent?, nameEditable: Bool = true) {
         nameField.stringValue = paneName
+        nameField.isEditable = nameEditable
         boundTaskName = taskName
         dotColor = dot
         agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }

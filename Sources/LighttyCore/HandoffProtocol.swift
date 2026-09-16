@@ -198,8 +198,7 @@ public enum HandoffProtocol {
     ///
     /// 两家的技能调用后面都能跟自由文本参数（Codex 实测如此）。
     public static func skillInvocation(agent: SessionAgent, plugin: String, path: String?) -> String {
-        let sigil = agent == .codex ? "$" : "/"
-        let bare = "\(sigil)\(plugin):\(skillName)"
+        let bare = "\(agent.spec.skillInvocationSigil)\(plugin):\(skillName)"
         guard let path else { return bare }
         return "\(bare) \(path)"
     }

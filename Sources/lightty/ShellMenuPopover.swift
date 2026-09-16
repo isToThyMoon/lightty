@@ -39,6 +39,7 @@ enum ShellMenuPopover {
     }
 
     private static var window: ShellMenuWindow?
+    private static weak var actionAnchor: ShellIconButton?
     static var isPresented: Bool { window?.isVisible ?? false }
 
     /// 空组不占菜单空间；分割线只出现在两组内容之间。
@@ -69,6 +70,8 @@ enum ShellMenuPopover {
     static func present(from anchor: NSView, items: [Item]) {
         dismiss()
         guard let parent = anchor.window else { return }
+        actionAnchor = anchor as? ShellIconButton
+        actionAnchor?.menuPresented = true
         let content = ShellMenuController(items: items)
         let menu = ShellMenuWindow(content: content)
         content.onDone = { action in
@@ -138,6 +141,8 @@ enum ShellMenuPopover {
     static func dismiss() {
         guard let menu = window else { return }
         window = nil
+        actionAnchor?.menuPresented = false
+        actionAnchor = nil
         let parent = menu.parent
         parent?.removeChildWindow(menu)
         menu.orderOut(nil)

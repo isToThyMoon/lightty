@@ -8,12 +8,14 @@
 
 ## 一句话结论
 
-会话的**列表、删除、改名**都有官方接口，lightty 全部走官方接口。
-自己动手的有两处，都是官方给不出东西时的兜底：
+会话的**列表、删除、改名、占用**都只走官方接口：CLI 命令、官方开发包、`codex app-server`、钩子。
+不读操作系统的进程表 / 文件表反推，不监听两家的私有文件。
 
-- **codex 的「这段会话是不是已经在别处开着」**——那家没有对应接口，只能读操作系统的文件表。
-- **Claude 少数会话读不出工作目录**——开发包只看转录文件的头 64KB，贴图开头的会话
-  会漏掉。见「三、已知的接口坑」。
+自己动手的只剩一处：**Claude 少数会话读不出工作目录**——开发包只看转录文件的头 64KB，
+贴图开头的会话会漏掉，helper 往后多读一段。见「三、已知的接口坑」。
+
+官方给不出答案的地方一律停在「问不出来」：codex 没有占用接口，它的会话就不标「在别处打开」，
+删除时由 codex 自己的写锁把关。
 
 ## 一、lightty 已经在用的
 
@@ -25,7 +27,7 @@
 | 改名（会话开着） | 把 `/rename` 敲进那个终端（`AgentCommand.rename`） | 同左 |
 | 恢复会话 / 打开选择器 | `codex resume [<id>]` | `claude --resume [<id>]` |
 | 状态（思考中 / 工具 / 等你 / 完成） | 钩子（`HookInstaller`） | 钩子 |
-| 判断会话是否已在别处打开 | 读操作系统文件表（`CodexSessionProvider.occupancy`） | `claude agents --json`（`ClaudeSessionProvider.occupancy`） |
+| 判断会话是否已在别处打开 | 没有官方接口，一律不判断（`CodexSessionProvider.occupancy` 恒为「问不出来」） | `claude agents --json`（`ClaudeSessionProvider.occupancy`） |
 
 ### 改名为什么分两条路
 
@@ -34,11 +36,10 @@
 
 唯一给不了改名的情况是「开着、而且 agent 正在跑」：那一刻 PTY 前台是它的输出流，塞不进命令。
 
-两家都没有「会话改名」的钩子或订阅接口。用户自己敲 `/rename` 之后，lightty 靠监听改名时会写的文件得知
-（`AgentSessionProvider.titleSignalFiles`：Claude 往 `projects/<项目>/<id>.jsonl` 追加 `custom-title`，
-Codex 往配置根的 `session_index.jsonl` 追加 `thread_name`），**只当信号、不解析内容**，标题仍从上表的列表接口读。
-Codex 的索引也会写入自动生成的标题，运行中或没有钩子状态时仍响应；Claude 的转录文件每条消息都会写，只在钩子确认空闲时响应，运行中由 Stop 钩子触发重读。
-这两个位置不是公开契约，将来变了只会退回「等下一轮 Stop 钩子才更新」，不会读错。
+两家都没有「会话改名」的钩子或订阅接口，lightty 也不监听会话记录、`session_index.jsonl` 这些私有文件。
+用户自己敲 `/rename` 之后，标题在**下一个钩子事件**到达时才重读官方列表：要么这一轮结束（Stop），
+要么他开始下一轮提问（`UserPromptSubmit`，状态从非 thinking 变 thinking）。
+代价是 Codex 自动生成的标题也要等下一次钩子事件才显示；改完名一直不提问，标题就停在旧名上。
 
 **敲命令必须分两步**：先送文本，再单独按一次回车键（`TerminalSurfaceView.sendReturn()`）。
 `sendText` 在 core 里走的是 `completeClipboardPaste`——它是粘贴，不是打字（`vendor/ghostty/src/apprt/embedded.zig` 的 `ghostty_surface_text` 注释写着这句）。
@@ -54,9 +55,10 @@ agent 的 TUI 开着括号粘贴模式，**粘进去的回车只是插入一个�
 ### 占用检测为什么两家不一样
 
 - Claude 自己维护着一张活会话表，`claude agents --json` 就是给脚本读的（帮助里写着 `for scripting; does not require a TTY`）。它直接给出 pid 与 sessionId 的对应，是这个问题的正面答案。核对过：lightty 自己 pane 里跑的 claude 也在这张表里。
-- Codex 没有对等的东西。`codex agents` 要先有一个共用的后台服务（见下），而 lightty 是直接在终端里跑 codex，不连那个服务；不连的话 `thread/list` 里每一条的状态都是「未加载」。
+- Codex 没有对等的东西。`codex agents` 要先有一个共用的后台服务（见下），而 lightty 是直接在终端里跑 codex，不连那个服务；不连的话 `thread/list` 里每一条的状态都是「未加载」。所以 codex 的占用一律是「问不出来」：会话不再标「在其他终端中打开」，删除时由 codex 自己的写锁拒绝。
 
-读文件表这条路对两家都留着：Claude 那条命令可能因为版本旧、输出改格式而失败，失败时不能把「问不出来」当成「没人用」。
+只用官方接口，不读操作系统的进程表 / 文件表反推（那要按进程名认 agent，而进程名随安装方式变）。
+问不出来就是「问不出来」，绝不能当成「没人用」。
 
 ## 二、还没用、但以后要做相关功能时应该先看的
 

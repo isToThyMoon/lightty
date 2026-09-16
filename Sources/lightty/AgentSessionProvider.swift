@@ -25,14 +25,16 @@ protocol AgentSessionProvider: SessionCatalogProvider {
     /// 此刻观察到的活会话进程（以及能顺带补上的工作目录）。问不出来返回 nil——绝不返回
     /// 空观察冒充「一个都没在跑」。
     func observeLiveSessions() -> LiveSessionObservation?
-    /// 这段会话改名时 agent 会写的文件，只拿来当「该重读元数据了」的信号，内容不解析——
-    /// 标题照旧从官方列表读。用户在开着的会话里自己敲 `/rename` 不触发任何钩子，
-    /// 没有这个信号，标题要等下一轮对话结束才更新。
-    /// 文件还不存在（新会话还没写第一条）返回空，调用方稍后再问。
-    func titleSignalFiles(for key: AgentSessionKey) -> [URL]
-    /// Transcript signals also fire for every message; defer those until idle. A dedicated
-    /// title index can announce an automatically generated name during an active turn.
-    var titleSignalRequiresIdleSession: Bool { get }
+}
+
+/// 占用检测的结论。只报正面证据：`.unknown` 是「问不出来」，不是「没人用」。
+///
+/// 证据只来自各家的官方接口：Claude 自己维护着一张活会话表（`claude agents --json`
+/// 就是给脚本读的），直接给出 pid 与 sessionId 的对应；Codex 没有对等的东西
+/// （`codex agents` 要先连上一个共用的后台服务，而 lightty 是直接在终端里跑 codex），
+/// 所以它恒为 `.unknown`，由 codex 自己的写锁在删除时拒绝。
+enum SessionOccupancy {
+    enum Result: Equatable { case inUse(pid: Int32), unknown }
 }
 
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。

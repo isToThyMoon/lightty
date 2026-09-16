@@ -7,12 +7,12 @@ import Foundation
 /// 生产 adapter 是 `PathWatcher.changeSource`；测试用手动触发的替身。
 public typealias PathChangeSource = (_ path: URL, _ onChange: @escaping () -> Void) throws -> AnyObject
 
-/// 目录或单个文件的变更监听：DispatchSource + 防抖。两个用处：
+/// 目录或单个文件的变更监听：DispatchSource + 防抖。目前只有一个用处：
 ///
 /// - **任务目录**（`TaskBindings`）：只有目录级事件（条目增删改名），文件内容原地修改不触发——
 ///   但按规范所有写入都走临时文件 + rename，天然产生目录事件。
-/// - **会话改名文件**（`SessionTitleSignals`）：监听文件本身，追加和原地写都会触发。
-///   文件被 rename 替换后监听还挂在旧 inode 上，调用方要自己重开。
+///
+/// 监听单个文件时，它被 rename 替换后监听还挂在旧 inode 上，调用方要自己重开。
 public final class PathWatcher {
     public enum WatcherError: Error {
         case cannotOpen(path: String, errno: Int32)

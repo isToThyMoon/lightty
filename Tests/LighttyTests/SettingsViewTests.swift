@@ -99,6 +99,10 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(toggle.accessibilityPerformPress())
         XCTAssertTrue(toggle.isOn)
         XCTAssertEqual(states, [true])
+        toggle.isEnabled = false
+        XCTAssertFalse(toggle.accessibilityPerformPress())
+        XCTAssertTrue(toggle.isOn)
+        XCTAssertEqual(states, [true], "禁用态不能通过辅助功能触发写入")
     }
 
     private func labels(in view: NSView) -> [String] {

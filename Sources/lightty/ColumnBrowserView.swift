@@ -430,6 +430,9 @@ final class ColumnBrowserCell: NSTableCellView {
     /// 左栏的行排在树里（缩进 + 图标槽）；中栏的条目自成一列，贴边排。
     /// 这件事由调用方说了算——靠「有没有副标题」去猜，说明行与条目行就会打架。
     private let inTree: Bool
+    /// 树里图标槽的起点，缺省按 depth 推。分组嵌在上一级文字列下时由调用方给出，
+    /// 分区标题的文字也从这里起。
+    private let lane: CGFloat?
     /// Built once each; layout picks whichever one fits the row.
     private let plainTitle: NSAttributedString
     private let titleWithVersion: NSAttributedString?
@@ -437,8 +440,10 @@ final class ColumnBrowserCell: NSTableCellView {
 
     init(title: String, subtitle: String?, symbol: String, trailing: String, image: NSImage? = nil, heading: Bool = false,
          depth: Int = 0, version: String? = nil, tooltip: String? = nil, inTree: Bool = false,
-         headingFont: NSFont = SkillsStyle.sectionFont, headingColor: NSColor = ShellStyle.tertiaryText, titleFont: NSFont? = nil, groupSurface: Bool = false, topSpacing: CGFloat = 0) {
+         headingFont: NSFont = SkillsStyle.sectionFont, headingColor: NSColor = ShellStyle.tertiaryText, titleFont: NSFont? = nil, groupSurface: Bool = false, topSpacing: CGFloat = 0,
+         lane: CGFloat? = nil) {
         self.topSpacing = topSpacing
+        self.lane = lane
         self.groupSurface = groupSurface
         self.depth = depth
         self.inTree = inTree
@@ -528,7 +533,8 @@ final class ColumnBrowserCell: NSTableCellView {
         let indent = CGFloat(depth) * 16
         let iconWidth: CGFloat = 16
         // 分区标题贴边领起一段，中栏条目不在树里，其余都占缩进与图标槽。
-        let textLeft: CGFloat = !inTree || isHeading ? inset : ColumnBrowserCell.treeTextLeft(depth: depth)
+        let laneLeft = lane ?? inset + indent
+        let textLeft: CGFloat = !inTree ? inset : isHeading ? (lane ?? inset) : laneLeft + iconWidth + 8
         let countWidth = trailingLabel.stringValue.isEmpty ? 0
             : max(16, ColumnBrowserCell.width(trailingLabel.attributedStringValue) + 4)
         let titleWidth = max(0, bounds.width - textLeft - inset - countWidth)
@@ -555,7 +561,7 @@ final class ColumnBrowserCell: NSTableCellView {
             : ColumnBrowserCell.iconTop(icon.image, lane: 16, textTop: y, font: titleFont)
         // 箭头比内容图标窄得多，居中在槽里离文字就远了；按固定中心贴近文字摆，
         // 展开与收起两个朝向共用这个中心，切换时不左右跳。
-        let iconX = isDisclosure ? textLeft - 9 - iconWidth / 2 : inset + indent
+        let iconX = isDisclosure ? textLeft - 9 - iconWidth / 2 : laneLeft
         icon.frame = NSRect(x: iconX, y: iconY, width: iconWidth, height: 16)
     }
 

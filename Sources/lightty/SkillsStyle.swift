@@ -27,7 +27,7 @@ enum SkillsStyle {
 
 /// 保留 Markdown 原文结构的轻量阅读排版，不执行 HTML，也不加载远端图片。
 enum SkillDocumentPresentation {
-    static func text(_ source: String, raw: Bool) -> NSAttributedString {
+    static func text(_ source: String, raw: Bool, hidesFrontmatter: Bool = false) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4
         if raw {
@@ -42,12 +42,17 @@ enum SkillDocumentPresentation {
         let result = NSMutableAttributedString(string: "")
         if lines.first?.trimmingCharacters(in: .whitespaces) == "---",
            let end = lines.dropFirst().firstIndex(where: { ["---", "..."].contains($0.trimmingCharacters(in: .whitespaces)) }) {
-            let metadata = lines.prefix(end + 1).joined(separator: "\n") + "\n"
-            result.append(NSAttributedString(string: metadata, attributes: [
-                .font: SkillsStyle.codeFont, .foregroundColor: ShellStyle.secondaryText,
-                .backgroundColor: ShellStyle.controlFill, .paragraphStyle: paragraph,
-            ]))
+            if !hidesFrontmatter {
+                let metadata = lines.prefix(end + 1).joined(separator: "\n") + "\n"
+                result.append(NSAttributedString(string: metadata, attributes: [
+                    .font: SkillsStyle.codeFont, .foregroundColor: ShellStyle.secondaryText,
+                    .backgroundColor: ShellStyle.controlFill, .paragraphStyle: paragraph,
+                ]))
+            }
             lines.removeFirst(end + 1)
+            if hidesFrontmatter {
+                while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
+            }
         }
         var fence: String?
         for line in lines {

@@ -105,6 +105,8 @@ final class TerminalSurfaceView: NSView {
     /// Viewing is a user event, not a focus-state transition: clicking/typing in an
     /// already-focused terminal must acknowledge a completion received since then.
     var onInteraction: (() -> Void)?
+    /// 程序经 OSC 0 写的标题变了。agent 用它推送忙/闲前缀和会话标题，见 `AgentTerminalTitle`。
+    var onTitleChange: ((String) -> Void)?
     var onWorkingDirectoryChange: ((String?) -> Void)?
 
     private(set) var currentWorkingDirectory: String?
@@ -993,6 +995,7 @@ final class TerminalSurfaceView: NSView {
     private(set) var terminalTitle: String = "" {
         didSet {
             guard terminalTitle != oldValue else { return }
+            onTitleChange?(terminalTitle)
             NotificationCenter.default.post(
                 name: .terminalTitleDidChange,
                 object: self,

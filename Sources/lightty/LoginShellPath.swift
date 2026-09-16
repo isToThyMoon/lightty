@@ -6,6 +6,7 @@ import Foundation
 /// 在 nvm / volta / fnm / pnpm / asdf 下各有各的 bin 目录，靠写死清单永远追不全，
 /// 用户在终端里能敲 `codex`、lightty 却说"未检测到"就是这么来的。根治是问一次
 /// `$SHELL -ilc` 拿到用户真实的 PATH——VS Code 等 GUI 开发工具都这么做。
+/// 写死的目录清单已经删掉，这里就是系统目录之外的唯一来源（`HookInstaller.searchPath`）。
 ///
 /// 结果落盘缓存：下次启动同步可用，后台再刷新；变了就发通知让会话目录重扫。
 /// 第一次（没有缓存）同步等一小会儿，避免升级后首启恢复 agent 会话时找不到 CLI。
