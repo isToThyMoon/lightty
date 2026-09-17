@@ -9,10 +9,36 @@ enum PrimarySidebarMode: String, Codable, CaseIterable {
     }
 }
 
+/// 第一侧栏卡片的可拖宽度：默认宽即最大宽，最小压到它的 2/3；
+/// 头部三钮、模式切换带与列表行都按卡片实际宽度铺开。
+enum PrimarySidebarSizing {
+    static let range = SidebarWidthRange(
+        minimum: (ShellStyle.taskPanelWidth * 2 / 3).rounded(), maximum: ShellStyle.taskPanelWidth)
+}
+
+enum PrimarySidebarWidthPreference {
+    static let defaultsKey = "lightty.primarySidebar.width"
+    /// 默认铺到最大宽（即历史上的固定宽）。
+    static let preference = SidebarWidthPreference(
+        defaultsKey: defaultsKey, range: PrimarySidebarSizing.range, fallback: PrimarySidebarSizing.range.maximum)
+
+    static func width(in defaults: PreferenceStorage = FilePreferences.shared) -> CGFloat {
+        preference.width(in: defaults)
+    }
+
+    static func setWidth(_ width: CGFloat, in defaults: PreferenceStorage = FilePreferences.shared) {
+        preference.setWidth(width, in: defaults)
+    }
+}
+
 /// Stable panel chrome; mode contents present shared app models and own only their UI state.
+/// 右边线可调宽，越过最小宽度继续左拖则关闭（与第二侧栏同一手势）。
 final class PrimarySidebar: NSView {
     var onRequestClose: (() -> Void)?
     var onModeChanged: ((PrimarySidebarMode) -> Void)?
+    var onResizeBegan: (() -> Void)?
+    var onWidthChange: ((CGFloat) -> Void)?
+    var onResizeEnded: (() -> Void)?
     private(set) var mode: PrimarySidebarMode
     private let modeSwitch = ModeSwitch()
     private let host = NSView()
@@ -22,6 +48,7 @@ final class PrimarySidebar: NSView {
     private let search = ShellIconButton(symbol: ShellSymbol.search, accessibilityLabel: L("Search"), target: nil, action: nil)
     private let create = ShellIconButton(symbol: ShellSymbol.create, accessibilityLabel: L("New task"), target: nil, action: nil)
     private let collapse = ShellIconButton(symbol: ShellSymbol.sidebar, accessibilityLabel: L("Primary sidebar"), target: nil, action: nil)
+    private let dragStrip = EdgeDragStrip(range: PrimarySidebarSizing.range)
 
     init(headerCenterY: CGFloat, mode: PrimarySidebarMode, library: SessionLibrary) {
         self.mode = mode
@@ -32,7 +59,11 @@ final class PrimarySidebar: NSView {
         search.target = self; search.action = #selector(searchContent)
         create.target = self; create.action = #selector(newTask)
         collapse.target = self; collapse.action = #selector(closePanel)
-        for view in [modeSwitch, host, search, create, collapse] {
+        dragStrip.onDragClose = { [weak self] in self?.onRequestClose?() }
+        dragStrip.onResizeBegan = { [weak self] in self?.onResizeBegan?() }
+        dragStrip.onWidthChange = { [weak self] width in self?.onWidthChange?(width) }
+        dragStrip.onResizeEnded = { [weak self] in self?.onResizeEnded?() }
+        for view in [modeSwitch, host, search, create, collapse, dragStrip] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -54,6 +85,11 @@ final class PrimarySidebar: NSView {
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // 拖动条从模式切换带起：头部行右端是收起钮，不让它抢点击。
+            dragStrip.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dragStrip.topAnchor.constraint(equalTo: modeSwitch.topAnchor),
+            dragStrip.bottomAnchor.constraint(equalTo: bottomAnchor),
+            dragStrip.widthAnchor.constraint(equalToConstant: 14),
         ])
         applyMode()
     }

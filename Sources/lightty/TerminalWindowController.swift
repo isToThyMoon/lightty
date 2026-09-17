@@ -91,6 +91,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 全部标签页关闭后的空态视图（task 为核心，不退出软件）。
     private var emptyStateView: EmptyTabView?
     private var taskPanelLeadingConstraint: NSLayoutConstraint?
+    private var taskPanelWidthConstraint: NSLayoutConstraint?
+    private var taskPanelWidth = PrimarySidebarWidthPreference.width()
+    private var taskPanelResizeActive = false
     /// 标签页侧栏的吸边开关：开着时吸在其右边线（关闭钮），关着时吸在主区左缘
     /// （展开钮，带 hover 感应带）。
     private var tabEdgeControl: EdgeToggleControl?
@@ -1019,9 +1022,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// task 卡片占位宽（卡片 + 左右边距）
+    /// task 卡片占位宽（卡片当前宽 + 左右边距）
     private var taskPanelReserve: CGFloat {
-        ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2
+        taskPanelWidth + ShellStyle.panelInset * 2
     }
 
     /// 标签页侧栏的落位 x：task 卡片开着时被推到其右侧
@@ -1196,6 +1199,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             WorkspaceStore.shared.scheduleSave()
         }
         panel.onRequestClose = { [weak self] in self?.closeTaskPanel() }
+        panel.onResizeBegan = { [weak self] in self?.beginTaskPanelResize() }
+        panel.onWidthChange = { [weak self] width in self?.resizeTaskPanel(to: width) }
+        panel.onResizeEnded = { [weak self] in self?.endTaskPanelResize() }
         panel.translatesAutoresizingMaskIntoConstraints = false
         // 垫在标题栏容器之下（三键浮在卡片上）、标签页侧栏之上（侧栏滑动时从卡片下穿行）
         if let titlebar = titlebarContainer(in: window, themeFrame: themeFrame) {
@@ -1205,16 +1211,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         let leading = panel.leadingAnchor.constraint(
             equalTo: themeFrame.leadingAnchor, constant: -taskPanelReserve)
+        let widthConstraint = panel.widthAnchor.constraint(equalToConstant: taskPanelWidth)
         NSLayoutConstraint.activate([
             panel.topAnchor.constraint(
                 equalTo: themeFrame.topAnchor, constant: ShellStyle.panelInset),
             panel.bottomAnchor.constraint(
                 equalTo: themeFrame.bottomAnchor, constant: -ShellStyle.panelInset),
             leading,
-            panel.widthAnchor.constraint(equalToConstant: ShellStyle.taskPanelWidth),
+            widthConstraint,
         ])
         taskPanel = panel
         taskPanelLeadingConstraint = leading
+        taskPanelWidthConstraint = widthConstraint
         updateSidebarButtonState()
         themeFrame.layoutSubtreeIfNeeded()
         // 四块协同推移：卡片滑入 + 标签页栏右移让位 + 终端让位 + 标签页展开钮跟着主区左缘
@@ -1238,10 +1246,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private func closeTaskPanel(animated: Bool = true) {
         guard let panel = taskPanel else { return }
+        endTaskPanelResize()
         taskPanel = nil
         updateSidebarButtonState()
         let leading = taskPanelLeadingConstraint
         taskPanelLeadingConstraint = nil
+        taskPanelWidthConstraint = nil
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let leading { targets.append((leading, -taskPanelReserve)) }
         if let tabSidebarLeadingConstraint {
@@ -1264,6 +1274,38 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             panel.removeFromSuperview()
             self?.activePane?.focusTerminal()
         }
+    }
+
+    /// 卡片右边线拖动：卡片改宽的同时，标签页侧栏、终端主区与展开钮一起让位。
+    private func beginTaskPanelResize() {
+        guard taskPanel != nil, !taskPanelResizeActive else { return }
+        // 若用户在打开动画尚未结束时抓住边线，先落到完整展开态再接管拖动。
+        stopSidebarAnimationDriver()
+        taskPanelLeadingConstraint?.constant = ShellStyle.panelInset
+        settleTaskPanelDependents()
+        taskPanelResizeActive = true
+        panes().forEach { $0.terminal.setPromptClearOnResize(false) }
+    }
+
+    private func resizeTaskPanel(to proposedWidth: CGFloat) {
+        guard taskPanel != nil, let taskPanelWidthConstraint else { return }
+        taskPanelWidth = PrimarySidebarSizing.range.clamped(proposedWidth)
+        taskPanelWidthConstraint.constant = taskPanelWidth
+        settleTaskPanelDependents()
+    }
+
+    private func endTaskPanelResize() {
+        guard taskPanelResizeActive else { return }
+        taskPanelResizeActive = false
+        PrimarySidebarWidthPreference.setWidth(taskPanelWidth)
+        panes().forEach { $0.terminal.setPromptClearOnResize(true) }
+    }
+
+    private func settleTaskPanelDependents() {
+        tabSidebarLeadingConstraint?.constant = tabSidebarOpenX
+        tabEdgeLeadingConstraint?.constant = tabSidebarOpenX
+        rootLeadingConstraint?.constant = mainAreaInset
+        window?.contentView?.superview?.layoutSubtreeIfNeeded()
     }
 
     // —— 标签页侧栏的吸边开关 ——
@@ -1474,6 +1516,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         taskPanel?.removeFromSuperview()
         taskPanel = nil
         taskPanelLeadingConstraint = nil
+        taskPanelWidthConstraint = nil
         tabSidebar?.removeFromSuperview()
         tabSidebar = nil
         tabSidebarLeadingConstraint = nil
