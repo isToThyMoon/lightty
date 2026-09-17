@@ -340,6 +340,10 @@ final class ShellIconButton: NSButton, HoverResyncing {
     }
     var rowInteractionVisible = false { didSet { updateAppearance() } }
     var menuPresented = false { didSet { updateAppearance() } }
+    /// 此刻是否画出来（行内操作钮按行交互显隐；普通按钮恒为 true）。
+    private(set) var isRevealed = true
+    /// `isRevealed` 变化时回调：行内容据此给按钮下的文字挂 / 撤渐隐遮罩。
+    var onRevealChange: ((Bool) -> Void)?
     private var hasKeyboardFocus = false
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -453,8 +457,13 @@ final class ShellIconButton: NSButton, HoverResyncing {
     }
 
     private func updateAppearance() {
-        if revealsWithRowInteraction && !rowInteractionVisible && !menuPresented
-            && !hasKeyboardFocus && !isHovered {
+        let revealed = !(revealsWithRowInteraction && !rowInteractionVisible && !menuPresented
+            && !hasKeyboardFocus && !isHovered)
+        if revealed != isRevealed {
+            isRevealed = revealed
+            onRevealChange?(revealed)
+        }
+        if !revealed {
             fillLayer.backgroundColor = NSColor.clear.cgColor
             contentTintColor = .clear
             return
@@ -592,6 +601,45 @@ class ShellDropTargetRowView: NSTableRowView {
 
 protocol SidebarRowActionContent: AnyObject {
     var rowActionButton: ShellIconButton { get }
+}
+
+/// 行尾操作钮的让位方式（两条侧栏的列表行共用）：文字平时铺到行尾，不为
+/// 隐藏的 ⋯/✕ 空出一截；按钮显示时浮在文字上，文字在按钮前 `width` 内渐隐。
+/// 只遮不重排，名字的截断位置和状态文字都不因 hover 横跳。遮罩只作用在文字
+/// 视图上，与行底色（活跃 / hover / 选中 / 拖放高亮，含半透明色）无关。
+/// 文字视图要在建行时 `wantsLayer`，遮罩挂在它们自己的 layer 上。
+enum RowActionFade {
+    static let width: CGFloat = 14
+
+    /// `clearFrom`：行坐标系里文字必须完全消失的 x（按钮组左缘）；nil 表示撤掉遮罩。
+    static func apply(to views: [NSView], in row: NSView, clearFrom: CGFloat?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for view in views {
+            guard let layer = view.layer else {
+                assertionFailure("RowActionFade 的文字视图要在建行时 wantsLayer")
+                continue
+            }
+            guard let clearFrom, !view.isHidden, view.frame.maxX > clearFrom - width,
+                  row.bounds.width > 0 else {
+                layer.mask = nil
+                continue
+            }
+            let mask = (layer.mask as? CAGradientLayer) ?? CAGradientLayer()
+            // 遮罩按行宽铺开、原点对齐行左缘，渐变位置就能直接用行坐标算。
+            mask.frame = CGRect(x: -view.frame.minX, y: 0,
+                                width: row.bounds.width, height: layer.bounds.height)
+            mask.startPoint = CGPoint(x: 0, y: 0.5)
+            mask.endPoint = CGPoint(x: 1, y: 0.5)
+            let end = min(max(clearFrom / row.bounds.width, 0), 1)
+            let start = min(max((clearFrom - width) / row.bounds.width, 0), end)
+            mask.colors = [NSColor.black.cgColor, NSColor.black.cgColor,
+                           NSColor.clear.cgColor, NSColor.clear.cgColor]
+            mask.locations = [0, NSNumber(value: Double(start)), NSNumber(value: Double(end)), 1]
+            layer.mask = mask
+        }
+    }
 }
 
 /// 任务行的圆角 hover / selection 背景，替换 NSTableView 默认的蓝色高亮。

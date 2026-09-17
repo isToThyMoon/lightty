@@ -464,7 +464,10 @@ private final class HandoffListCell: NSView, SidebarRowActionContent {
                                        target: target, action: action)
         super.init(frame: .zero)
         detailButton.revealsWithRowInteraction = true
+        detailButton.onRevealChange = { [weak self] _ in self?.needsLayout = true }
         dot.wantsLayer = true
+        // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
+        for view in [title, subtitle] { view.wantsLayer = true }
         dot.layer?.cornerRadius = ShellStyle.statusDotSize / 2
         title.font = ShellStyle.Font.listTitle
         title.textColor = ShellStyle.primaryText
@@ -484,11 +487,12 @@ private final class HandoffListCell: NSView, SidebarRowActionContent {
             dot.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
             title.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 9),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
+            // 文字铺到行尾，不为隐藏的 ⋯ 留白；⋯ 显示时浮在文字上，由 RowActionFade 渐隐。
+            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
             title.topAnchor.constraint(equalTo: topAnchor, constant: ShellStyle.rowVerticalInset),
 
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: detailButton.leadingAnchor, constant: -6),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: ShellStyle.textLineGap),
 
             detailButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
@@ -501,6 +505,12 @@ private final class HandoffListCell: NSView, SidebarRowActionContent {
     required init?(coder: NSCoder) { fatalError() }
 
     override func rightMouseDown(with event: NSEvent) { detailButton.performClick(nil) }
+
+    override func layout() {
+        super.layout()
+        RowActionFade.apply(to: [title, subtitle], in: self,
+                            clearFrom: detailButton.isRevealed ? detailButton.frame.minX : nil)
+    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()

@@ -51,6 +51,50 @@ final class LeafTabRowTests: XCTestCase {
                        "用户起的名字恰好长得像默认名，也仍是用户起的名字")
     }
 
+    /// 行尾不为隐藏的 ⋯/✕ 预留空白：长名字平时铺到行尾；hover 时按钮浮上来，
+    /// 名字只被渐隐遮住、不重新截断，移开后遮罩撤掉。
+    func testRowTextReachesTheRowEndAndFadesUnderHoverActions() throws {
+        let pane = try XCTUnwrap(controller.activePane)
+        pane.rename(to: String(repeating: "搜索结果页商卡 title 对齐 ", count: 4))
+        layout()
+        let rowView = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: false))
+        let row = try XCTUnwrap(([rowView] + descendants(rowView)).first { $0 is SidebarHoverRow })
+        let name = try XCTUnwrap(descendants(row).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == pane.sessionState.title })
+        row.layoutSubtreeIfNeeded()
+        let restingFrame = name.frame
+        let slotMinX = try XCTUnwrap(descendants(row).compactMap { $0 as? NSButton }
+            .filter { $0.frame.width > 0 }.map(\.frame.minX).min())
+        XCTAssertGreaterThan(restingFrame.maxX, slotMinX, "名字越过隐藏的按钮位、铺到行尾")
+        XCTAssertNotNil(name.layer)
+        XCTAssertNil(name.layer?.mask)
+
+        (row as? SidebarHoverRow)?.setSidebarHovered(true)
+        row.layoutSubtreeIfNeeded()
+        XCTAssertEqual(name.frame, restingFrame, "hover 不重排文字")
+        let buttons = descendants(row).compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+        XCTAssertFalse(buttons.isEmpty)
+        let actionsMinX = try XCTUnwrap(buttons.map(\.frame.minX).min())
+        let mask = try XCTUnwrap(name.layer?.mask as? CAGradientLayer, "按钮下的文字要遮住")
+        let clearFrom = try XCTUnwrap(mask.locations?[2]).doubleValue * row.bounds.width
+        XCTAssertLessThanOrEqual(clearFrom, actionsMinX + 0.5, "按钮左缘起文字完全透明")
+
+        (row as? SidebarHoverRow)?.setSidebarHovered(false)
+        row.layoutSubtreeIfNeeded()
+        XCTAssertNil(name.layer?.mask, "移开后撤掉遮罩")
+    }
+
+    /// 没进 agent 的终端，行里固定的图标位放提示符「>」补位，不留一格空白。
+    func testAPaneWithoutAnAgentShowsThePromptGlyph() throws {
+        let pane = try XCTUnwrap(controller.activePane)
+        XCTAssertNil(pane.sessionState.displayAgent)
+        let prompt = try XCTUnwrap(AgentSessionIcon.terminalPrompt, "提示符字形随包打进资源")
+        XCTAssertTrue(prompt.isTemplate)
+        let rowView = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: false))
+        let icons = ([rowView] + descendants(rowView)).compactMap { $0 as? NSImageView }
+        XCTAssertTrue(icons.contains { $0.image === prompt && !$0.isHidden }, "\(icons.map(\.image))")
+    }
+
     func testSinglePaneTabShowsPaneTitleWithoutContainerRow() throws {
         let pane = try XCTUnwrap(controller.activePane)
         XCTAssertEqual(table.numberOfRows, 1)

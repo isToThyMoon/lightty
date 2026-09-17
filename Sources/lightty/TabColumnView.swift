@@ -889,6 +889,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             applyGlyph()
             menuButton.isHidden = !hovered
             closeButton.isHidden = !hovered
+            needsLayout = true
             // tooltip 只在 hover 时挂：NSToolTipManager 每帧都会重算所有已注册
             // tooltip 的矩形，几十行常驻就是滚动期的一笔固定开销。
             closeButton.toolTip = hovered ? L("Close tab") : nil
@@ -907,6 +908,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         HoverCursor.installPointingHand(on: self)
 
         label.stringValue = title
+        label.wantsLayer = true  // RowActionFade 的遮罩挂在它自己的 layer 上
         label.font = ShellStyle.Font.groupTitle
         label.textColor = isActive ? ShellStyle.navigationAccent : ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
@@ -956,8 +958,9 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             disclosureButton.heightAnchor.constraint(equalToConstant: 22),
             label.leadingAnchor.constraint(equalTo: disclosureButton.trailingAnchor, constant: 3),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // 平时只给计数让位；hover 时计数隐藏、⋯/✕ 浮在标题上，由 RowActionFade 渐隐。
             label.trailingAnchor.constraint(
-                lessThanOrEqualTo: menuButton.leadingAnchor, constant: -6),
+                lessThanOrEqualTo: countLabel.leadingAnchor, constant: -6),
             countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
@@ -975,6 +978,12 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func toggleCollapse() { onToggleCollapse?() }
+
+    override func layout() {
+        super.layout()
+        RowActionFade.apply(to: [label], in: self, clearFrom: hovered ? menuButton.frame.minX : nil)
+    }
+
     func configure(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {
         sidebarHoverExited()
         hovered = false
@@ -1179,6 +1188,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private var displayedAgent: SessionAgent?
     private let taskLabel = NSTextField(labelWithString: "")
     private let directoryLabel = SidebarDirectoryLabel(labelWithString: "")
+    private let secondaryStack = NSStackView()
     private let statusLabel = PaneStatusLabel()
     private var status: PaneStatus?
     private var isUnread = false
@@ -1191,6 +1201,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             applyFill()
             closeButton.isHidden = !hovered
             menuButton.isHidden = !hovered || onMenu == nil
+            needsLayout = true
             applyToolTips()
         }
     }
@@ -1258,7 +1269,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         directoryLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(750), for: .horizontal)
 
-        let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
+        [taskLabel, directoryLabel].forEach(secondaryStack.addArrangedSubview)
         secondaryStack.orientation = .horizontal
         secondaryStack.alignment = .firstBaseline
         secondaryStack.spacing = ShellStyle.inlineGap
@@ -1270,6 +1281,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         agentIcon.contentTintColor = ShellStyle.primaryText
+        applyAgentIcon()
+        // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
+        for view in [nameLabel, statusLabel, secondaryStack] as [NSView] { view.wantsLayer = true }
         menuButtonWidth = menuButton.widthAnchor.constraint(equalToConstant: 0)
         for v in [dotView, closeButton, menuButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -1318,16 +1332,16 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
             // 状态固定在行尾且保持完整；pane 名吃掉中间弹性空间，过长时先截断。
-            // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
+            // 文字铺到行尾，不为隐藏的 ⋯/✕ 预留空白；hover 时按钮浮在上面、
+            // 文字渐隐（RowActionFade），状态与截断位置都不横跳。
             statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
-            statusLabel.trailingAnchor.constraint(
-                equalTo: menuButton.leadingAnchor, constant: -4),
+            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.textTrailingInset),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
             // 副标题与名称共用文字轴，图标及状态点不参与文字缩进。
             secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
+                lessThanOrEqualTo: trailingAnchor, constant: -Self.textTrailingInset),
             secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: ShellStyle.textLineGap),
             secondaryStack.bottomAnchor.constraint(
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
@@ -1344,6 +1358,23 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     @objc private func closeTapped() { onClose?() }
     @objc private func menuTapped() { onMenu?() }
 
+    /// 图标位固定 12pt（agent 有无变化不推动文字左右跳），没进 agent 时放应用图标
+    /// 里的提示符「>」补位。与 OpenAI 标识同色：淡灰细线认不出是我们的图标。
+    private func applyAgentIcon() {
+        agentIcon.image = displayedAgent.flatMap { AgentSessionIcon.image(for: $0) }
+            ?? AgentSessionIcon.terminalPrompt
+    }
+
+    /// 文字右缘距行尾：与容器行计数的右距一致，两种行的行尾对齐。
+    static let textTrailingInset: CGFloat = 10
+
+    override func layout() {
+        super.layout()
+        let actionsMinX = onMenu == nil ? closeButton.frame.minX : menuButton.frame.minX
+        RowActionFade.apply(to: [nameLabel, statusLabel, secondaryStack], in: self,
+                            clearFrom: hovered ? actionsMinX : nil)
+    }
+
     /// 与容器行一致：活跃标签页的图标染导航色。
     private func applyTabGlyphTint() {
         tabGlyph?.contentTintColor = isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
@@ -1352,6 +1383,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private func applyMenuSlot() {
         menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.compactActionSize
         menuButton.isHidden = !hovered || onMenu == nil
+        needsLayout = true
     }
 
     func setActive(_ active: Bool) {
@@ -1378,7 +1410,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         isUnread = false
         nameLabel.stringValue = name
         displayedAgent = sessionAgent
-        agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
+        applyAgentIcon()
         applyDotColor()
         applyStatusLabel()
         applyMetadataLine()
@@ -1401,7 +1433,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         let agent = state.displayAgent
         if displayedAgent != agent {
             displayedAgent = agent
-            agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
+            applyAgentIcon()
         }
         applyWorkingDirectory(state.workingDirectory)
         applyStatus(state.status, isUnread: state.isUnread)

@@ -44,6 +44,41 @@ final class HandoffSidebarReloadTests: XCTestCase {
         return (content, table)
     }
 
+    /// 第一侧栏行尾同样不为隐藏的 ⋯ 留白：长名字平时越过按钮位；行 hover 时 ⋯ 浮上来、
+    /// 名字只被渐隐遮住不重排；移开后遮罩撤掉。Sessions 行走同一套 `onRevealChange` + 遮罩。
+    func testRowTextReachesTheRowEndAndFadesUnderTheRevealedAction() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = makeStore(directory)
+        let name = String(repeating: "搜索结果页商卡 title 对齐", count: 4)
+        _ = try store.create(name: name, workdir: directory.path)
+        let (_, table) = try makeContent(directory)
+        let rowView = try XCTUnwrap(table.rowView(atRow: 0, makeIfNecessary: true) as? ShellTableRowView)
+        let cell = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true))
+        let button = try XCTUnwrap((cell as? SidebarRowActionContent)?.rowActionButton)
+        let title = try XCTUnwrap(cell.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == name })
+        cell.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(button.isRevealed)
+        let resting = title.frame
+        XCTAssertGreaterThan(resting.maxX, button.frame.minX, "名字越过隐藏的 ⋯ 位、铺到行尾")
+        XCTAssertNotNil(title.layer)
+        XCTAssertNil(title.layer?.mask)
+
+        rowView.setSidebarHovered(true)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertTrue(button.isRevealed)
+        XCTAssertEqual(title.frame, resting, "hover 不重排文字")
+        let mask = try XCTUnwrap(title.layer?.mask as? CAGradientLayer, "⋯ 下的文字要遮住")
+        let clearFrom = try XCTUnwrap(mask.locations?[2]).doubleValue * cell.bounds.width
+        XCTAssertEqual(clearFrom, button.frame.minX, accuracy: 0.5, "⋯ 左缘起文字完全透明")
+
+        rowView.setSidebarHovered(false)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertNil(title.layer?.mask, "移开后撤掉遮罩")
+    }
+
     func testSelectionSurvivesATaskChangeInsteadOfSnappingBackToTheFirstRow() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

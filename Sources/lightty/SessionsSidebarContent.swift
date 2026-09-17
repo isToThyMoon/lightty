@@ -862,6 +862,9 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
         location.lineBreakMode = .byTruncatingMiddle
         menuButton.revealsWithRowInteraction = true
         menuButton.isBordered = false; menuButton.target = self; menuButton.action = #selector(openMenu)
+        menuButton.onRevealChange = { [weak self] _ in self?.needsLayout = true }
+        // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
+        for view in [title, detail, location] { view.wantsLayer = true }
         menuButton.setAccessibilityLabel(L("Session actions"))
         agentIcon.isHidden = true
         agentIcon.contentTintColor = ShellStyle.secondaryText
@@ -875,7 +878,9 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
             projectIcon.widthAnchor.constraint(equalToConstant: 18),
             projectIcon.heightAnchor.constraint(equalToConstant: 16),
             title.topAnchor.constraint(equalTo: topAnchor, constant: ShellStyle.rowVerticalInset),
-            title.trailingAnchor.constraint(equalTo: menuButton.leadingAnchor, constant: -4),
+            // 文字铺到行尾（右距与左距同为 sidebarHorizontalInset），不为隐藏的 ⋯ 留白；
+            // ⋯ 显示时浮在文字上，由 RowActionFade 渐隐。
+            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
             detailLeading,
             agentIcon.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             agentIcon.centerYAnchor.constraint(equalTo: detail.centerYAnchor),
@@ -896,6 +901,13 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
     required init?(coder: NSCoder) { fatalError() }
     override func rightMouseDown(with event: NSEvent) { onMenu?() }
     @objc private func openMenu() { onMenu?() }
+
+    override func layout() {
+        super.layout()
+        let shown = !menuButton.isHidden && menuButton.isRevealed
+        RowActionFade.apply(to: [title, detail, location], in: self,
+                            clearFrom: shown ? menuButton.frame.minX : nil)
+    }
 }
 
 /// Tooltips belong to the truncated field, not the whole row or the private session ID.
