@@ -139,7 +139,7 @@ final class MCPSettingsView: ColumnBrowserView {
     override func listCell(for id: String) -> NSView? {
         guard let server = servers.first(where: { $0.id == id }) else { return nil }
         return ColumnBrowserCell(title: server.name, subtitle: server.summary, symbol: "",
-                                 trailing: server.enabled ? "" : "○")
+                                 trailing: server.enabled ? "" : localize("Disabled"))
     }
 
     override func didSelectNavigation(key: String) {
