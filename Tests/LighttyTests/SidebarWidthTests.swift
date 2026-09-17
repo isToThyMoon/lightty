@@ -48,7 +48,7 @@ final class SidebarWidthTests: XCTestCase {
         }
     }
 
-    /// 列表能滚动时 overlay 滚动条占满整条导轨，拖动条只把滑块那一段让给它，
+    /// 列表能滚动时浮层滚动条占满整条导轨，拖动条只把滑块那一段让给它，
     /// 其余导轨仍能抓住边线；不能滚动的列表整条导轨都归拖动条。
     @MainActor
     func testDragStripYieldsOnlyTheScrollerKnob() throws {
@@ -56,6 +56,7 @@ final class SidebarWidthTests: XCTestCase {
         let scroll = SidebarListScrollView(frame: NSRect(x: 12, y: 0, width: 186, height: 400))
         let document = NSView(frame: NSRect(x: 0, y: 0, width: 160, height: 2000))
         scroll.documentView = document
+        scroll.scrollerStyle = .overlay  // 触控板默认；常驻滚动条的整条轨道归它，见 PrimarySidebarTests
         let strip = EdgeDragStrip(range: TabSidebarSizing.range)
         strip.frame = NSRect(x: 186, y: 0, width: 14, height: 400)
         host.addSubview(scroll)

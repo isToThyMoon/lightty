@@ -627,13 +627,23 @@ final class PrimarySidebarTests: XCTestCase {
                            SidebarListScrollView.trailingMargin, accuracy: 0.5)
             XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 0.5)
             XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX)
-            let point = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
-            let hit = sidebar.hitTest(point)
-            XCTAssertTrue(hit === scroll || hit?.isDescendant(of: scroll) == true,
-                          "The scroll view, not the edge resize strip, owns the rail")
+            let knob = scroller.rect(for: .knob)
+            let onKnob = sidebar.convert(NSPoint(x: knob.midX, y: knob.midY), from: scroller)
+            let knobHit = sidebar.hitTest(onKnob)
+            XCTAssertTrue(knobHit === scroll || knobHit?.isDescendant(of: scroll) == true,
+                          "The scroll view, not the edge resize strip, owns the knob")
+            // 100 行时滑块贴着顶部，轨道中点不在滑块上。
+            let onTrack = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
+            XCTAssertFalse(knob.contains(sidebar.convert(onTrack, to: scroller)))
+            let trackHit = sidebar.hitTest(onTrack)
             if style == .legacy {
-                XCTAssertTrue(hit === scroller || hit?.isDescendant(of: scroller) == true)
-            } // An idle overlay scroller deliberately defers hit testing to its scroll view.
+                // 常驻滚动条看得见、点轨道能翻页：整条轨道归它。
+                XCTAssertTrue(trackHit === scroller || trackHit?.isDescendant(of: scroller) == true)
+            } else {
+                // 浮层滚动条平时看不见却铺满导轨：只让出滑块，其余导轨抓得住边线调宽。
+                XCTAssertFalse(trackHit === scroll || trackHit?.isDescendant(of: scroll) == true,
+                               "An overlay scroller's idle track leaves the edge draggable")
+            }
         }
     }
     /// 会话行拖放的落点规则表：

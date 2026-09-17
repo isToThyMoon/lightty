@@ -305,13 +305,15 @@ final class EdgeDragStrip: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        // The scroller lives at the edge too. Only its knob keeps pointer priority:
-        // a scrollable list's overlay scroller spans the whole rail, and yielding all
-        // of it would leave nowhere to grab the edge.
+        // The scroller lives at the edge too. A legacy (always shown) scroller keeps the
+        // whole track: it is visible and clicking it pages. An overlay scroller spans the
+        // same rail while invisible, so only its knob keeps priority; yielding all of it
+        // would leave nowhere to grab the edge of a scrollable list.
         for sibling in superview?.subviews ?? [] where sibling !== self {
             for scroll in Self.scrollViews(under: sibling) {
-                if let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor,
-                   scroller.rect(for: .knob).contains(scroller.convert(point, from: superview)) { return nil }
+                guard let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor else { continue }
+                let owned = scroller.scrollerStyle == .legacy ? scroller.bounds : scroller.rect(for: .knob)
+                if owned.contains(scroller.convert(point, from: superview)) { return nil }
             }
         }
         return hit
