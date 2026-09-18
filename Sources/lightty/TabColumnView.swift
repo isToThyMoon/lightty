@@ -211,11 +211,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard let state = controller.sessionLibrary.paneState(for: id) else { continue }
             paneRows.object(forKey: id as NSUUID)?.applySession(state)
         }
-        // 控制器每次改焦点都会同步一次窗口选中项，这条变更就是焦点变了的信号；
-        // 高亮本身仍只从 activePane 派生。
+        // 和第一侧栏 Sessions 消费同一份窗口选中项，不再从 responder 链反推焦点。
         if change.windows.contains(controller.sessionWindowID) {
-            applyActivePane(controller.activePane?.dragIdentifier)
+            applyActivePane(selectedPaneID)
         }
+    }
+
+    private var selectedPaneID: UUID? {
+        guard let controller else { return nil }
+        return controller.sessionLibrary.selectedPane(in: controller.sessionWindowID)
     }
 
     /// pane 焦点变化只原地切换行底色，不拆建标签页树。
@@ -298,7 +302,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 rowItems.append(RowItem(kind: .pane(tab: entry.id, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
                     guard let self, let pane else { return NSView() }
                     return self.makePaneRow(for: pane, leading: .nested,
-                        isActive: pane.dragIdentifier == self.controller?.activePane?.dragIdentifier,
+                        isActive: pane.dragIdentifier == self.selectedPaneID,
                         reusing: existing as? PaneRowView)
                 }))
             }
@@ -378,7 +382,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         reusing existing: PaneRowView?
     ) -> PaneRowView {
         let row = makePaneRow(for: pane, leading: .leafTab,
-            isActive: pane.dragIdentifier == controller?.activePane?.dragIdentifier,
+            isActive: pane.dragIdentifier == selectedPaneID,
             reusing: existing)
         // 落点语义换成标签页的：拖进来 = 移入该标签页（内核会把它排到这个 pane 旁边）。
         row.onPaneDrop = { [weak self] sourceID in

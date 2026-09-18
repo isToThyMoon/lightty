@@ -398,13 +398,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 不同步会话库：一次用户动作只在收尾同步一次，由调用方（或 `commit`）负责。
     private func presentActiveTab() {
         guard arrangement.activeTab != nil else { return }
+        // 显隐会触发 AppKit 交接 first responder；先保存命令指定的落点，
+        // 不让切换中的焦点回调覆盖它。
+        let target = arrangement.focusTarget.flatMap { paneRegistry[$0] }
         applyTabVisibility()
-        refreshTabSidebar()
-        if let pane = activePane {
+        if let pane = target {
             recordFocus(pane)
             pane.focusTerminal()
             updateWindowTitle(for: pane)
         }
+        refreshTabSidebar()
     }
 
     private func applyTabVisibility() {
@@ -562,7 +565,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let switching = host != arrangement.activeTabID
         arrangement = next
         if switching {
-            presentActiveTab()  // 新标签页里没有 first responder，按模型交还的就是这个 pane
+            presentActiveTab()
         } else {
             pane.focusTerminal()
         }
@@ -727,23 +730,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         arrangement.activeTabID.map { panes(inTab: $0) } ?? []
     }
 
-    /// 当前 pane：first responder 在活跃标签页里就是它；否则取模型记下的该标签页焦点，
-    /// 没记过取第一个 pane（`WindowArrangement.focusTarget`）。焦点只存在模型里这一处。
+    /// 当前 pane 只取排布模型。AppKit 的焦点回调是模型输入，不能在读取时再用
+    /// first responder 反推：becomeFirstResponder 回调期间 responder 链可能尚未更新。
     var activePane: PaneView? {
-        var responder: NSResponder? = window?.firstResponder
-        while let r = responder {
-            if let view = r as? NSView {
-                var v: NSView? = view
-                while let cur = v {
-                    if let pane = cur as? PaneView,
-                       activeTabPanes.contains(where: { $0 === pane }) { return pane }
-                    v = cur.superview
-                }
-                break
-            }
-            responder = r.nextResponder
-        }
-        return arrangement.focusTarget.flatMap { paneRegistry[$0] }
+        arrangement.focusTarget.flatMap { paneRegistry[$0] }
     }
 
     /// new_split 动作方向（对应 ghostty_action_split_direction_e）

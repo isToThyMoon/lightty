@@ -65,7 +65,7 @@ commit 不关闭 surface：不再被引用的 pane 只是从本窗口注销并�
 
 ### 按身份通信
 
-控制器和第二侧栏之间只传标签页或 pane 的 UUID：侧栏从 `tabOverview()` 读取各标签页的身份、标题与 pane，行上的点击、改名、关闭、拖拽落点都回调 `selectTab(withID:)`、`renameTab(withID:to:)`、`closeTab(withID:)`、`moveTab(withID:after:)`、`detachPane(withID:toNewTabAfter:)`、`movePane(withID:…)` 这类按身份的方法。goto_tab N 这类序号只在控制器里换算成身份。侧栏行的高亮只从控制器的 `activePane` 派生，点击行只发命令，不直接改高亮。
+控制器和第二侧栏之间只传标签页或 pane 的 UUID：侧栏从 `tabOverview()` 读取各标签页的身份、标题与 pane，行上的点击、改名、关闭、拖拽落点都回调 `selectTab(withID:)`、`renameTab(withID:to:)`、`closeTab(withID:)`、`moveTab(withID:after:)`、`detachPane(withID:toNewTabAfter:)`、`movePane(withID:…)` 这类按身份的方法。goto_tab N 这类序号只在控制器里换算成身份。pane 行的高亮只读取 `SessionLibrary.selectedPane(in:)`，通知更新和重建行都使用同一来源；第一侧栏 Sessions 的选中会话也从这个选中项派生。点击行只发命令，不直接改高亮。
 
 ### 关闭
 
@@ -79,7 +79,7 @@ commit 不关闭 surface：不再被引用的 pane 只是从本窗口注销并�
 
 ### 焦点
 
-`activePane` 的规则：first responder 在当前标签页里就用它；否则用模型记录的 `focusTarget`。焦点只存在模型里，控制器没有另一份「最后聚焦的 pane」字段；跨窗口移动时源窗口的焦点也由它自己的模型修正。
+`activePane` 只读取排布模型的 `focusTarget`。AppKit 焦点回调把 pane 身份写入模型，再经 `syncSessionWindow` 发布到会话库的窗口选中项；不在读取时用 first responder 反推，避免 responder 链尚未更新时发布旧焦点。程序跳转先记录目标，完成焦点交接后统一发布，两侧栏消费同一窗口选中项。控制器没有另一份「最后聚焦的 pane」字段；跨窗口移动时源窗口的焦点也由它自己的模型修正。
 
 ## 撤销
 

@@ -90,6 +90,41 @@ extension SessionAssociationTests {
     try await expectConsistent(b, "切回标签页，回到它自己最近聚焦的 pane，而不是第一个")
     source.reveal(pane: a)
     try await expectConsistent(a, "侧栏跳转")
+    // 检查控制器实际刷新的侧栏，不手动 reload，以免掩盖切换中留下的旧高亮。
+    source.openTabSidebar(animated: false)
+    let themeFrame = try #require(source.window?.contentView?.superview)
+    let navigation = try #require(descendants(themeFrame)
+        .compactMap { $0 as? TabSidebarView }.first)
+    let liveColumn = try #require(descendants(navigation).compactMap { $0 as? TabColumnView }.first)
+    source.window?.makeKeyAndOrderFrontInvisibly()
+    for (stale, target) in [(a, b), (b, a)] {
+        source.reveal(pane: c)
+        try await expectConsistent(c, "切到其他标签页")
+        // AppKit 允许隐藏标签页里的终端仍是 first responder。固定这个切换边界，
+        // 覆盖两个方向：落点不能被另一个 pane 的旧 responder 覆盖。
+        #expect(source.window?.makeFirstResponder(stale.terminal) == true)
+        #expect(source.activePane === c)
+        source.reveal(pane: target)
+        try await expectConsistent(target, "跨标签页点击指定 pane")
+        liveColumn.layoutSubtreeIfNeeded()
+        #expect(source.window?.firstResponder === target.terminal)
+        #expect(liveColumn.highlightedPaneIDs == [target.dragIdentifier], "实际侧栏的高亮必须与终端焦点一致")
+    }
+    source.reveal(pane: a)
+    try await expectConsistent(a, "返回移动操作的起点")
+    // becomeFirstResponder 的通知是焦点输入；即使 AppKit 的 responder 链尚未
+    // 更新，两侧栏也必须消费这次输入发布的模型，不能各自重新猜焦点。
+    b.terminal.onFocusChange?(true)
+    #expect(source.sessionLibrary.selectedPane(in: source.sessionWindowID) == b.dragIdentifier)
+    await awaitMainQueue(hops: 2)
+    #expect(liveColumn.highlightedPaneIDs == [b.dragIdentifier], "已建出的行消费模型通知")
+    liveColumn.reload()
+    liveColumn.layoutSubtreeIfNeeded()
+    #expect(liveColumn.highlightedPaneIDs == [b.dragIdentifier], "重建行也消费同一份模型")
+    b.focusTerminal()
+    try await expectConsistent(b, "焦点交接完成")
+    source.reveal(pane: a)
+    try await expectConsistent(a, "返回移动操作的起点")
     #expect(source.movePane(withID: c.dragIdentifier, to: a, zone: .right))
     try await expectConsistent(c, "移进当前标签页的 pane 拿到焦点")
     source.close(pane: c)
