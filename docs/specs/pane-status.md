@@ -78,7 +78,8 @@ UTF-8 JSON，版本 v=1；信封含 pane UUID，载荷含 ts（ISO8601）、stat
 | attention | Notification / PermissionRequest | 需要用户介入 |
 | done | Stop | turn 完成、待用户查看 |
 
-**忙/闲这条边的第一来源是终端标题（OSC 0）**，hook 只是补充。两家都把状态写进了标题，
+**活动状态由 hook 驱动**；终端标题（OSC 0）只补 Claude 缺少 Interrupt hook 的中断信号。
+两家也把状态写进了标题，
 形状写在各家 `AgentSpec.terminalTitle` 里，解析见 `AgentTerminalTitle`：
 
 | | 忙 | 闲 | 等用户处理 |
@@ -86,14 +87,14 @@ UTF-8 JSON，版本 v=1；信封含 pane UUID，载荷含 ts（ISO8601）、stat
 | Claude Code | `◐ <会话标题>` / `◑ …`（960 毫秒轮换） | `✳ <会话标题>` | 也是 ✳，分不开 |
 | Codex（默认 `activity`、`thread-name`、`project-name`） | `⠋ <线程名> \| <项目名>`（braille 旋转字符，100 毫秒一帧） | `<线程名> \| <项目名>`，没有前缀 | `[ ! ] Action Required \| …`（与 `[ . ]` 每秒交替） |
 
-按 Esc 中断的那一刻前缀就变，会话改名（`/rename`、自动起名）也即时推送。收方规则
-（`PaneStatusStore.noteTerminalTitle`）：只在 hook 已登记 agent、且未收到 SessionEnd 时采信
-（Codex 的「没前缀」就是闲，agent 退出后 shell 写的标题不能再算数）；忙把 idle / done /
-attention 顶成 thinking（tool 不降级）；闲把 thinking / tool 收回 idle，done / attention 不动；
-等用户处理把 idle / thinking / tool 变成 attention，已是 attention 不动（闪烁相位不重复点亮）。
-正常结束时 `Stop` 与「闲」谁先到结果都是 done；只有用户中断才真的停在 idle。标题正文变了
-则立刻重读官方目录，标题的真值仍在目录里。Codex 用户改了 `tui.terminal_title` 或关了
-`tui.animations`，标题就没有忙的标记，退回只靠 hook（它有 `Interrupt`，不缺边）。
+收方规则（`PaneStatusStore.noteTerminalTitle`）：只在 hook 已登记 agent、尚未 SessionEnd，
+且该 agent 没有 Interrupt hook 时使用标题补偿（当前仅 Claude）。明确的空闲前缀只允许
+thinking / tool → idle；busy 和 attention 标题不修改状态，done / attention 及已读提醒也不受标题影响。
+正常结束时 `Stop` 与空闲标题谁先到结果都是 done。Codex 的思考、完成、等待和中断全部由 hook 驱动，
+标题动画不能生成提醒，也不能把已完成或待处理改回思考中。
+
+标题继续用于 Agent 识别和名称变化检测；正文变化触发 `SessionLibrary` 合流重读官方目录，
+标题的真值仍在目录里。Claude 空闲前缀认不出来时，退回 hook，中断状态可能延迟更新。
 
 hook 侧的用户中断信号两家不同：Codex 发 `Interrupt`；Claude Code 的 `Stop` 在用户中断时
 **不触发**，只有中断时正在跑的工具会发带 `is_interrupt` 的 `PostToolUseFailure`。标题前缀里

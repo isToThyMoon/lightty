@@ -296,10 +296,12 @@ final class PrimarySidebarTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-spinner-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         // 让读取真的占住一点时间，否则「开始读」和「读完」落进同一拍，翻成取消的那一拍看不到。
+        let updated = Date(timeIntervalSince1970: 1_700_000_000)
+        var now = updated.addingTimeInterval(60)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
-            providers: [FixtureCatalog(root: root, delay: 0.2),
-                        FixtureCatalog(root: root, agent: .claude, delay: 0.2)])
-        let content = SessionsSidebarContent(library: library)
+            providers: [FixtureCatalog(root: root, delay: 0.2, updatedAt: updated),
+                        FixtureCatalog(root: root, agent: .claude, delay: 0.2, updatedAt: updated)])
+        let content = SessionsSidebarContent(library: library, now: { now })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
@@ -324,7 +326,11 @@ final class PrimarySidebarTests: XCTestCase {
         library.start(); search.activate()
         XCTAssertFalse(library.loading, "Search should reuse the already loaded catalog")
 
-        library.refresh()
+        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+        let cell = try XCTUnwrap(table.view(atColumn: 0, row: 3, makeIfNecessary: true))
+        let before = descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        now = now.addingTimeInterval(3600)
+        refresh.performClick(nil)
         XCTAssertTrue(library.loading)
         // 会话库通知合流到下一拍再重算（见 `Coalescer`），所以按钮晚一拍翻。
         // 顺序是确定的：`refresh()` 先把重算排进主队列，provider 的完成回调排在它后面。
@@ -340,6 +346,17 @@ final class PrimarySidebarTests: XCTestCase {
         try waitUntil("button back to refresh") { refresh.toolTip == L("Refresh") }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(list.frame, frame)
+
+        let after = descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        XCTAssertNotEqual(before, after, "Unchanged catalog timestamps must still age when refreshed")
+        XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: false) === cell)
+        now = now.addingTimeInterval(7200)
+        content.refreshRelativeDates()
+        XCTAssertNotEqual(after, descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue),
+                          "The clock must also advance without a catalog refresh or selection")
+        XCTAssertFalse(library.loading)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: library.records.map { ($0.key, $0) }),
+                       Dictionary(uniqueKeysWithValues: records.map { ($0.key, $0) }))
 
         let reopened = SessionsSidebarContent(library: library)
         library.start(); reopened.activate()
@@ -804,6 +821,7 @@ private struct FixtureCatalog: CatalogOnlyProvider {
     var delay: TimeInterval = 0
     /// 需要一条长到能滚动的列表时传。默认两条，保持既有用例不变。
     var count: Int = 2
+    var updatedAt: Date? = nil
     var source: SessionCatalogSource { .init(agent: agent, root: root, executable: "/bin/false", configuration: .custom(root.path)) }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }  // 后台队列上，不挡主线程
@@ -812,7 +830,7 @@ private struct FixtureCatalog: CatalogOnlyProvider {
             : (0..<count).map { "会话 \($0)" }
         let rows = titles.enumerated().map { index, title in
             AgentSession(key: .init(agent: agent, sourceRoot: root.path, nativeID: "fixture-\(index)"),
-                         title: title, workingDirectory: root.path, updatedAt: Date())
+                         title: title, workingDirectory: root.path, updatedAt: updatedAt.map { $0.addingTimeInterval(Double(index + (agent == .claude ? 10 : 0))) } ?? Date())
         }
         return SessionCatalogPage(sessions: rows, nextCursor: nil)
     }

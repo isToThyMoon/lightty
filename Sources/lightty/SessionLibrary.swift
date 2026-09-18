@@ -68,7 +68,7 @@ final class SessionLibrary {
     }
 
     /// 这家的 hook 插件是不是 lightty 装好的（版本台账）。装好了，pane 标题就走 hook + 官方目录
-    /// 那条路，agent 写的终端标题只用来推状态、催目录重读，不显示；没装的才把终端标题原样显示。
+    /// 那条路，agent 写的终端标题只用来补 Claude 中断、催目录重读，不显示；没装的才把终端标题原样显示。
     /// Codex 装好之后还要用户批准一次信任，批没批准 lightty 看不到——没批准的表现就是「终端 N」
     /// 加图标一直不变，和今天一样。
     private let hookInstalled: (SessionAgent) -> Bool
@@ -166,7 +166,7 @@ final class SessionLibrary {
     /// 认出 agent 的标题：哪家在跑记下来（图标从这里来——Codex 到第一句提交才跑 `SessionStart`，
     /// 启动那一段只有标题能说明它是谁）；这家的 hook 插件**没装**时原文落到模型直接显示，
     /// 和原生终端一样，此时 pane 头的改名是只读的；装了就不显示，标题走 hook + 官方目录，
-    /// 启动阶段是图标 + pane 名，目录到达换一次。有 hook 状态时状态交给 store 推忙/闲这条边；
+    /// 启动阶段是图标 + pane 名，目录到达换一次。有 hook 状态时，store 只用标题补没有 Interrupt hook 的中断缺口；
     /// 正文变了（`/rename`、自动起名）就重读官方目录——标题的真值仍在目录里，
     /// 这里只是把「什么时候该重读」提前到改名那一刻。
     func noteTerminalTitle(_ title: String, in id: UUID) {

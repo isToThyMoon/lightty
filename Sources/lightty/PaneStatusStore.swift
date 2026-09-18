@@ -393,34 +393,17 @@ final class PaneStatusStore {
 
     // MARK: - 终端标题（OSC 0）
 
-    /// agent 写进终端标题的状态（`AgentTerminalTitle`，按这家的形状解析过）。
-    ///
-    /// 这是忙/闲这条边的**第一来源**：Claude Code 的 `Stop` 跳过用户中断，而标题前缀在按 Esc 的
-    /// 那一刻就变回 ✳。只在 hook 已经登记过这个 pane 的 agent、且 agent 还没退出时采信——
-    /// Codex 的形状里「没前缀」就是闲，agent 退出后 shell 写的标题不能再算数。
-    ///
-    /// - busy：idle / done / attention → thinking。done 被顶掉等于用户已经开始下一轮，
-    ///   `UserPromptSubmit` 也会这么做；tool 比 thinking 更具体，不降级。
-    /// - settled：thinking / tool → idle。正常结束时 `Stop` 已经（或紧接着）把它变成 done，
-    ///   两种到达顺序结果一样；只有用户中断才真的停在 idle。done / attention 不动：
-    ///   done 是 lightty 侧才清的粘滞态，attention 要等下一个生命周期事件解决
-    ///   （Claude 等对话框时前缀也是 ✳，不能据此清掉「等待你处理」）。
-    /// - attention（Codex 的 `Action Required`）：idle / thinking / tool → attention；
-    ///   已是 attention 时不动，闪烁的两个相位不能把用户已读的提醒再点亮一次。
+    /// 活动状态由 hook 决定。标题只补没有 Interrupt hook 的中断缺口（当前为 Claude）：
+    /// 明确的空闲前缀允许 thinking / tool → idle；不能开始工作、生成等待、覆盖完成或已读。
+    /// Codex 有 Interrupt hook，标题完全不改活动状态。正常 Stop 无论先后到达都保留 done。
     func noteTerminalTitle(_ title: AgentTerminalTitle, in paneID: UUID) {
         assertMain()
-        guard let current = statuses[paneID], current.event != "SessionEnd" else { return }
-        switch (title.phase, current.state) {
-        case (.busy, .idle), (.busy, .done), (.busy, .attention):
-            statuses[paneID] = Self.restated(current, as: .thinking)
-        case (.settled, .thinking), (.settled, .tool):
-            statuses[paneID] = Self.restated(current, as: .idle)
-        case (.attention, .idle), (.attention, .thinking), (.attention, .tool):
-            readAttention.remove(paneID)
-            statuses[paneID] = Self.restated(current, as: .attention)
-        default:
-            return
-        }
+        guard let current = statuses[paneID], current.event != "SessionEnd",
+              let agent = current.agent.flatMap(SessionAgent.init(rawValue:)),
+              !agent.spec.hookEvents.contains("Interrupt"),
+              title.phase == .settled, title.recognizedByPrefix,
+              current.state == .thinking || current.state == .tool else { return }
+        statuses[paneID] = Self.idled(current)
         postChange(paneID)
     }
 

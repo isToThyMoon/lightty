@@ -19,6 +19,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     }
     private let library: SessionLibrary
     private let searchMode: Bool
+    private let now: () -> Date
     var onRequestDismiss: (() -> Void)?
     private var projectsCollapsed = false
     private let search = NSTextField()
@@ -47,10 +48,12 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private var sectionDisclosureRequested = false
     private var synchronizingSelection = false
+    private var relativeDateTimer: Timer?
 
-    init(library: SessionLibrary, searchMode: Bool = false) {
+    init(library: SessionLibrary, searchMode: Bool = false, now: @escaping () -> Date = Date.init) {
         self.library = library
         self.searchMode = searchMode
+        self.now = now
         super.init(frame: .zero)
         search.placeholderString = L("Search sessions…")
         search.delegate = self
@@ -172,10 +175,39 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        relativeDateTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         syncTerminalSelection()
+        relativeDateTimer?.invalidate()
+        relativeDateTimer = nil
+        if window != nil {
+            let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+                self?.refreshRelativeDates()
+            }
+            timer.tolerance = 5
+            RunLoop.main.add(timer, forMode: .common)
+            relativeDateTimer = timer
+            refreshRelativeDates()
+        }
+    }
+
+    /// 时间流逝不是目录变化。只更新已创建行的文字，不重读 CLI、不重建表格。
+    func refreshRelativeDates() {
+        guard !isHiddenOrHasHiddenAncestor else { return }
+        table.enumerateAvailableRowViews { _, row in
+            guard self.rows.indices.contains(row), case .session(let record, _) = self.rows[row] else { return }
+            let view = self.table.view(atColumn: 0, row: row, makeIfNecessary: false)
+            if let cell = view as? SessionListCell {
+                let text = self.sessionDetail(record)
+                if cell.detail.stringValue != text { cell.detail.stringValue = text }
+            } else if let cell = view as? PaletteRowView {
+                cell.updateSnippet(self.searchSnippet(record))
+            }
+        }
     }
 
     @objc private func syncTerminalSelection() {
@@ -341,7 +373,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         else { syncTerminalSelection() }
     }
 
-    @objc private func reload() { render(makeState()) }
+    @objc private func reload() {
+        render(makeState())
+        refreshRelativeDates()
+    }
 
     /// 只算不写。这里出现任何一次视图写入，`render` 的整体早退就白做了。
     func makeState() -> SidebarState {
@@ -557,9 +592,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if searchMode, case .session(let record, _) = rows[row] {
             let agent = record.key.agent.sourceName
-            let date = record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: Date()) } ?? ""
-            let snippet = NSAttributedString(string: [date, record.workingDirectory ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
-                attributes: [.font: ShellStyle.Font.hint, .foregroundColor: ShellStyle.secondaryText])
+            let snippet = searchSnippet(record)
             let result = PaletteRowView(name: record.title.isEmpty ? L("Untitled session") : record.title,
                 tag: agent, tagColor: ShellStyle.tertiaryText, snippet: snippet)
             result.onTap = { [weak self] in self?.open(record) }
@@ -606,6 +639,26 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         return cell.detail.stringValue
     }
 
+    private func relativeDate(_ record: AgentSession) -> String {
+        record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: now()) } ?? ""
+    }
+
+    private func sessionDetail(_ record: AgentSession) -> String {
+        let openness: String
+        switch library.presence(for: record.key) {
+        case .inLightty: openness = L("Open in lightty")
+        case .elsewhere: openness = L("Open in another terminal")
+        case .unknown: openness = ""
+        }
+        return [relativeDate(record), openness].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func searchSnippet(_ record: AgentSession) -> NSAttributedString {
+        NSAttributedString(string: [relativeDate(record), record.workingDirectory ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: " · "),
+            attributes: [.font: ShellStyle.Font.hint, .foregroundColor: ShellStyle.secondaryText])
+    }
+
     private func configure(_ cell: SessionListCell, for row: Row) {
         cell.resetContent()
         switch row {
@@ -632,20 +685,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         case .session(let record, let projectID):
             cell.indent = projectID == nil ? 10 : 24
             cell.title.stringValue = record.title.isEmpty ? L("Untitled session") + " · " + String(record.key.nativeID.prefix(8)) : record.title
-            let date = record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: Date()) } ?? ""
             let location = projectID.flatMap { renderedProjectNames[$0] }
                 ?? record.workingDirectory ?? ""
             cell.setAgent(record.key.agent)
-            // 「在别处开着」要在点下去之前就说清楚，否则用户点了才撞上那个提示框。
-            // lightty 自己开着优先——那时它在不在别处跑已经不重要了。
-            let openness: String
-            switch library.presence(for: record.key) {
-            case .inLightty: openness = L("Open in lightty")
-            case .elsewhere: openness = L("Open in another terminal")
-            case .unknown: openness = ""
-            }
-            cell.detail.stringValue = [date, openness]
-                .filter { !$0.isEmpty }.joined(separator: " · ")
+            cell.detail.stringValue = sessionDetail(record)
             cell.location.stringValue = location.hasPrefix("/") ? URL(fileURLWithPath: location).lastPathComponent : location
             if projectID != nil && !searchMode {
                 cell.location.stringValue = ""

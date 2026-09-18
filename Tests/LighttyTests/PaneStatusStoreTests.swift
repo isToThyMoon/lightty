@@ -52,9 +52,9 @@ final class PaneStatusStoreTests: XCTestCase {
         attachedPanes.append(pane)
     }
 
-    private func send(_ state: PaneActivity, to pane: UUID, tool: String? = nil, event: String? = nil) {
+    private func send(_ state: PaneActivity, to pane: UUID, tool: String? = nil, event: String? = nil, agent: String = "claude") {
         PaneStatusDatagram(
-            pane: pane, status: PaneStatus(ts: Date(), state: state, agent: "claude", tool: tool, event: event)
+            pane: pane, status: PaneStatus(ts: Date(), state: state, agent: agent, tool: tool, event: event)
         ).send(to: socketPath)
     }
 
@@ -72,65 +72,67 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.status(for: pane)?.state, .done)
     }
 
-    /// 忙/闲这条边由 agent 写进终端标题的状态推（`AgentTerminalTitle`）：Claude Code 按 Esc 中断时
-    /// 不发任何 hook，只有标题前缀从 ◐ 变回 ✳。一条用例走完整个场景：hook 登记之前标题不算数；
-    /// 忙把空闲顶成思考中；闲把思考中收回空闲（中断）；正常结束 Stop → done 之后闲不动 done；
-    /// 下一轮忙顶掉 done；等待你处理不受闲影响；工具中比思考中具体，忙不降级；Codex 的
-    /// `Action Required` 点亮等待你处理、已读后不重复点亮；SessionEnd 之后标题一律忽略
-    /// （同一个 pane 之后跑的可能是别的程序）。
-    func testTerminalTitleDrivesTheBusyIdleEdge() throws {
-        let pane = UUID()
-        attach(pane)
-        let busy = AgentTerminalTitle(phase: .busy, body: "t"), settled = AgentTerminalTitle(phase: .settled, body: "t")
+    /// 状态由 hook 驱动。标题仅补 Claude 中断缺口，不能复活已读提醒或制造新的等待。
+    func testTerminalTitleOnlyFillsTheClaudeInterruptGap() throws {
+        let busy = AgentTerminalTitle(phase: .busy, body: "t")
+        let settled = AgentTerminalTitle(phase: .settled, body: "t")
         let attention = AgentTerminalTitle(phase: .attention, body: "t")
+        for agent in ["claude", "codex"] {
+            let pane = UUID()
+            attach(pane)
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertNil(store.status(for: pane))
 
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertNil(store.status(for: pane), "hook 还没登记 agent，标题不算数")
+            func hook(_ state: PaneActivity, _ event: String) throws {
+                let count = received.count
+                send(state, to: pane, event: event, agent: agent)
+                try waitUntil("hook received") { self.received.count > count }
+            }
+            try hook(.idle, "SessionStart")
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .idle)
+            try hook(.thinking, "UserPromptSubmit")
+            store.noteTerminalTitle(.init(phase: .settled, body: "shell", recognizedByPrefix: false), in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .thinking, "Only an explicit idle prefix can fill the gap")
+            store.noteTerminalTitle(settled, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, agent == "claude" ? .idle : .thinking)
+            try hook(.tool, "PreToolUse")
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .tool)
+            store.noteTerminalTitle(settled, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, agent == "claude" ? .idle : .tool)
+            // 空闲标题先到，后到的 Stop 仍确认为正常完成；Interrupt 则回空闲。
+            try hook(.done, "Stop")
+            XCTAssertEqual(store.unreadActivity(for: pane), .done)
+            try hook(.idle, "Interrupt")
+            XCTAssertNil(store.unreadActivity(for: pane))
 
-        send(.idle, to: pane, event: "SessionStart")
-        try waitUntil("session start") { self.store.status(for: pane) != nil }
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
-        XCTAssertEqual(store.status(for: pane)?.event, "SessionStart", "只换 state，其余字段保留")
-        XCTAssertEqual(received.last?.state, .thinking, "要发通知，侧栏才会刷新")
-
-        store.noteTerminalTitle(settled, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .idle, "按 Esc：思考中收回空闲")
-
-        store.noteTerminalTitle(busy, in: pane)
-        send(.done, to: pane, event: "Stop")
-        try waitUntil("done") { self.store.status(for: pane)?.state == .done }
-        store.noteTerminalTitle(settled, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .done, "正常结束：✳ 不能吃掉未读的完成")
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .thinking, "下一轮开始，done 让位")
-
-        send(.attention, to: pane, event: "Notification")
-        try waitUntil("attention") { self.store.status(for: pane)?.state == .attention }
-        store.noteTerminalTitle(settled, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .attention, "对话框开着时前缀也是 ✳，不能当成空闲")
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .thinking, "用户答了对话框，回合继续")
-
-        send(.tool, to: pane, event: "PreToolUse")
-        try waitUntil("tool") { self.store.status(for: pane)?.state == .tool }
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .tool, "工具中更具体，不降级")
-
-        // Codex 的 `Action Required`：进行中变成等待你处理；用户读过之后闪烁的下一相位不能再点亮
-        store.noteTerminalTitle(attention, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .attention)
-        XCTAssertEqual(store.unreadActivity(for: pane), .attention)
-        store.markRead(pane)
-        store.noteTerminalTitle(attention, in: pane)
-        XCTAssertNil(store.unreadActivity(for: pane), "同一个请求的闪烁相位不是新请求")
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .thinking, "用户答完，回合继续")
-
-        send(.idle, to: pane, event: "SessionEnd")
-        try waitUntil("session end") { self.store.status(for: pane)?.event == "SessionEnd" }
-        store.noteTerminalTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .idle, "agent 退出后标题归别的程序")
+            // 重放完成/等待后的标题动画和同态 hook：不能出现第二次提醒边沿。
+            for (state, event) in [(PaneActivity.done, "Stop"), (.attention, "PermissionRequest")] {
+                try hook(.thinking, "UserPromptSubmit")
+                try hook(state, event)
+                let before = received.count
+                for title in [busy, settled, attention, busy, attention] {
+                    store.noteTerminalTitle(title, in: pane)
+                    XCTAssertEqual(store.status(for: pane)?.state, state)
+                }
+                XCTAssertEqual(received.count, before, "Title animation must not publish activity transitions")
+                try hook(state, event)
+                XCTAssertEqual(store.unreadActivity(for: pane), state)
+                store.markRead(pane)
+                let readState = store.status(for: pane)
+                for title in [busy, attention, settled] { store.noteTerminalTitle(title, in: pane) }
+                XCTAssertEqual(store.status(for: pane), readState)
+                XCTAssertNil(store.unreadActivity(for: pane))
+            }
+            // 真正的下一轮仍由 hook 开始并正常产生新的提醒。
+            try hook(.thinking, "UserPromptSubmit")
+            try hook(.attention, "PermissionRequest")
+            XCTAssertEqual(store.unreadActivity(for: pane), .attention)
+            try hook(.idle, "SessionEnd")
+            for title in [busy, attention, settled] { store.noteTerminalTitle(title, in: pane) }
+            XCTAssertEqual(store.status(for: pane)?.state, .idle)
+        }
     }
 
     /// 分发是**定向**的：通知必须说清是哪个 pane 变了，否则呈现层只能全量重扫。

@@ -458,6 +458,13 @@ final class PaletteRowView: NSView, SidebarHoverRow {
     var onHover: (() -> Void)?
     var isSelected = false { didSet { applyFill() } }
 
+    private var snippetLabel: NSTextField?
+
+    func updateSnippet(_ snippet: NSAttributedString) {
+        guard let snippetLabel, snippetLabel.attributedStringValue != snippet else { return }
+        snippetLabel.attributedStringValue = snippet
+    }
+
     private var tracking: NSTrackingArea?
     private var hovered = false { didSet { applyFill() } }
     func setSidebarHovered(_ value: Bool) {
@@ -487,6 +494,7 @@ final class PaletteRowView: NSView, SidebarHoverRow {
         var rows: [NSView] = [title]
         if let snippet {
             let label = NSTextField(labelWithString: "")
+            snippetLabel = label
             label.attributedStringValue = snippet
             label.lineBreakMode = .byTruncatingTail
             rows.append(label)
