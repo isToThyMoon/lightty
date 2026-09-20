@@ -51,10 +51,19 @@ enum ReorderDrag {
         return image
     }
 
+    /// 浮层所在的层。自由跟手时放到 themeFrame 最上面：侧栏浮在 contentView 之上、
+    /// 挂在 themeFrame 里，放进 contentView 会被侧栏盖住。
+    static func stage(for host: NSView, followsPointerFreely: Bool) -> NSView {
+        guard followsPointerFreely, let themeFrame = host.window?.contentView?.superview else { return host }
+        return themeFrame
+    }
+
     /// 跑一整段拖拽：从 `startEvent`（已越过阈值的那次 dragged）起自建循环。
     /// - host: 浮层所在坐标系（也是光标换算的参照）。
     /// - snapshotView: 已经 addSubview 到 host 的浮层，起始 frame 已摆好。
     /// - grabOffsetY: 光标在被抓行内的 y 偏移（host 坐标），跟手时保持不变。
+    /// - followsPointerFreely: 浮层挪到窗口最上层，横竖都跟着光标走，可以拖出 host。
+    ///   默认只在 host 里竖着移动。
     /// - onMove: 每次移动回调当前光标（host 坐标），调用方据此现场让位。
     /// - dropFrame: 释放时浮层要归位到的目标 frame（host 坐标）；nil 则原地淡出。
     /// - onCommit: 释放后落定（在归位动画开始前调用，用于提交模型/持久化）。
@@ -64,6 +73,7 @@ enum ReorderDrag {
         snapshotView: NSView,
         startEvent: NSEvent,
         grabOffsetY: CGFloat,
+        followsPointerFreely: Bool = false,
         onMove: @escaping (_ cursorInHost: NSPoint) -> Void,
         dropFrame: @escaping () -> NSRect?,
         onCommit: @escaping () -> Void,
@@ -74,12 +84,29 @@ enum ReorderDrag {
         // 位图落在半个物理像素上会被重采样成毛边，跟手的每一帧都得对齐到像素。
         let scale = host.window?.backingScaleFactor ?? 2
 
+        let stage = stage(for: host, followsPointerFreely: followsPointerFreely)
+        if stage !== host {
+            let frame = stage.convert(snapshotView.frame, from: host)
+            stage.addSubview(snapshotView, positioned: .above, relativeTo: nil)
+            snapshotView.frame = frame
+        }
+        let grabOffset = NSPoint(
+            x: stage.convert(startEvent.locationInWindow, from: nil).x - snapshotView.frame.minX,
+            y: stage.convert(startEvent.locationInWindow, from: nil).y - snapshotView.frame.minY)
+
         func follow(_ e: NSEvent) {
             let c = cursor(e)
             var f = snapshotView.frame
-            f.origin.y = c.y - grabOffsetY
-            // 夹在 host 内，避免拖出可视区后浮层消失得莫名其妙
-            f.origin.y = min(max(f.origin.y, host.bounds.minY), host.bounds.maxY - f.height)
+            if stage === host {
+                f.origin.y = c.y - grabOffsetY
+                // 夹在 host 内，避免拖出可视区后浮层消失得莫名其妙
+                f.origin.y = min(max(f.origin.y, host.bounds.minY), host.bounds.maxY - f.height)
+            } else {
+                let p = stage.convert(e.locationInWindow, from: nil)
+                f.origin.x = min(max(p.x - grabOffset.x, stage.bounds.minX), stage.bounds.maxX - f.width)
+                f.origin.y = min(max(p.y - grabOffset.y, stage.bounds.minY), stage.bounds.maxY - f.height)
+                f.origin.x = (f.origin.x * scale).rounded() / scale
+            }
             f.origin.y = (f.origin.y * scale).rounded() / scale
             snapshotView.frame = f
             onMove(c)
@@ -101,10 +128,11 @@ enum ReorderDrag {
             snapshotView.removeFromSuperview()
             onEnd()
         }
-        if var target = dropFrame() {
+        if var target = dropFrame().map({ stage.convert($0, from: host) }) {
             // 只飞位置，不改尺寸：行高按类型不同（容器行 / pane 行 / 叶子行），
             // 让位图去凑目标行的高度就是把文字拉糊，而且它落地即撤，没人看得到差那几 pt。
             target.size = snapshotView.frame.size
+            target.origin.x = (target.origin.x * scale).rounded() / scale
             target.origin.y = (target.origin.y * scale).rounded() / scale
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.16

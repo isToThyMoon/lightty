@@ -11,11 +11,12 @@ final class SidebarDisclosureButton: NSButton {
         super.init(frame: frame)
         cell = DisclosureCell(textCell: "")
         isBordered = false
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = ShellStyle.Font.section
         imagePosition = .imageTrailing
-        image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        image = NSImage(systemSymbolName: ShellSymbol.disclosure, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: ShellStyle.compactIconSize, weight: .medium))
         contentTintColor = ShellStyle.primaryText
+        HoverCursor.installPointingHand(on: self)
         addSubview(chevron)
         disclosureLayer = chevron.glyph
         setExpanded(true, animated: false)
@@ -56,22 +57,14 @@ final class SidebarDisclosureButton: NSButton {
     }
     /// Rotate a sublayer, never the AppKit-owned backing layer (whose anchor/position
     /// AppKit changes during layout). That keeps the rotation pivot at the icon's center.
-    private final class ChevronView: NSView {
-        let glyph = CAShapeLayer()
+    final class ChevronView: NSView {
+        let glyph = CALayer()
         override var isFlipped: Bool { true }
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: 4, y: 2))
-            path.addLine(to: CGPoint(x: 8, y: 6))
-            path.addLine(to: CGPoint(x: 4, y: 10))
-            glyph.path = path
             glyph.bounds = CGRect(x: 0, y: 0, width: 12, height: 12)
-            glyph.fillColor = nil
-            glyph.lineWidth = 1.4
-            glyph.lineCap = .round
-            glyph.lineJoin = .round
+            glyph.contentsGravity = .resizeAspect
             layer?.addSublayer(glyph)
             applyColors()
         }
@@ -84,7 +77,19 @@ final class SidebarDisclosureButton: NSButton {
             CATransaction.commit()
         }
         override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); applyColors() }
-        private func applyColors() { glyph.strokeColor = ShellStyle.primaryText.shellResolvedCGColor(for: effectiveAppearance) }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); applyColors() }
+        override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); applyColors() }
+        private func applyColors() {
+            let color = NSColor(cgColor: ShellStyle.primaryText.shellResolvedCGColor(for: effectiveAppearance)) ?? ShellStyle.primaryText
+            let symbol = NSImage(systemSymbolName: ShellSymbol.disclosure, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: ShellStyle.compactIconSize, weight: .medium))?
+                .withSymbolConfiguration(.init(paletteColors: [color]))
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            glyph.contentsScale = window?.backingScaleFactor ?? 2
+            glyph.contents = symbol
+            CATransaction.commit()
+        }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

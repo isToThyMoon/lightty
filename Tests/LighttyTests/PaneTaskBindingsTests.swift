@@ -9,12 +9,12 @@ import LighttyCore
 final class PaneTaskBindingsTests: XCTestCase {
     private var root: URL!
     private var previous: AppState?
-    /// 手动触发的任务目录变更：代替 `TaskFolderWatcher` 防抖后的一次目录事件。
+    /// 手动触发的任务目录变更：代替 `PathWatcher` 防抖后的一次目录事件。
     private var fireFolderChange: (() -> Void)?
 
     override func setUpWithError() throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("pane-bindings-\(UUID().uuidString)", isDirectory: true)
         previous = AppState.shared

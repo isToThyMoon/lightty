@@ -11,19 +11,30 @@ import UserNotifications
 /// 2. **必须装 delegate**：不装 `UNUserNotificationCenterDelegate` 时，app 在
 ///    前台通知根本不显示。而本功能恰好有「app 在前台但 pane 在别的窗口/标签页」
 ///    这一档，没有 delegate 那一档就静默失效了。
-/// 3. **合并**：多个 agent 同时收工必须并成一条，不能刷屏。
+/// 3. **一个 pane 恒定一条**：request id 由 pane 算出来，同一个 pane 再次收工是
+///    替换通知中心里那条旧的，不是再堆一条；读掉或 pane 关掉就撤回。多个 agent
+///    同时收工各发各的——macOS 自己会按 app 折叠成一组，刷屏由系统兜住。
 final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PaneNotifier()
 
     private static let categoryID = "lightty.pane.status"
     private static let openActionID = "lightty.pane.open"
-    private static let paneIDsKey = "paneIDs"
+    private static let paneIDKey = "paneID"
 
-    /// 合并窗口。取 0.6s：够把「三个 agent 前后脚收工」并成一条，
-    /// 又不至于让单个 pane 的完成提醒迟到到用户已经切回来了。
+    /// 一个 pane 一个固定 request id：替换与撤回都认它。
+    private static func requestID(for paneID: UUID) -> String {
+        "lightty.pane.\(paneID.uuidString)"
+    }
+
+    /// 投递前的缓冲窗口。取 0.6s：一发状态里连着几个 pane 跳变时统一投递；
+    /// 也给「刚收工用户就切了过去」留出反悔余地——投递前会重新核一次是否已在眼前。
     private static let coalesceWindow: TimeInterval = 0.6
 
     private enum Authorization { case unknown, granted, denied }
+    private struct DesktopMessage {
+        let title: String
+        let body: String
+    }
     private var authorization: Authorization = .unknown
     /// 首次授权是异步的，期间来的批次挂在这里等结果，不重复弹框
     private var authWaiters: [(Bool) -> Void] = []
@@ -33,6 +44,11 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// 读过的 attention 仍是等待状态，但不再排队发通知。
     private var lastStates: [UUID: PaneActivity] = [:]
     private var pending: [UUID] = []
+    /// 只有本轮新跨入 done/attention 才记在这里，避免把后来的普通 OSC 通知
+    /// 与一个早已存在的未读状态误配。
+    private var pendingReminders: [UUID: PaneActivity] = [:]
+    /// OSC 通知仍逐条保留；配对成功时只消费最后一条，其余照常投递。
+    private var pendingDesktopMessages: [UUID: [DesktopMessage]] = [:]
     private var installed = false
 
     private override init() { super.init() }
@@ -98,13 +114,19 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
             let previous = lastStates[id] ?? .idle
             lastStates[id] = state
             guard previous != state else { continue }
-            guard state == .done || state == .attention else { continue }
-            guard !isOnScreen(pane, in: controller) else { continue }
-            enqueue(id)
+            if state == .done || state == .attention {
+                guard !isOnScreen(pane, in: controller) else { continue }
+                pendingReminders[id] = state
+                enqueue(id)
+            } else if previous == .done || previous == .attention {
+                // 跌出未读：用户点进去读了，或者 agent 又开工把提醒顶掉了。
+                // 通知中心里那条已经没有意义——收回去。
+                withdrawReminder(id)
+            }
         }
-        // pane 关掉后连同它的待发提醒一起清掉
+        // pane 关掉后连同它的待发提醒和已投递的通知一起清掉
+        for id in lastStates.keys where !alive.contains(id) { withdraw(id) }
         lastStates = lastStates.filter { alive.contains($0.key) }
-        pending.removeAll { !alive.contains($0) }
     }
 
     /// 「用户此刻正看着这个 pane 吗」。看得着就不打扰——通知的价值全在
@@ -125,7 +147,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    // MARK: - 合并与投递
+    // MARK: - 投递与撤回
 
     private lazy var flushes = Coalescer(.after(Self.coalesceWindow)) { [weak self] in self?.flush() }
 
@@ -135,14 +157,61 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         flushes.schedule()
     }
 
+    /// OSC 9/777 与同一 pane 的新完成状态共用短暂缓冲窗口。窗口内两路都到达时
+    /// 组装成一条；没有配对时按 Ghostty 原来的标题和正文独立投递。
+    func enqueueDesktopNotification(title: String, body: String, from view: TerminalSurfaceView?) {
+        let message = DesktopMessage(title: title, body: body)
+        guard let view,
+              let pane = AppState.shared?.runningPanes().first(where: { $0.pane.terminal === view })?.pane
+        else {
+            Self.postDesktop(message)
+            return
+        }
+        let id = pane.dragIdentifier
+        pendingDesktopMessages[id, default: []].append(message)
+        enqueue(id)
+    }
+
+    private func withdrawReminder(_ paneID: UUID) {
+        pendingReminders.removeValue(forKey: paneID)
+        if pendingDesktopMessages[paneID]?.isEmpty != false {
+            pending.removeAll { $0 == paneID }
+        }
+        Self.center?.removeDeliveredNotifications(withIdentifiers: [Self.requestID(for: paneID)])
+    }
+
+    /// 这条提醒作废了：还没投的从队列里摘掉，投出去的从通知中心收回。
+    /// 不需要授权——没授权过就没有东西可收，调用是空转。
+    private func withdraw(_ paneID: UUID) {
+        pending.removeAll { $0 == paneID }
+        pendingReminders.removeValue(forKey: paneID)
+        pendingDesktopMessages.removeValue(forKey: paneID)
+        Self.center?.removeDeliveredNotifications(withIdentifiers: [Self.requestID(for: paneID)])
+    }
+
     private func flush() {
         let ids = pending
         pending.removeAll()
         guard !ids.isEmpty else { return }
+        let desktopOnly = ids.filter { pendingReminders[$0] == nil }
+        desktopOnly.forEach(post)
+
+        let reminders = ids.filter { pendingReminders[$0] != nil }
+        guard !reminders.isEmpty else { return }
         withAuthorization { [weak self] granted in
-            guard granted else { return }
-            self?.post(ids)
+            guard let self else { return }
+            if granted {
+                reminders.forEach(self.post)
+            } else {
+                // 系统权限是 app 级的；即使被拒绝也消费本批，避免缓存滞留。
+                reminders.forEach(self.discard)
+            }
         }
+    }
+
+    private func discard(_ paneID: UUID) {
+        pendingReminders.removeValue(forKey: paneID)
+        pendingDesktopMessages.removeValue(forKey: paneID)
     }
 
     /// 懒申请 + 降级：拒绝过一次就把结论记下来，之后所有批次静默丢弃。
@@ -162,7 +231,8 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         guard !authRequestInFlight else { return }
         authRequestInFlight = true
 
-        center.getNotificationSettings { settings in
+        center.getNotificationSettings { [weak self] settings in
+            guard self != nil else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 switch settings.authorizationStatus {
@@ -187,40 +257,67 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         waiters.forEach { $0(granted) }
     }
 
-    private func post(_ ids: [UUID]) {
-        guard let center = Self.center else { return }
-        let running = AppState.shared?.runningPanes() ?? []
-        // 合并窗口 + 授权往返期间 pane 可能已被关掉或已读，按当下重新过滤
-        let entries: [(name: String, state: PaneActivity)] = ids.compactMap { id in
-            guard let match = running.first(where: { $0.pane.dragIdentifier == id }) else { return nil }
-            guard let state = PaneStatusStore.shared.unreadActivity(for: id) else { return nil }
-            return (Self.displayName(for: match.pane), state)
+    /// 缓冲窗口 + 授权往返期间，pane 可能已被关掉、已读，或者用户已经切了过去，
+    /// 三件事都在这里按当下重新核一次。
+    private func post(_ paneID: UUID) {
+        let reminder = pendingReminders.removeValue(forKey: paneID)
+        let desktops = pendingDesktopMessages.removeValue(forKey: paneID) ?? []
+        guard let reminder else {
+            desktops.forEach(Self.postDesktop)
+            return
         }
-        guard !entries.isEmpty else { return }
+
+        let running = AppState.shared?.runningPanes() ?? []
+        guard let match = running.first(where: { $0.pane.dragIdentifier == paneID }),
+              PaneStatusStore.shared.unreadActivity(for: paneID) == reminder,
+              !isOnScreen(match.pane, in: match.controller)
+        else {
+            desktops.forEach(Self.postDesktop)
+            return
+        }
+
+        let pairedDesktop = desktops.last
+        desktops.dropLast().forEach(Self.postDesktop)
+        guard let center = Self.center else { return }
 
         let content = UNMutableNotificationContent()
         content.categoryIdentifier = Self.categoryID
         content.sound = .default
-        content.userInfo = [Self.paneIDsKey: ids.map(\.uuidString)]
-        let needsAttention = entries.contains { $0.state == .attention }
-        if entries.count == 1 {
-            content.title = needsAttention ? L("Needs your attention") : L("Agent finished")
-            content.body = entries[0].name
+        content.userInfo = [Self.paneIDKey: paneID.uuidString]
+        let statusTitle = reminder == .attention ? L("Needs your attention") : L("Agent finished")
+        if let pairedDesktop {
+            content.title = "\(statusTitle) · \(Self.displayName(for: match.pane))"
+            content.body = pairedDesktop.body.isEmpty ? pairedDesktop.title : pairedDesktop.body
         } else {
-            content.title = needsAttention
-                ? L("%d panes need your attention", entries.count)
-                : L("%d agents finished", entries.count)
-            content.body = entries.map(\.name).joined(separator: ", ")
+            content.title = statusTitle
+            content.body = Self.displayName(for: match.pane)
         }
+
+        let id = Self.requestID(for: paneID)
+        // 同 id 覆盖只对**待发**的那条有文档保证，已投递的没明说。
+        // 先撤再发，替换语义就是确定的（两个调用按序进同一个队列）。
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// 未与状态提醒配对的 OSC 通知保持原行为：随机 request id、不使用 lightty
+    /// category，因此前台展示策略仍由系统决定，也不会被 pane 的已读状态撤回。
+    private static func postDesktop(_ message: DesktopMessage) {
+        guard let center = center else { return }
+        let content = UNMutableNotificationContent()
+        content.title = message.title
+        content.body = message.body
+        content.sound = .default
         center.add(UNNotificationRequest(
-            identifier: UUID().uuidString, content: content, trigger: nil))
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil))
     }
 
     private static func displayName(for pane: PaneView) -> String {
+        if let task = pane.boundTask?.name, !task.isEmpty { return task }
         let name = pane.header.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = name.isEmpty ? L("Pane") : name
-        guard let task = pane.boundTask?.name, !task.isEmpty else { return base }
-        return "\(base) · \(task)"
+        return name.isEmpty ? L("Pane") : name
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -244,16 +341,12 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let ids = response.notification.request.content.userInfo[Self.paneIDsKey] as? [String] ?? []
+        let raw = response.notification.request.content.userInfo[Self.paneIDKey] as? String
         switch response.actionIdentifier {
         case Self.openActionID, UNNotificationDefaultActionIdentifier:
-            DispatchQueue.main.async {
-                // 合并通知带着一串 pane：跳到第一个还活着的那个
-                for id in ids {
-                    guard let uuid = UUID(uuidString: id) else { continue }
-                    if PaneFocus.reveal(paneID: uuid) { break }
-                }
-            }
+            // 跳过去会让它拿到焦点 → markRead → 扫描里撤回，不需要在这里收。
+            guard let uuid = raw.flatMap(UUID.init(uuidString:)) else { break }
+            DispatchQueue.main.async { _ = PaneFocus.reveal(paneID: uuid) }
         default:
             break
         }

@@ -86,11 +86,28 @@ final class PaneStatusTests: XCTestCase {
         XCTAssertEqual(PaneActivity(hookEventName: "Interrupt"), .idle)
         XCTAssertEqual(PaneActivity(hookEventName: "UserPromptSubmit"), .thinking)
         XCTAssertEqual(PaneActivity(hookEventName: "PostToolUse"), .thinking)
+        // 工具失败回合照常继续；Claude Code 没有 Interrupt，用户中断正在跑的工具时
+        // 只有这一发带 is_interrupt 的失败事件（Stop 在中断时不触发）
+        XCTAssertEqual(PaneActivity(hookEventName: "PostToolUseFailure"), .thinking)
+        XCTAssertEqual(PaneActivity(hookEventName: "PostToolUseFailure", interrupted: true), .idle)
         XCTAssertEqual(PaneActivity(hookEventName: "PreToolUse"), .tool)
         XCTAssertEqual(PaneActivity(hookEventName: "Notification"), .attention)
         XCTAssertEqual(PaneActivity(hookEventName: "PermissionRequest"), .attention)
         XCTAssertEqual(PaneActivity(hookEventName: "Stop"), .done)
         XCTAssertNil(PaneActivity(hookEventName: "FutureEvent"))
+    }
+
+    func testInformationalNotificationsLeaveStateAlone() {
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "permission_prompt"), .attention)
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "elicitation_dialog"), .attention)
+        // 回合结束 60 秒没人输入：保持已完成，不变成待处理
+        XCTAssertNil(PaneActivity(hookEventName: "Notification", notificationType: "idle_prompt"))
+        XCTAssertNil(PaneActivity(hookEventName: "Notification", notificationType: "auth_success"))
+        // 没见过的类型可能是新的阻塞对话框，宁可提醒
+        XCTAssertEqual(
+            PaneActivity(hookEventName: "Notification", notificationType: "future_dialog"), .attention)
     }
 
     func testRejectsUnknownSchemaVersion() throws {

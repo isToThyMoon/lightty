@@ -37,7 +37,11 @@ final class PaneStatusLoadTests: XCTestCase {
             .appendingPathComponent(".build/debug/lightty-hook")
     }
 
-    /// 用真 hook 二进制发一发（阻塞到进程退出）
+    /// 用真 hook 二进制发一发（阻塞到进程退出）。
+    ///
+    /// 这里刻意不经 `HookLauncher` 造 pty：测的就是裸 spawn 的成本，多一层 `script`
+    /// 量的就不是 hook 了。代价是**这条压测必须在真终端里跑**——在某个 agent 的 Bash 工具里
+    /// 跑 `swift test`，测试进程本身就是工具子进程，hook 会正确地判成子会话、一发不发。
     private func fire(pane: UUID, event: String) throws {
         let p = Process()
         p.executableURL = hookBinary

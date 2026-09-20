@@ -9,13 +9,13 @@ final class TabVirtualizationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         defer { controller.window?.close() }
         let column = TabColumnView()
         controller.window!.contentView!.addSubview(column)
         column.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+        try controller.waitForInitialLayout()
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
         }

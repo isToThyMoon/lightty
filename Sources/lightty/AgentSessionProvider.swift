@@ -27,6 +27,16 @@ protocol AgentSessionProvider: SessionCatalogProvider {
     func observeLiveSessions() -> LiveSessionObservation?
 }
 
+/// 占用检测的结论。只报正面证据：`.unknown` 是「问不出来」，不是「没人用」。
+///
+/// 证据只来自各家的官方接口：Claude 自己维护着一张活会话表（`claude agents --json`
+/// 就是给脚本读的），直接给出 pid 与 sessionId 的对应；Codex 没有对等的东西
+/// （`codex agents` 要先连上一个共用的后台服务，而 lightty 是直接在终端里跑 codex），
+/// 所以它恒为 `.unknown`，由 codex 自己的写锁在删除时拒绝。
+enum SessionOccupancy {
+    enum Result: Equatable { case inUse(pid: Int32), unknown }
+}
+
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。
 struct LiveSessionObservation: Equatable {
     var processes: [String: Set<AgentProcessIdentity>] = [:]

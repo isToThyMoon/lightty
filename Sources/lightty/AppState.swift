@@ -22,7 +22,7 @@ final class AppState {
     /// - Parameter taskFolderChanges: 任务目录变更源，测试注入手动触发的替身；默认是真实监听。
     init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true,
          sessionLibrary: SessionLibrary? = nil,
-         taskFolderChanges: TaskFolderChangeSource = TaskFolderWatcher.changeSource) {
+         taskFolderChanges: PathChangeSource = PathWatcher.changeSource) {
         // LIGHTTY_TASK_DIR：调试用的任务目录覆盖（跑一套假任务而不动 ~/.lightty/tasks）
         let override = ProcessInfo.processInfo.environment["LIGHTTY_TASK_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }

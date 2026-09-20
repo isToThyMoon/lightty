@@ -28,17 +28,20 @@ final class SidebarSelectionVisibilityTests: XCTestCase {
         return color.alphaComponent > 0.01
     }
 
+    /// 同一个 flag 的三种输入：`showsSelectionOnlyWhenFocused` 决定失焦时画不画。
     @MainActor
-    func testHandoffRowHidesSelectionWhenTheListIsNotFocused() {
-        XCTAssertTrue(paintsSelection(onlyWhenFocused: true, focused: true),
-            "键盘在这张表上时，光标要看得见")
-        XCTAssertFalse(paintsSelection(onlyWhenFocused: true, focused: false),
-            "焦点在终端里时，键盘光标不该还亮着——它不代表任何状态")
-    }
-
-    @MainActor
-    func testSessionsRowKeepsSelectionWhileUnfocused() {
-        XCTAssertTrue(paintsSelection(onlyWhenFocused: false, focused: false),
-            "会话侧栏的选中是派生状态，失焦也要看得见")
+    func testSelectionPaintsAccordingToFocusFlag() {
+        let cases: [(onlyWhenFocused: Bool, focused: Bool, paints: Bool, why: String)] = [
+            // Handoff 行：键盘在这张表上时，光标要看得见
+            (true, true, true, "键盘在这张表上时，光标要看得见"),
+            // Handoff 行：焦点在终端里时，键盘光标不该还亮着——它不代表任何状态
+            (true, false, false, "焦点在终端里时，键盘光标不该还亮着——它不代表任何状态"),
+            // Sessions 行：选中是派生状态，失焦也要看得见
+            (false, false, true, "会话侧栏的选中是派生状态，失焦也要看得见"),
+        ]
+        for c in cases {
+            XCTAssertEqual(paintsSelection(onlyWhenFocused: c.onlyWhenFocused, focused: c.focused), c.paints,
+                           "onlyWhenFocused=\(c.onlyWhenFocused) focused=\(c.focused): \(c.why)")
+        }
     }
 }

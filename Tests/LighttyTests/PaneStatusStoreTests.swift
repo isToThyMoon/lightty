@@ -52,56 +52,100 @@ final class PaneStatusStoreTests: XCTestCase {
         attachedPanes.append(pane)
     }
 
-    private func send(_ state: PaneActivity, to pane: UUID, tool: String? = nil) {
+    private func send(_ state: PaneActivity, to pane: UUID, tool: String? = nil, event: String? = nil, agent: String = "claude") {
         PaneStatusDatagram(
-            pane: pane, status: PaneStatus(ts: Date(), state: state, agent: "claude", tool: tool)
+            pane: pane, status: PaneStatus(ts: Date(), state: state, agent: agent, tool: tool, event: event)
         ).send(to: socketPath)
-    }
-
-    /// 主线程上等 `condition` 成立。`wait` 会泵主 runloop，
-    /// 这正是 store 的 `DispatchQueue.main.async` 落地所需要的。
-    private func waitUntil(
-        _ description: String, timeout: TimeInterval = 2,
-        _ condition: @escaping () -> Bool
-    ) {
-        let expectation = XCTestExpectation(description: description)
-        func poll() {
-            if condition() {
-                expectation.fulfill()
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.005) { poll() }
-            }
-        }
-        poll()
-        XCTAssertEqual(
-            XCTWaiter().wait(for: [expectation], timeout: timeout), .completed, description)
     }
 
     // MARK: - 用例
 
     /// 顺序就是契约：datagram 到达顺序 == 发送顺序，所以 `seq` 才敢删掉。
-    func testDeliversDatagramsInSendOrder() {
+    func testDeliversDatagramsInSendOrder() throws {
         let pane = UUID()
         attach(pane)
 
         for state in [PaneActivity.thinking, .tool, .thinking, .done] { send(state, to: pane) }
 
-        waitUntil("四发都到") { self.received.count >= 4 }
+        try waitUntil("四发都到") { self.received.count >= 4 }
         XCTAssertEqual(received.map(\.state), [.thinking, .tool, .thinking, .done])
         XCTAssertEqual(store.status(for: pane)?.state, .done)
     }
 
+    /// 状态由 hook 驱动。标题仅补 Claude 中断缺口，不能复活已读提醒或制造新的等待。
+    func testTerminalTitleOnlyFillsTheClaudeInterruptGap() throws {
+        let busy = AgentTerminalTitle(phase: .busy, body: "t")
+        let settled = AgentTerminalTitle(phase: .settled, body: "t")
+        let attention = AgentTerminalTitle(phase: .attention, body: "t")
+        for agent in ["claude", "codex"] {
+            let pane = UUID()
+            attach(pane)
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertNil(store.status(for: pane))
+
+            func hook(_ state: PaneActivity, _ event: String) throws {
+                let count = received.count
+                send(state, to: pane, event: event, agent: agent)
+                try waitUntil("hook received") { self.received.count > count }
+            }
+            try hook(.idle, "SessionStart")
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .idle)
+            try hook(.thinking, "UserPromptSubmit")
+            store.noteTerminalTitle(.init(phase: .settled, body: "shell", recognizedByPrefix: false), in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .thinking, "Only an explicit idle prefix can fill the gap")
+            store.noteTerminalTitle(settled, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, agent == "claude" ? .idle : .thinking)
+            try hook(.tool, "PreToolUse")
+            store.noteTerminalTitle(busy, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, .tool)
+            store.noteTerminalTitle(settled, in: pane)
+            XCTAssertEqual(store.status(for: pane)?.state, agent == "claude" ? .idle : .tool)
+            // 空闲标题先到，后到的 Stop 仍确认为正常完成；Interrupt 则回空闲。
+            try hook(.done, "Stop")
+            XCTAssertEqual(store.unreadActivity(for: pane), .done)
+            try hook(.idle, "Interrupt")
+            XCTAssertNil(store.unreadActivity(for: pane))
+
+            // 重放完成/等待后的标题动画和同态 hook：不能出现第二次提醒边沿。
+            for (state, event) in [(PaneActivity.done, "Stop"), (.attention, "PermissionRequest")] {
+                try hook(.thinking, "UserPromptSubmit")
+                try hook(state, event)
+                let before = received.count
+                for title in [busy, settled, attention, busy, attention] {
+                    store.noteTerminalTitle(title, in: pane)
+                    XCTAssertEqual(store.status(for: pane)?.state, state)
+                }
+                XCTAssertEqual(received.count, before, "Title animation must not publish activity transitions")
+                try hook(state, event)
+                XCTAssertEqual(store.unreadActivity(for: pane), state)
+                store.markRead(pane)
+                let readState = store.status(for: pane)
+                for title in [busy, attention, settled] { store.noteTerminalTitle(title, in: pane) }
+                XCTAssertEqual(store.status(for: pane), readState)
+                XCTAssertNil(store.unreadActivity(for: pane))
+            }
+            // 真正的下一轮仍由 hook 开始并正常产生新的提醒。
+            try hook(.thinking, "UserPromptSubmit")
+            try hook(.attention, "PermissionRequest")
+            XCTAssertEqual(store.unreadActivity(for: pane), .attention)
+            try hook(.idle, "SessionEnd")
+            for title in [busy, attention, settled] { store.noteTerminalTitle(title, in: pane) }
+            XCTAssertEqual(store.status(for: pane)?.state, .idle)
+        }
+    }
+
     /// 分发是**定向**的：通知必须说清是哪个 pane 变了，否则呈现层只能全量重扫。
-    func testNotificationCarriesTheChangedPaneID() {
+    func testNotificationCarriesTheChangedPaneID() throws {
         let a = UUID()
         let b = UUID()
         attach(a)
         attach(b)
 
         send(.tool, to: a)
-        waitUntil("a 到了") { self.received.count >= 1 }
+        try waitUntil("a 到了") { self.received.count >= 1 }
         send(.done, to: b)
-        waitUntil("b 到了") { self.received.count >= 2 }
+        try waitUntil("b 到了") { self.received.count >= 2 }
 
         XCTAssertEqual(received.map(\.pane), [a, b])
         XCTAssertEqual(store.status(for: a)?.state, .tool)
@@ -110,7 +154,7 @@ final class PaneStatusStoreTests: XCTestCase {
 
     /// 这条是换传输层的**理由**本身：文件当可变槽位时主线程一忙就整批丢，
     /// 内核接收队列不会。200 发是 20 个并发 agent 的一轮突发量级。
-    func testBurstOfTwoHundredDatagramsAllArrive() {
+    func testBurstOfTwoHundredDatagramsAllArrive() throws {
         let pane = UUID()
         attach(pane)
 
@@ -122,17 +166,17 @@ final class PaneStatusStoreTests: XCTestCase {
             }
         }
 
-        waitUntil("200 发全到", timeout: 10) { self.received.count >= 200 }
+        try waitUntil("200 发全到", timeout: 10) { self.received.count >= 200 }
         XCTAssertEqual(received.count, 200)
         XCTAssertTrue(received.allSatisfy { $0.pane == pane })
     }
 
     /// 未 attach 的 pane 的报文要丢：detach 之后还有在途报文，不能把状态复活。
-    func testDetachDropsStateAndIgnoresInFlightDatagrams() {
+    func testDetachDropsStateAndIgnoresInFlightDatagrams() throws {
         let pane = UUID()
         attach(pane)
         send(.done, to: pane)
-        waitUntil("先收到一发") { self.store.status(for: pane) != nil }
+        try waitUntil("先收到一发") { self.store.status(for: pane) != nil }
 
         store.detach(pane)
         XCTAssertNil(store.status(for: pane))
@@ -145,7 +189,7 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertNil(store.status(for: pane))
     }
 
-    func testMalformedDatagramIsDroppedWithoutBreakingTheStream() {
+    func testMalformedDatagramIsDroppedWithoutBreakingTheStream() throws {
         let pane = UUID()
         attach(pane)
 
@@ -160,20 +204,20 @@ final class PaneStatusStoreTests: XCTestCase {
 
         // 链路必须还活着：好报文照收
         send(.done, to: pane)
-        waitUntil("坏报文之后好报文仍然到达") { self.received.count >= 1 }
+        try waitUntil("坏报文之后好报文仍然到达") { self.received.count >= 1 }
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(store.status(for: pane)?.state, .done)
     }
 
     /// `markAllRead` 一次改多个 pane，通知不带 pane（object 为 nil），呈现层走全量分支。
-    func testMarkAllReadPostsAFullPassNotification() {
+    func testMarkAllReadPostsAFullPassNotification() throws {
         let a = UUID()
         let b = UUID()
         attach(a)
         attach(b)
         send(.done, to: a)
         send(.done, to: b)
-        waitUntil("两发都到") { self.received.count >= 2 }
+        try waitUntil("两发都到") { self.received.count >= 2 }
 
         XCTAssertEqual(store.unreadCount, 2)
         XCTAssertEqual(store.aggregate, .done)
@@ -187,11 +231,11 @@ final class PaneStatusStoreTests: XCTestCase {
     }
 
     /// Reading acknowledges the reminder without claiming that the Agent has resumed.
-    func testMarkReadPreservesAttention() {
+    func testMarkReadPreservesAttention() throws {
         let pane = UUID()
         attach(pane)
         send(.attention, to: pane)
-        waitUntil("attention 到达") { self.received.count >= 1 }
+        try waitUntil("attention 到达") { self.received.count >= 1 }
         XCTAssertEqual(store.aggregate, .attention)
 
         store.markRead(pane)

@@ -42,15 +42,20 @@ struct RefreshButtonTests {
         #expect(abs(quarterTurn.y - center.y) < 0.01)
     }
 
-    @Test(arguments: [CGFloat(1), 2])
-    func renderedSymbolHasTheSameProportionsAsANativeButton(scale: CGFloat) throws {
+    /// 自绘的刷新图标 = 同一张图放进原生 NSButton：imageRect 相等、墨迹范围与轮廓逐像素
+    /// 一致（1x / 2x），且渲染出的像素色等于按**这个视图**的 appearance 解析的
+    /// secondaryText，不是进程级默认外观。
+    @Test(arguments: [CGFloat(1), 2], [NSAppearance.Name.aqua, .darkAqua])
+    func customGlyphRendersLikeNativeButton(scale: CGFloat, appearance: NSAppearance.Name) throws {
         _ = NSApplication.shared
         let button = RefreshButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        button.appearance = NSAppearance(named: appearance)
         let native = NSButton(frame: NSRect(x: 30, y: 0, width: 24, height: 24))
         native.isBordered = false
         native.wantsLayer = true
         native.image = button.image
         native.contentTintColor = ShellStyle.secondaryText
+        native.appearance = NSAppearance(named: appearance)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 60, height: 24),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -60,7 +65,12 @@ struct RefreshButtonTests {
         host.addSubview(native)
         host.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
-        func render(_ view: NSView) throws -> NSBitmapImageRep {
+
+        // 布局：图片矩形与原生按钮一致
+        #expect(button.cell?.imageRect(forBounds: button.bounds) == native.cell?.imageRect(forBounds: native.bounds))
+
+        // 轮廓：墨迹范围与整个箭头的剪影（含朝向、对齐）逐像素比
+        func render(_ view: NSView, scale: CGFloat) throws -> NSBitmapImageRep {
             let context = try #require(CGContext(data: nil, width: Int(24 * scale), height: Int(24 * scale),
                 bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
@@ -69,8 +79,8 @@ struct RefreshButtonTests {
             try #require(view.layer).render(in: context)
             return NSBitmapImageRep(cgImage: try #require(context.makeImage()))
         }
-        let reference = try render(native)
-        let actual = try render(button)
+        let reference = try render(native, scale: scale)
+        let actual = try render(button, scale: scale)
         let expectedInk = try inkBounds(reference)
         let actualInk = try inkBounds(actual)
         #expect(abs(actualInk.width - expectedInk.width) <= 1)
@@ -88,6 +98,24 @@ struct RefreshButtonTests {
             }
         }
         #expect(error / ink < 0.15, "Compare the complete arrow silhouette, including its orientation and alignment")
+
+        // 颜色：实心像素等于按该视图 appearance 解析的 secondaryText。
+        // 1x 下笔画太细，几乎没有不透明像素可取样，所以固定按 2x 渲染取色。
+        let expectedColor = try #require(NSColor(cgColor:
+            ShellStyle.secondaryText.shellResolvedCGColor(for: button.effectiveAppearance))?.usingColorSpace(.deviceRGB))
+        let colored = try render(button, scale: 2)
+        var visible = 0
+        var maxColorError: CGFloat = 0
+        for y in 0..<colored.pixelsHigh {
+            for x in 0..<colored.pixelsWide {
+                guard let color = colored.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.9 else { continue }
+                visible += 1
+                maxColorError = max(maxColorError, abs(color.redComponent - expectedColor.redComponent),
+                    abs(color.greenComponent - expectedColor.greenComponent), abs(color.blueComponent - expectedColor.blueComponent))
+            }
+        }
+        #expect(visible > 20, "The refresh symbol must actually render, not just have a centered empty layer")
+        #expect(maxColorError < 0.04, "Rendered pixels must use this view's appearance, not the process-wide default")
     }
 
     private func inkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
@@ -101,44 +129,73 @@ struct RefreshButtonTests {
         return rect
     }
 
-    @Test(arguments: [true, false])
-    func firstOpenSpinsAtTheRefreshButtonsCenter(loadingBeforeLayout: Bool) throws {
+    /// 转轴始终在图标中心：无论读取先于布局（启动时会话视图还不存在就开始读）还是
+    /// 布局之后才开始读，anchorPoint 居中、四个角度下中心不动、窗口改尺寸后仍不动；
+    /// 读取中把按钮移出再加回视图树，frame 不变、动画 layer 同一实例、转轴仍居中。
+    @Test func rotationPivotStaysCenteredAcrossLayoutAndReparenting() throws {
         _ = NSApplication.shared
-        let f = try SessionModelFixture()
-        defer { f.close() }
-        // Startup begins loading before the Sessions view exists.
-        if loadingBeforeLayout { f.library.start() }
-        let content = SessionsSidebarContent(library: f.library)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+
+        // 两种启动顺序：先读后布局、先布局后读
+        for loadingBeforeLayout in [true, false] {
+            let f = try SessionModelFixture()
+            defer { f.close() }
+            // Startup begins loading before the Sessions view exists.
+            if loadingBeforeLayout { f.library.start() }
+            let content = SessionsSidebarContent(library: f.library)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = content
+            content.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            if !loadingBeforeLayout {
+                f.library.start()
+                content.activate()
+            }
+            #expect(f.library.loading, "loadingBeforeLayout=\(loadingBeforeLayout)")
+            func descendants(_ view: NSView) -> [NSView] {
+                view.subviews.flatMap { [$0] + descendants($0) }
+            }
+            let button = try #require(descendants(content).compactMap { $0 as? NSButton }
+                .first { $0.toolTip == L("Cancel") })
+            let layer = try #require(refreshRotationLayer(in: button.layer))
+            // A centered rotation leaves the visible glyph's center invariant at every angle.
+            // Use the actual post-layout layer geometry, not timing-sensitive presentation frames.
+            #expect(layer.anchorPoint.x == 0.5)
+            #expect(layer.anchorPoint.y == 0.5)
+            #expect(layer !== button.layer, "AppKit must retain ownership of the button's layout geometry")
+            try expectCenteredRotation(button, layer: layer)
+
+            // Layout changes while loading must not change the rotation pivot either.
+            window.setContentSize(NSSize(width: 360, height: 500))
+            content.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            try expectCenteredRotation(button, layer: layer)
+        }
+
+        // 读取中移出再加回视图树
+        let button = RefreshButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        button.isRefreshing = true
+        #expect(refreshRotationLayer(in: button.layer) == nil, "Detached views need no animation")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 200),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView = content
-        content.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        if !loadingBeforeLayout {
-            f.library.start()
-            content.activate()
-        }
-        #expect(f.library.loading)
-        func descendants(_ view: NSView) -> [NSView] {
-            view.subviews.flatMap { [$0] + descendants($0) }
-        }
-        let button = try #require(descendants(content).compactMap { $0 as? NSButton }
-            .first { $0.toolTip == L("Cancel") })
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let host = try #require(window.contentView)
+        host.addSubview(button)
+        button.setFrameOrigin(NSPoint(x: 200, y: 100))
+        host.layoutSubtreeIfNeeded()
         let layer = try #require(refreshRotationLayer(in: button.layer))
-        // A centered rotation leaves the visible glyph's center invariant at every angle.
-        // Use the actual post-layout layer geometry, not timing-sensitive presentation frames.
-        #expect(layer.anchorPoint.x == 0.5)
-        #expect(layer.anchorPoint.y == 0.5)
-        #expect(layer !== button.layer, "AppKit must retain ownership of the button's layout geometry")
         try expectCenteredRotation(button, layer: layer)
-
-        // Layout changes while loading must not change the rotation pivot either.
-        window.setContentSize(NSSize(width: 360, height: 500))
-        content.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
+        let frame = button.frame
+        button.removeFromSuperview()
+        #expect(refreshRotationLayer(in: button.layer) == nil)
+        host.addSubview(button)
+        host.layoutSubtreeIfNeeded()
+        #expect(button.frame == frame)
+        #expect(refreshRotationLayer(in: button.layer) === layer)
         try expectCenteredRotation(button, layer: layer)
     }
 
@@ -162,32 +219,6 @@ struct RefreshButtonTests {
             #expect(abs(actual.x - expectedCenter.x) < 0.01)
             #expect(abs(actual.y - expectedCenter.y) < 0.01)
         }
-    }
-
-    @Test func detachingAndReattachingWhileLoadingPreservesNativeButtonGeometry() throws {
-        _ = NSApplication.shared
-        let button = RefreshButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-        button.isRefreshing = true
-        #expect(refreshRotationLayer(in: button.layer) == nil, "Detached views need no animation")
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 200),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let host = try #require(window.contentView)
-        host.addSubview(button)
-        button.setFrameOrigin(NSPoint(x: 200, y: 100))
-        host.layoutSubtreeIfNeeded()
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let layer = try #require(refreshRotationLayer(in: button.layer))
-        try expectCenteredRotation(button, layer: layer)
-        let frame = button.frame
-        button.removeFromSuperview()
-        #expect(refreshRotationLayer(in: button.layer) == nil)
-        host.addSubview(button)
-        host.layoutSubtreeIfNeeded()
-        #expect(button.frame == frame)
-        #expect(refreshRotationLayer(in: button.layer) === layer)
-        try expectCenteredRotation(button, layer: layer)
     }
 
     @Test func refreshCanRestartDuringItsFinishingRevolution() async throws {
@@ -218,52 +249,13 @@ struct RefreshButtonTests {
         #expect(layer.animation(forKey: "refresh.spin")?.beginTime == animation.beginTime,
                 "A new load cancels the pending stop without restarting the rotation")
         button.isRefreshing = false
-        let deadline = Date().addingTimeInterval(1.5)
-        while refreshRotationLayer(in: button.layer) != nil, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        // 上限就是契约：最多转完当前一圈（0.9 秒）就停，不能放宽。
+        try await awaitUntil("rotation stops within one revolution", timeout: .milliseconds(1500)) {
+            refreshRotationLayer(in: button.layer) == nil
         }
-        #expect(refreshRotationLayer(in: button.layer) == nil)
         #expect(button.image === image)
         #expect(button.frame == frame)
         #expect(CATransform3DIsIdentity(layer.transform))
-    }
-
-    @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
-    func symbolPreservesNativeImageLayoutAndAppearance(appearance: NSAppearance.Name) throws {
-        _ = NSApplication.shared
-        let button = RefreshButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-        button.appearance = NSAppearance(named: appearance)
-        let window = NSWindow(contentRect: button.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        window.contentView = button
-        button.layoutSubtreeIfNeeded()
-        let native = NSButton(frame: button.frame)
-        native.isBordered = false
-        native.image = button.image
-        native.contentTintColor = ShellStyle.secondaryText
-        #expect(button.cell?.imageRect(forBounds: button.bounds) == native.cell?.imageRect(forBounds: native.bounds))
-        let glyph = try #require(button.layer?.sublayers?.first { $0.contents is NSImage })
-        let context = try #require(CGContext(data: nil, width: 48, height: 48,
-            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        context.scaleBy(x: 2, y: 2)
-        glyph.render(in: context)
-        let bitmap = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
-        let expected = try #require(NSColor(cgColor:
-            ShellStyle.secondaryText.shellResolvedCGColor(for: button.effectiveAppearance))?.usingColorSpace(.deviceRGB))
-        var visible = 0
-        var maxColorError: CGFloat = 0
-        for y in 0..<bitmap.pixelsHigh {
-            for x in 0..<bitmap.pixelsWide {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.9 else { continue }
-                visible += 1
-                maxColorError = max(maxColorError, abs(color.redComponent - expected.redComponent),
-                    abs(color.greenComponent - expected.greenComponent), abs(color.blueComponent - expected.blueComponent))
-            }
-        }
-        #expect(visible > 20, "The refresh symbol must actually render, not just have a centered empty layer")
-        #expect(maxColorError < 0.04, "Rendered pixels must use this view's appearance, not the process-wide default")
     }
 }
 

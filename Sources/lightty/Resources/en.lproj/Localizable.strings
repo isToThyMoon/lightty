@@ -150,8 +150,6 @@
 "You can show it again from the lightty menu." = "You can show it again from the lightty menu.";
 "Agent finished" = "Agent finished";
 "Needs your attention" = "Needs your attention";
-"%d agents finished" = "%d agents finished";
-"%d panes need your attention" = "%d panes need your attention";
 
 /* agent 状态：hook 安装器 */
 "Agent status hooks" = "Agent status hooks";
@@ -246,13 +244,7 @@
 "Purple" = "Purple";
 "White" = "White";
 
-"Handoff tasks" = "Handoff tasks";
-"Sessions" = "Sessions";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "Include the task when starting an agent\nTry saying: “Summarize the handoff”";
-"Click to resume your last session." = "Click to resume your last session.";
 "Primary sidebar" = "Primary sidebar";
-"Manage handoff tasks" = "Manage handoff tasks";
-"Continue local CLI sessions" = "Continue local CLI sessions";
 "The CLI session interface is not supported by this version." = "The CLI session interface is not supported by this version.";
 "Reading CLI sessions timed out. Try refreshing." = "Reading CLI sessions timed out. Try refreshing.";
 "The session catalog exceeded the loading limit." = "The session catalog exceeded the loading limit.";
@@ -365,3 +357,142 @@
 "Typed in when the plugin is not installed" = "Typed in when the plugin is not installed";
 "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text.";
 "Unbinding: nothing is injected, and the next binding starts fresh." = "Unbinding: nothing is injected, and the next binding starts fresh.";
+
+/* Skills 浏览器 */
+"Skills" = "Skills";
+"Refresh skills" = "Refresh skills";
+"Favorite" = "Favorite";
+"Not favorited" = "Not favorited";
+"Skill actions" = "Skill actions";
+"Open file" = "Open file";
+"Open source" = "Open source";
+"Source" = "Source";
+"Preview" = "Preview";
+"Skill sources" = "Skill sources";
+"Search skills or sources…" = "Search skills or sources…";
+"Skill content" = "Skill content";
+"Select a skill to read its instructions." = "Select a skill to read its instructions.";
+"Reading skills…" = "Reading skills…";
+"All skills" = "All skills";
+"Favorites" = "Favorites";
+"Mine" = "Mine";
+"Unclassified" = "Unclassified";
+"Sources" = "Sources";
+"Provided by agents" = "Provided by agents";
+"Plugin skills" = "Plugin skills";
+"Built-in skills" = "Built-in skills";
+"No skills in this category." = "No skills in this category.";
+"No matching skills." = "No matching skills.";
+"The skill file could not be opened." = "The skill file could not be opened.";
+"Mark as mine" = "Mark as mine";
+"Copy file path" = "Copy file path";
+"Found in" = "Found in";
+"%d notices" = "%d notices";
+"Skills notices" = "Skills notices";
+
+"Common installations" = "Common installations";
+
+
+"Bundled with Claude Code; reading is not supported yet." = "Bundled with Claude Code; reading is not supported yet.";
+
+"File locations" = "File locations";
+
+"Actual file" = "Actual file";
+
+/* Plugins settings page */
+"Plugins" = "Plugins";
+"Installed plugins" = "Installed plugins";
+"Plugin contents" = "Plugin contents";
+"Plugin content" = "Plugin content";
+"Search plugin contents…" = "Search plugin contents…";
+"Select an item to see what the plugin provides." = "Select an item to see what the plugin provides.";
+"This plugin provides no contents." = "This plugin provides no contents.";
+"No matching contents." = "No matching contents.";
+"Refresh plugins" = "Refresh plugins";
+"Enable plugin" = "Enable plugin";
+"Enabled" = "Enabled";
+"Disabled" = "Disabled";
+"Cached only" = "Cached only";
+"Cached in Codex but not in its installed list, so it cannot be enabled here." = "Cached in Codex but not in its installed list, so it cannot be enabled here.";
+"Remote plugin that Codex has not downloaded to this Mac; its contents cannot be browsed." = "Remote plugin that Codex has not downloaded to this Mac; its contents cannot be browsed.";
+"Skill" = "Skill";
+"Command" = "Command";
+"Subagent" = "Subagent";
+"Hook" = "Hook";
+"MCP server" = "MCP server";
+"Plugin notices" = "Plugin notices";
+"The plugin file could not be opened." = "The plugin file could not be opened.";
+
+/* Handoff 设置页（三栏浏览器） */
+"In progress" = "In progress";
+
+"Protocol" = "Protocol";
+
+"Handoff categories" = "Handoff categories";
+
+"Handoff documents" = "Handoff documents";
+
+"Handoff document" = "Handoff document";
+
+"Search handoff documents…" = "Search handoff documents…";
+
+"No matching documents." = "No matching documents.";
+
+"The protocol is the same for every task." = "The protocol is the same for every task.";
+
+"Select a handoff document to read it." = "Select a handoff document to read it.";
+
+"The handoff file could not be opened." = "The handoff file could not be opened.";
+
+"Rescan the task folder" = "Rescan the task folder";
+
+/* 插件内容的分组标题 */
+"Commands" = "Commands";
+"Subagents" = "Subagents";
+"Hooks" = "Hooks";
+"MCP servers" = "MCP servers";
+"App connector" = "App connector";
+"App connectors" = "App connectors";
+
+/* 技能里 SKILL.md 之外的文件 */
+"%d files in this skill" = "%d files in this skill";
+"This file is not text. Open it to read it." = "This file is not text. Open it to read it.";
+"This file is too large to preview." = "This file is too large to preview.";
+
+/* 独立 MCP server 设置页 */
+"All servers" = "All servers";
+"MCP server sources" = "MCP server sources";
+"Search MCP servers…" = "Search MCP servers…";
+"No MCP servers configured here." = "No MCP servers configured here.";
+"No matching servers." = "No matching servers.";
+"Select a server to see how it is configured." = "Select a server to see how it is configured.";
+"Refresh MCP servers" = "Refresh MCP servers";
+"Enable MCP server" = "Enable MCP server";
+"MCP server configuration" = "MCP server configuration";
+"MCP notices" = "MCP notices";
+"The configuration file could not be opened." = "The configuration file could not be opened.";
+"Claude Code has no enabled switch for a user-level server: it is on while it is configured." = "Claude Code has no enabled switch for a user-level server: it is on while it is configured.";
+
+"Open the skill folder" = "Open the skill folder";
+
+/* Claude Code 的使用计数 */
+"Unused" = "Unused";
+"Used %d times by Claude Code" = "Used %d times by Claude Code";
+"Never used by Claude Code" = "Never used by Claude Code";
+"No usage record from Claude Code" = "No usage record from Claude Code";
+
+"Save task progress for an agent to pick up." = "Save task progress for an agent to pick up.";
+
+"Browse and continue local Agent sessions." = "Browse and continue local Agent sessions.";
+
+"Create a task with the toolbar to save progress for an agent to pick up." = "Create a task with the toolbar to save progress for an agent to pick up.";
+
+"No matching tasks." = "No matching tasks.";
+
+"Not open" = "Not open";
+
+"Task document updated" = "Task document updated";
+
+"No local sessions yet. Start a session with the toolbar; return here to continue it." = "No local sessions yet. Start a session with the toolbar; return here to continue it.";
+
+"Opened" = "Opened";

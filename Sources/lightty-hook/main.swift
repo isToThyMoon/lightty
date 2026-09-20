@@ -47,37 +47,23 @@ private func summarize(_ raw: String, limit: Int = 80) -> String {
     return String(flat.prefix(limit - 1)) + "…"
 }
 
-/// 认 agent：证据按可靠程度排序交给 `HookAgentDetection`——父进程链上的二进制名、
-/// `transcript_path` 的路径形状、最后才是环境变量（会从上层会话泄漏）。
+/// 命令行里的 `--agent <名>`。hooks 文件由 lightty 自己生成（`HookMarketplace.hookCommand`），
+/// 哪一家读它是确定的，所以这是最可靠的证据，优先于下面那条猜的路。
+/// 名字不认得就当没给：按一个不存在的家去找祖先，只会一个都认不出。
+private func declaredAgent() -> String? {
+    let arguments = CommandLine.arguments
+    guard let flag = arguments.firstIndex(of: "--agent"), flag + 1 < arguments.count,
+          let agent = SessionAgent(rawValue: arguments[flag + 1]) else { return nil }
+    return agent.rawValue
+}
+
+/// **兼容退路**：用户装的还是 `--agent` 之前的插件版本时才走到这里。
+/// 只剩载荷里 `transcript_path` 的路径形状，再退回环境变量（会从上层会话泄漏）。
 /// 认不出就留空——`agent` 是可选字段，猜错比留空更糟。
 private func detectAgent(payload: [String: Any]) -> String? {
     HookAgentDetection.agent(
-        ancestorExecutablePaths: ancestorExecutablePaths(),
         transcriptPath: string(payload["transcript_path"]),
         environment: ProcessInfo.processInfo.environment)
-}
-
-/// 父进程链上每个进程的**可执行文件绝对路径**，最近的在前。走 `sysctl(KERN_PROC_PID)`
-/// 取 ppid、`proc_pidpath` 取路径；任一步失败就到此为止。最多向上 8 层，够穿过
-/// agent → shell → hook 的任何包装，又不会在深层进程树里白跑。
-///
-/// 要整条路径而不是 basename：claude 经 symlink 解析后可执行文件名是版本号
-/// （`.../share/claude/versions/2.1.263`），basename 认不出，但路径里含 `claude` 段。
-private func ancestorExecutablePaths(limit: Int = 8) -> [String] {
-    var paths: [String] = []
-    var pid = getppid()
-    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE 是算式宏，Swift 导不进来
-    while pid > 1, paths.count < limit {
-        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { break }
-        paths.append(String(cString: buffer))
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { break }
-        pid = info.kp_eproc.e_ppid
-    }
-    return paths
 }
 
 // MARK: - handoff 注入（§8）
@@ -177,11 +163,24 @@ else { exit(0) }
 guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any],
       let event = string(payload["hook_event_name"]),
-      let state = PaneActivity(hookEventName: event)
+      let state = PaneActivity(
+          hookEventName: event, notificationType: string(payload["notification_type"]),
+          // Claude Code 的 PostToolUseFailure：用户中断了正在跑的工具时带 is_interrupt
+          interrupted: (payload["is_interrupt"] as? Bool) == true)
 else { exit(0) }
 
-let agentProcess = AgentProcessIdentity.agentAncestor(startingAt: getppid())
-let agentName = agentProcess?.agent ?? detectAgent(payload: payload)
+// agent 进程与「是不是子会话」都只看终端作业结构，不认任何进程名（见
+// `AgentProcessIdentity.foregroundJobLeader(in:)` 的注释）：pane 里的 agent 是终端的前台
+// 作业组长，它工具里拉起的子会话（`claude -p` 等）中间隔着脱离终端的进程。
+// 判定必须从 hook 的**父进程**起算——Claude 把 hook 自己脱离了终端，所以不能在这里
+// `open("/dev/tty")` 或 `tcgetpgrp`，只能沿祖先链读内核字段。
+// 子会话完全隐形，不发状态也不注入，否则它的 SessionStart / SessionEnd 会顶掉主会话的绑定。
+let ancestry = AgentProcessIdentity.ancestry(startingAt: getppid())
+if ancestry.isNested { exit(0) }
+
+// 哪一家：`--agent` 说了算，它是我们自己写进 hooks 文件的。没给才退回按载荷 / 环境去猜
+// ——只为兼容还装着旧版插件的用户。
+let agentName = declaredAgent() ?? detectAgent(payload: payload)
 let sourceRoot = agentName.flatMap(SessionAgent.init(rawValue:)).map { agent in
     SessionConfigurationLocation.resolve(agent: agent, environment: environment)
         .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
@@ -195,7 +194,7 @@ let status = PaneStatus(
     sourceConfiguration: agentName.flatMap(SessionAgent.init(rawValue:)).map {
         SessionConfigurationLocation.resolve(agent: $0, environment: environment)
     },
-    agentProcess: agentProcess?.agent == agentName ? agentProcess?.process : nil,
+    agentProcess: ancestry.process,
     tool: string(payload["tool_name"]),
     // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
     // PostToolUse 的同一份参数只是回声

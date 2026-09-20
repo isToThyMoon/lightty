@@ -91,6 +91,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 全部标签页关闭后的空态视图（task 为核心，不退出软件）。
     private var emptyStateView: EmptyTabView?
     private var taskPanelLeadingConstraint: NSLayoutConstraint?
+    private var taskPanelWidthConstraint: NSLayoutConstraint?
+    private var taskPanelWidth = PrimarySidebarWidthPreference.width()
+    private var taskPanelResizeActive = false
     /// 标签页侧栏的吸边开关：开着时吸在其右边线（关闭钮），关着时吸在主区左缘
     /// （展开钮，带 hover 感应带）。
     private var tabEdgeControl: EdgeToggleControl?
@@ -395,13 +398,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 不同步会话库：一次用户动作只在收尾同步一次，由调用方（或 `commit`）负责。
     private func presentActiveTab() {
         guard arrangement.activeTab != nil else { return }
+        // 显隐会触发 AppKit 交接 first responder；先保存命令指定的落点，
+        // 不让切换中的焦点回调覆盖它。
+        let target = arrangement.focusTarget.flatMap { paneRegistry[$0] }
         applyTabVisibility()
-        refreshTabSidebar()
-        if let pane = activePane {
+        if let pane = target {
             recordFocus(pane)
             pane.focusTerminal()
             updateWindowTitle(for: pane)
         }
+        refreshTabSidebar()
     }
 
     private func applyTabVisibility() {
@@ -559,7 +565,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         let switching = host != arrangement.activeTabID
         arrangement = next
         if switching {
-            presentActiveTab()  // 新标签页里没有 first responder，按模型交还的就是这个 pane
+            presentActiveTab()
         } else {
             pane.focusTerminal()
         }
@@ -703,6 +709,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             // terminal was already first responder when the Stop hook arrived.
             self.sessionLibrary.markRead(pane.dragIdentifier)
         }
+        // agent 经 OSC 0 推送的忙/闲前缀与会话标题（见 AgentTerminalTitle）。
+        pane.terminal.onTitleChange = { [weak self, weak pane] title in
+            guard let self, let pane else { return }
+            self.sessionLibrary.noteTerminalTitle(title, in: pane.dragIdentifier)
+        }
     }
 
     /// 窗口内全部 pane（跨所有 tab，树序）：任务管理、跨窗口拖拽等全局操作用。
@@ -719,23 +730,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         arrangement.activeTabID.map { panes(inTab: $0) } ?? []
     }
 
-    /// 当前 pane：first responder 在活跃标签页里就是它；否则取模型记下的该标签页焦点，
-    /// 没记过取第一个 pane（`WindowArrangement.focusTarget`）。焦点只存在模型里这一处。
+    /// 当前 pane 只取排布模型。AppKit 的焦点回调是模型输入，不能在读取时再用
+    /// first responder 反推：becomeFirstResponder 回调期间 responder 链可能尚未更新。
     var activePane: PaneView? {
-        var responder: NSResponder? = window?.firstResponder
-        while let r = responder {
-            if let view = r as? NSView {
-                var v: NSView? = view
-                while let cur = v {
-                    if let pane = cur as? PaneView,
-                       activeTabPanes.contains(where: { $0 === pane }) { return pane }
-                    v = cur.superview
-                }
-                break
-            }
-            responder = r.nextResponder
-        }
-        return arrangement.focusTarget.flatMap { paneRegistry[$0] }
+        arrangement.focusTarget.flatMap { paneRegistry[$0] }
     }
 
     /// new_split 动作方向（对应 ghostty_action_split_direction_e）
@@ -1014,9 +1012,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// task 卡片占位宽（卡片 + 左右边距）
+    /// task 卡片占位宽（卡片当前宽 + 左右边距）
     private var taskPanelReserve: CGFloat {
-        ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2
+        taskPanelWidth + ShellStyle.panelInset * 2
     }
 
     /// 标签页侧栏的落位 x：task 卡片开着时被推到其右侧
@@ -1053,11 +1051,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         return lastTrafficLightRowCenterFromTop
     }
 
-    /// 标签页侧栏（docked）的顶部避让：表头行中线对齐 task 卡片的「任务」小节
-    /// 标签（卡片顶 6 + 头部行 28 高居中于红绿灯行 + 标签上距 14 + 标签半高 7），
-    /// 两栏并排时是一排表头；不与红绿灯同行，卡片收起后侧栏贴窗左缘也不会撞三键。
+    /// 与第一侧栏模式切换带共享顶边，单独展开时也避让红绿灯。
     private func tabSidebarTopInset(in window: NSWindow) -> CGFloat {
-        trafficLightRowCenterFromTop(in: window) + 21
+        trafficLightRowCenterFromTop(in: window) + ShellStyle.SidebarHeader.offsetFromTrafficLights
     }
 
     /// 红绿灯所在的私有标题栏容器（themeFrame 直属子视图），侧栏 chrome 必须垫在
@@ -1193,6 +1189,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             WorkspaceStore.shared.scheduleSave()
         }
         panel.onRequestClose = { [weak self] in self?.closeTaskPanel() }
+        panel.onResizeBegan = { [weak self] in self?.beginTaskPanelResize() }
+        panel.onWidthChange = { [weak self] width in self?.resizeTaskPanel(to: width) }
+        panel.onResizeEnded = { [weak self] in self?.endTaskPanelResize() }
         panel.translatesAutoresizingMaskIntoConstraints = false
         // 垫在标题栏容器之下（三键浮在卡片上）、标签页侧栏之上（侧栏滑动时从卡片下穿行）
         if let titlebar = titlebarContainer(in: window, themeFrame: themeFrame) {
@@ -1202,16 +1201,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
         let leading = panel.leadingAnchor.constraint(
             equalTo: themeFrame.leadingAnchor, constant: -taskPanelReserve)
+        let widthConstraint = panel.widthAnchor.constraint(equalToConstant: taskPanelWidth)
         NSLayoutConstraint.activate([
             panel.topAnchor.constraint(
                 equalTo: themeFrame.topAnchor, constant: ShellStyle.panelInset),
             panel.bottomAnchor.constraint(
                 equalTo: themeFrame.bottomAnchor, constant: -ShellStyle.panelInset),
             leading,
-            panel.widthAnchor.constraint(equalToConstant: ShellStyle.taskPanelWidth),
+            widthConstraint,
         ])
         taskPanel = panel
         taskPanelLeadingConstraint = leading
+        taskPanelWidthConstraint = widthConstraint
         updateSidebarButtonState()
         themeFrame.layoutSubtreeIfNeeded()
         // 四块协同推移：卡片滑入 + 标签页栏右移让位 + 终端让位 + 标签页展开钮跟着主区左缘
@@ -1235,10 +1236,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private func closeTaskPanel(animated: Bool = true) {
         guard let panel = taskPanel else { return }
+        endTaskPanelResize()
         taskPanel = nil
         updateSidebarButtonState()
         let leading = taskPanelLeadingConstraint
         taskPanelLeadingConstraint = nil
+        taskPanelWidthConstraint = nil
         var targets: [(NSLayoutConstraint, CGFloat)] = []
         if let leading { targets.append((leading, -taskPanelReserve)) }
         if let tabSidebarLeadingConstraint {
@@ -1263,6 +1266,38 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// 卡片右边线拖动：卡片改宽的同时，标签页侧栏、终端主区与展开钮一起让位。
+    private func beginTaskPanelResize() {
+        guard taskPanel != nil, !taskPanelResizeActive else { return }
+        // 若用户在打开动画尚未结束时抓住边线，先落到完整展开态再接管拖动。
+        stopSidebarAnimationDriver()
+        taskPanelLeadingConstraint?.constant = ShellStyle.panelInset
+        settleTaskPanelDependents()
+        taskPanelResizeActive = true
+        panes().forEach { $0.terminal.setPromptClearOnResize(false) }
+    }
+
+    private func resizeTaskPanel(to proposedWidth: CGFloat) {
+        guard taskPanel != nil, let taskPanelWidthConstraint else { return }
+        taskPanelWidth = PrimarySidebarSizing.range.clamped(proposedWidth)
+        taskPanelWidthConstraint.constant = taskPanelWidth
+        settleTaskPanelDependents()
+    }
+
+    private func endTaskPanelResize() {
+        guard taskPanelResizeActive else { return }
+        taskPanelResizeActive = false
+        PrimarySidebarWidthPreference.setWidth(taskPanelWidth)
+        panes().forEach { $0.terminal.setPromptClearOnResize(true) }
+    }
+
+    private func settleTaskPanelDependents() {
+        tabSidebarLeadingConstraint?.constant = tabSidebarOpenX
+        tabEdgeLeadingConstraint?.constant = tabSidebarOpenX
+        rootLeadingConstraint?.constant = mainAreaInset
+        window?.contentView?.superview?.layoutSubtreeIfNeeded()
+    }
+
     // —— 标签页侧栏的吸边开关 ——
 
     /// 标签页侧栏开着：关闭钮吸在其右边线中点（钉在 sidebar.trailing，随滑动）；
@@ -1278,11 +1313,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         tabEdgeLeadingConstraint = nil
 
         // 两态都垫在 task 卡片之下：侧栏从卡片下方穿行，开关随行时不能浮到卡片表面
+        var mountAnchor: NSView = tabSidebar ?? rootContainer
         func mount(_ v: NSView) {
             if let taskPanel {
                 themeFrame.addSubview(v, positioned: .below, relativeTo: taskPanel)
             } else {
-                themeFrame.addSubview(v)
+                // Stay in the main-page layer, rather than appending above the titlebar
+                // and any full-page overlays mounted beneath it.
+                themeFrame.addSubview(v, positioned: .above, relativeTo: mountAnchor)
+                mountAnchor = v
             }
         }
 
@@ -1467,6 +1506,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         taskPanel?.removeFromSuperview()
         taskPanel = nil
         taskPanelLeadingConstraint = nil
+        taskPanelWidthConstraint = nil
         tabSidebar?.removeFromSuperview()
         tabSidebar = nil
         tabSidebarLeadingConstraint = nil

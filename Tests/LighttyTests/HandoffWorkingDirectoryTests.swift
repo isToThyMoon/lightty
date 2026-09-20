@@ -12,7 +12,7 @@ extension SessionAssociationTests {
         directory.frame = NSRect(x: 10, y: 10, width: 200, height: 28)
         host.contentView?.addSubview(directory)
         host.contentView?.layoutSubtreeIfNeeded()
-        host.makeKeyAndOrderFront(nil)
+        host.makeKeyAndOrderFrontInvisibly()
         defer { host.orderOut(nil) }
         host.makeFirstResponder(directory.field)
         let editor = try #require(directory.field.currentEditor() as? NSTextView)
@@ -35,7 +35,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let window = TerminalWindowController()
         defer { window.window?.close() }
@@ -54,6 +54,8 @@ extension SessionAssociationTests {
                                     doCommandBy: #selector(NSResponder.insertTab(_:))))
     }
 
+    /// 名字/目录字段单行（cell 配置如此，真正编辑时 field editor 也只排出一行），
+    /// 正文相反：它就是要换行、要能滚。
     @MainActor @Test func longHandoffFieldsStaySingleLine() throws {
         _ = NSApplication.shared
         let controller = LaunchComposerController(subject: .newTask, controller: nil)
@@ -70,15 +72,24 @@ extension SessionAssociationTests {
         }
         // 正文相反：它就是要换行、要能滚。
         #expect(controller.bodyEditor.textView.textContainer?.widthTracksTextView == true)
-        let button = try #require(descendants(controller.view).compactMap { $0 as? ShellAccentButton }.first)
-        controller.view.setFrameSize(controller.view.fittingSize)
-        controller.view.layoutSubtreeIfNeeded()
-        #expect(button.frame.height == 30)
-        // 主操作与次操作都占整幅，上下叠放，左右缘对齐。
-        let only = try #require(descendants(controller.view).compactMap { $0 as? ShellTextButton }
-            .first { $0.label == L("Create only") })
-        #expect(abs(only.frame.width - button.frame.width) < 1)
-        #expect(abs(only.frame.minX - button.frame.minX) < 1)
+
+        // 目录字段真正进入编辑时，field editor 对长路径也只排出一行。
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 220, height: 70),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        let directory = WorkingDirectoryEditor(path: "/Users/example/project/frontend/foodmaxapprn/apps/mobile")
+        directory.frame = NSRect(x: 10, y: 10, width: 200, height: 28)
+        host.contentView?.addSubview(directory)
+        host.contentView?.layoutSubtreeIfNeeded()
+        host.makeKeyAndOrderFront(nil)
+        defer { host.orderOut(nil) }
+        host.makeFirstResponder(directory.field)
+        let editor = try #require(directory.field.currentEditor() as? NSTextView)
+        let manager = try #require(editor.layoutManager)
+        let container = try #require(editor.textContainer)
+        manager.ensureLayout(for: container)
+        var lines = 0
+        manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { _, _, _, _, _ in lines += 1 }
+        #expect(lines == 1)
     }
 
     /// 中文输入法拼字期间是「未确定文本」，它不发 `textDidChange`。只听那一条的话，
@@ -91,7 +102,7 @@ extension SessionAssociationTests {
                             styleMask: [.titled], backing: .buffered, defer: false)
         host.contentView?.addSubview(area)
         area.frame = NSRect(x: 10, y: 10, width: 280, height: 92)
-        host.makeKeyAndOrderFront(nil)
+        host.makeKeyAndOrderFrontInvisibly()
         defer { host.orderOut(nil) }
         host.makeFirstResponder(area.textView)
         #expect(area.isShowingPlaceholder)
@@ -207,6 +218,7 @@ extension SessionAssociationTests {
 
     /// 三个入口共用一个浮层：会话不挂任务，新建任务先落盘再启动，已有任务重读后启动。
     /// 这条钉的是「同一段界面在三种情况下都在」——Agent、工作目录、去处一个都不少。
+    /// 搜索面板是第四个宿主：同一套 Agent 下拉与去处选项，没有旧的「New terminal」。
     @MainActor @Test func everyLaunchSubjectOffersAgentDirectoryAndDestination() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -214,7 +226,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let task = TaskFile(name: "Fixture", workdir: root.path,
                             created: Date(), updated: Date())
         let subjects: [LaunchSubject] = [
@@ -230,6 +242,23 @@ extension SessionAssociationTests {
             #expect(radios.map(\.title) == [L("Split in current tab"), L("New tab"), L("New window")])
             #expect(radios.first { $0.title == L("New tab") }?.state == .on)
         }
+
+        // 搜索面板：同一套控件，打开面板本身不建终端。
+        try AppState.shared.taskBindings.store.create(name: "Search fixture", workdir: root.path)
+        let window = TerminalWindowController()
+        defer { window.window?.close() }
+        let palette = SearchPaletteView(controller: window)
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
+                            styleMask: [.borderless], backing: .buffered, defer: false)
+        host.contentView = palette
+        palette.frame = NSRect(x: 0, y: 0, width: 1100, height: 700)
+        palette.layoutSubtreeIfNeeded()
+        let buttons = descendants(palette).compactMap { $0 as? NSButton }
+        #expect(buttons.first { $0.title == L("New tab") }?.state == .on)
+        #expect(buttons.contains { $0.title == L("Split in current tab") })
+        #expect(!buttons.contains { $0.title == L("New terminal") })
+        #expect(descendants(palette).contains { $0 is ShellDropdown })
+        #expect(window.tabCount == 1)
     }
 
     /// 会话模式的新建：能选目录（这正是它以前缺的），而且不写任何任务文件。
@@ -241,7 +270,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let controller = LaunchComposerController(subject: .session, controller: nil)
         _ = controller.view
@@ -266,7 +295,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let store = AppState.shared.taskBindings.store
 
         let onlyCreate = LaunchComposerController(subject: .newTask, controller: nil)
@@ -305,7 +334,7 @@ extension SessionAssociationTests {
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let creator = LaunchComposerController(subject: .newTask, controller: nil)
         _ = creator.view
@@ -324,7 +353,7 @@ extension SessionAssociationTests {
         let preview = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 500),
             styleMask: [.titled], backing: .buffered, defer: false)
         preview.contentView = launcher.view
-        preview.makeKeyAndOrderFront(nil)
+        preview.makeKeyAndOrderFrontInvisibly()
         defer { preview.orderOut(nil) }
         preview.makeFirstResponder(launcher.directory.field)
         launcher.viewDidAppear()
@@ -337,16 +366,9 @@ extension SessionAssociationTests {
         launcher.directory.path = chosen.path
         #expect(!launcher.saveDirectory.isHidden)
         #expect(launcher.saveDirectory.state == .off)
-        let directoryGroup = try #require(launcher.directory.superview as? NSStackView)
-        #expect(directoryGroup.arrangedSubviews[2] === launcher.saveDirectory)
-        let outer = try #require(launcher.view.subviews.first as? NSStackView)
-        #expect(outer.customSpacing(after: directoryGroup) == 14)
         launcher.view.setFrameSize(launcher.view.fittingSize)
         launcher.view.layoutSubtreeIfNeeded()
         #expect(abs(launcher.directory.frame.minX - launcher.saveDirectory.frame.minX) < 1)
-        let gap = abs(launcher.directory.frame.midY - launcher.saveDirectory.frame.midY)
-        let halves = (launcher.directory.frame.height + launcher.saveDirectory.frame.height) / 2
-        #expect(abs(gap - halves - 6) < 1)
         let temporary = try #require(launcher.makePane())
         #expect(temporary.terminal.launchConfiguration.workingDirectory == chosen.path)
         #expect(try store.load(at: file.fileURL).workdir == original.path)

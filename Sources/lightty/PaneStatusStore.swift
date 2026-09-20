@@ -384,18 +384,38 @@ final class PaneStatusStore {
     private func acknowledge(_ paneID: UUID) -> Bool {
         guard let current = statuses[paneID] else { return false }
         switch unreadActivity(for: paneID) {
-        case .done: statuses[paneID] = Self.markedRead(current)
+        case .done: statuses[paneID] = Self.idled(current)
         case .attention: readAttention.insert(paneID)
         default: return false
         }
         return true
     }
 
-    private static func markedRead(_ status: PaneStatus) -> PaneStatus {
+    // MARK: - 终端标题（OSC 0）
+
+    /// 活动状态由 hook 决定。标题只补没有 Interrupt hook 的中断缺口（当前为 Claude）：
+    /// 明确的空闲前缀允许 thinking / tool → idle；不能开始工作、生成等待、覆盖完成或已读。
+    /// Codex 有 Interrupt hook，标题完全不改活动状态。正常 Stop 无论先后到达都保留 done。
+    func noteTerminalTitle(_ title: AgentTerminalTitle, in paneID: UUID) {
+        assertMain()
+        guard let current = statuses[paneID], current.event != "SessionEnd",
+              let agent = current.agent.flatMap(SessionAgent.init(rawValue:)),
+              !agent.spec.hookEvents.contains("Interrupt"),
+              title.phase == .settled, title.recognizedByPrefix,
+              current.state == .thinking || current.state == .tool else { return }
+        statuses[paneID] = Self.idled(current)
+        postChange(paneID)
+    }
+
+    /// 同一份状态收回 idle，其余字段原样保留。
+    private static func idled(_ status: PaneStatus) -> PaneStatus { restated(status, as: .idle) }
+
+    /// 同一份状态换个 state，其余字段（会话、进程身份、原事件名）原样保留。
+    private static func restated(_ status: PaneStatus, as state: PaneActivity) -> PaneStatus {
         PaneStatus(
             v: status.v,
             ts: status.ts,
-            state: .idle,
+            state: state,
             agent: status.agent,
             sessionID: status.sessionID,
             sourceRoot: status.sourceRoot,

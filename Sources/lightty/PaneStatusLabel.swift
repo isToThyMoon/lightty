@@ -17,8 +17,8 @@ final class PaneStatusLabel: NSTextField, NSAnimationDelegate {
         stringValue = text.map { activity == .done ? "✓ \($0)" : $0 } ?? ""
         setAccessibilityLabel(text)
         font = emphasizedColor != nil
-            ? .systemFont(ofSize: 11.5, weight: .semibold)
-            : .systemFont(ofSize: 10.5, weight: .medium)
+            ? ShellStyle.Font.statusEmphasis
+            : ShellStyle.Font.captionStrong
         updateAnimation()
         applyColor(progress: breath?.currentProgress ?? 0)
     }
@@ -39,7 +39,7 @@ final class PaneStatusLabel: NSTextField, NSAnimationDelegate {
         isBordered = false
         drawsBackground = false
         isHidden = true
-        font = .systemFont(ofSize: 10.5, weight: .medium)
+        font = ShellStyle.Font.captionStrong
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(updateAnimation),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(updateAnimation),

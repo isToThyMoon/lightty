@@ -1,34 +1,62 @@
 import AppKit
 
+/// 侧栏可拖宽度区间：边线在 [minimum, maximum] 之间实时改宽；
+/// 到达最小宽后还要再向左拖 closeOvershoot 才关闭，避免想调窄时误收起。
+struct SidebarWidthRange: Equatable {
+    var minimum: CGFloat
+    var maximum: CGFloat
+    var closeOvershoot: CGFloat = 40
+
+    func clamped(_ width: CGFloat) -> CGFloat {
+        min(max(width, minimum), maximum)
+    }
+
+    func shouldClose(rawWidth: CGFloat) -> Bool {
+        rawWidth < minimum - closeOvershoot
+    }
+}
+
+/// 侧栏宽度偏好：没存过用 fallback，存过的按区间钳制后读回。
+struct SidebarWidthPreference {
+    let defaultsKey: String
+    let range: SidebarWidthRange
+    let fallback: CGFloat
+
+    func width(in defaults: PreferenceStorage = FilePreferences.shared) -> CGFloat {
+        guard defaults.object(forKey: defaultsKey) != nil else { return fallback }
+        let stored = CGFloat(defaults.double(forKey: defaultsKey))
+        guard stored.isFinite else { return fallback }
+        return range.clamped(stored)
+    }
+
+    func setWidth(_ width: CGFloat, in defaults: PreferenceStorage = FilePreferences.shared) {
+        defaults.set(Double(range.clamped(width)), forKey: defaultsKey)
+    }
+}
+
 enum TabSidebarSizing {
-    static let minimumWidth = ShellStyle.tabColumnWidth
-    static let maximumWidth = minimumWidth * 2
-    /// 到达最小宽度后还要再拖一段才关闭，避免想调窄时误收起。
-    static let closeOvershoot: CGFloat = 40
+    static let range = SidebarWidthRange(
+        minimum: ShellStyle.tabColumnWidth, maximum: ShellStyle.tabColumnWidth * 2)
+    static var minimumWidth: CGFloat { range.minimum }
+    static var maximumWidth: CGFloat { range.maximum }
+    static var closeOvershoot: CGFloat { range.closeOvershoot }
 
-    static func clampedWidth(_ width: CGFloat) -> CGFloat {
-        min(max(width, minimumWidth), maximumWidth)
-    }
-
-    static func shouldClose(rawWidth: CGFloat) -> Bool {
-        rawWidth < minimumWidth - closeOvershoot
-    }
+    static func clampedWidth(_ width: CGFloat) -> CGFloat { range.clamped(width) }
+    static func shouldClose(rawWidth: CGFloat) -> Bool { range.shouldClose(rawWidth: rawWidth) }
 }
 
 enum TabSidebarWidthPreference {
     static let defaultsKey = "lightty.workspaceSidebar.width"  // 历史键名，改了会丢已存宽度
+    /// 默认收在最小宽。
+    static let preference = SidebarWidthPreference(
+        defaultsKey: defaultsKey, range: TabSidebarSizing.range, fallback: TabSidebarSizing.minimumWidth)
 
     static func width(in defaults: PreferenceStorage = FilePreferences.shared) -> CGFloat {
-        guard defaults.object(forKey: defaultsKey) != nil else {
-            return TabSidebarSizing.minimumWidth
-        }
-        let stored = CGFloat(defaults.double(forKey: defaultsKey))
-        guard stored.isFinite else { return TabSidebarSizing.minimumWidth }
-        return TabSidebarSizing.clampedWidth(stored)
+        preference.width(in: defaults)
     }
 
     static func setWidth(_ width: CGFloat, in defaults: PreferenceStorage = FilePreferences.shared) {
-        defaults.set(Double(TabSidebarSizing.clampedWidth(width)), forKey: defaultsKey)
+        preference.setWidth(width, in: defaults)
     }
 }
 
@@ -43,7 +71,7 @@ final class TabSidebarView: NSView {
     var onResizeEnded: (() -> Void)?
 
     private let column = TabColumnView()
-    private let dragStrip = EdgeDragStrip()
+    private let dragStrip = EdgeDragStrip(range: TabSidebarSizing.range)
 
     init(topInset: CGFloat) {
         super.init(frame: .zero)
@@ -271,22 +299,35 @@ final class EdgeRevealStrip: NSView {
 }
 
 /// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽；到达最小宽后继续
-/// 向左拖过阈值即关闭。同时保留边缘 hover 感应。
-private final class EdgeDragStrip: NSView {
+/// 向左拖过阈值即关闭。同时保留边缘 hover 感应。两侧栏共用，区间由宿主给。
+final class EdgeDragStrip: NSView {
+    var range: SidebarWidthRange
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        // The scroller now lives at the edge too. Give it pointer priority over resizing.
-        for case let column as TabColumnView in superview?.subviews ?? [] {
-            for case let scroll as NSScrollView in column.subviews {
-                if let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor,
-                   scroller.bounds.contains(scroller.convert(point, from: superview)) { return nil }
+        // The scroller lives at the edge too. A legacy (always shown) scroller keeps the
+        // whole track: it is visible and clicking it pages. An overlay scroller spans the
+        // same rail while invisible, so only its knob keeps priority; yielding all of it
+        // would leave nowhere to grab the edge of a scrollable list.
+        for sibling in superview?.subviews ?? [] where sibling !== self {
+            for scroll in Self.scrollViews(under: sibling) {
+                guard let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor else { continue }
+                let owned = scroller.scrollerStyle == .legacy ? scroller.bounds : scroller.rect(for: .knob)
+                if owned.contains(scroller.convert(point, from: superview)) { return nil }
             }
         }
         return hit
     }
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    /// 只找到滚动容器为止，不钻进列表行。
+    private static func scrollViews(under view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView { return [scroll] }
+        return view.subviews.flatMap { scrollViews(under: $0) }
+    }
+
+    init(range: SidebarWidthRange) {
+        self.range = range
+        super.init(frame: .zero)
         HoverCursor.installResizeLeftRight(on: self)
     }
 
@@ -315,7 +356,7 @@ private final class EdgeDragStrip: NSView {
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
 
     override func mouseDown(with event: NSEvent) {
-        let initialWidth = superview?.bounds.width ?? TabSidebarSizing.minimumWidth
+        let initialWidth = superview?.bounds.width ?? range.minimum
         let origin = event.locationInWindow.x
         onResizeBegan?()
         while let next = NSApp.nextEvent(
@@ -325,15 +366,15 @@ private final class EdgeDragStrip: NSView {
             let rawWidth = initialWidth + next.locationInWindow.x - origin
             switch next.type {
             case .leftMouseDragged:
-                if TabSidebarSizing.shouldClose(rawWidth: rawWidth) {
-                    onWidthChange?(TabSidebarSizing.minimumWidth)
+                if range.shouldClose(rawWidth: rawWidth) {
+                    onWidthChange?(range.minimum)
                     onResizeEnded?()
                     onDragClose?()
                     return
                 }
-                onWidthChange?(TabSidebarSizing.clampedWidth(rawWidth))
+                onWidthChange?(range.clamped(rawWidth))
             case .leftMouseUp:
-                onWidthChange?(TabSidebarSizing.clampedWidth(rawWidth))
+                onWidthChange?(range.clamped(rawWidth))
                 onResizeEnded?()
                 return
             default:

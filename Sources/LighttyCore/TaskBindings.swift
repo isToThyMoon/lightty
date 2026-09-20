@@ -18,11 +18,6 @@ extension Notification.Name {
     public static let lighttyTasksDidChange = Notification.Name("lighttyTasksDidChange")
 }
 
-/// 任务目录变更源：开始监听 `directory`，目录里有变化时调用 `onChange`（可以在任意线程，
-/// 防抖归变更源负责）。返回的对象是监听凭据，持有期间有效，释放即停止。目录打不开时抛错。
-/// 生产 adapter 是 `TaskFolderWatcher.changeSource`；测试用手动触发的替身。
-public typealias TaskFolderChangeSource = (_ directory: URL, _ onChange: @escaping () -> Void) throws -> AnyObject
-
 /// 终端绑着的任务：文件位置 + 绑定时（或最近一次改名后）的任务名。
 public struct BoundTask: Equatable {
     public var fileURL: URL
@@ -145,7 +140,7 @@ public final class TaskBindings {
 
     public init(store: TaskStore, pointers: TaskPointerStore = DiskTaskPointerStore(),
                 notificationCenter: NotificationCenter = .default,
-                folderChanges: TaskFolderChangeSource = TaskFolderWatcher.changeSource) {
+                folderChanges: PathChangeSource = PathWatcher.changeSource) {
         self.store = store
         self.pointers = pointers
         self.center = notificationCenter

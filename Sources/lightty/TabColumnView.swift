@@ -12,16 +12,15 @@ enum TabRowKind: Equatable {
     case leaf(tab: UUID, pane: UUID)
 }
 
-/// 双栏侧栏的左栏：标签页 › pane 两级树（cmux 形态的窗口活地图）。
+/// 第二侧栏：标签页 › pane 两级树（窗口的现场导航）。
 /// spec: docs/specs/double-sidebar.md。标签页可折叠，折叠状态仅当前侧栏会话内保留。
 ///
 /// 层级表达（Safari 侧栏标签页组同款）：标签页行 = 容器图标 + semibold 标题 +
-/// pane 计数，活跃时图标/标题染强调色但**不给填充**；pane 行 = 缩进的圆点 +
-/// 常规字重单行。全侧栏唯一的填充高亮是当前 pane（强调色淡底）——当前标签页
-/// 必然包含当前 pane，两级选中不需要两块底色。
+/// pane 计数，活跃时图标/标题染导航色并给弱底色；pane 行 = 缩进的圆点 +
+/// 常规字重名称，下方列出任务 / cwd。当前 pane 的底色比容器更强。
 ///
 /// 标签页行：单击切换、点 chevron 折叠、双击改名、hover ⋯ 菜单；
-/// pane 行：单行 = 圆点 + pane 名 [· 任务名]，cwd 挪 tooltip，hover 出现 ✕。
+/// pane 行：hover 出现关闭操作，长文本通过 tooltip 查看。
 /// 重命名 pane 唯一入口保持灵动岛，此处不提供。
 ///
 /// 叶子标签页：标签页只有一个 pane、且还叫默认名时，容器行和 pane 行合并成一条
@@ -34,16 +33,16 @@ enum TabRowKind: Equatable {
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let sectionLabel = NSTextField(labelWithString: L("Tabs"))
     private let splitRightButton = ShellIconButton(
-        symbol: "rectangle.split.2x1", accessibilityLabel: L("Split right"),
+        symbol: ShellSymbol.splitRight, accessibilityLabel: L("Split right"),
         target: nil, action: nil)
     private let splitDownButton = ShellIconButton(
-        symbol: "rectangle.split.1x2", accessibilityLabel: L("Split down"),
+        symbol: ShellSymbol.splitDown, accessibilityLabel: L("Split down"),
         target: nil, action: nil)
     private let newTabButton = ShellIconButton(
-        symbol: "plus.rectangle.on.rectangle", accessibilityLabel: L("New tab"),
+        symbol: ShellSymbol.newTab, accessibilityLabel: L("New tab"),
         target: nil, action: nil)
     private let clearTabsButton = ShellIconButton(
-        symbol: "ellipsis", accessibilityLabel: L("More actions"), target: nil, action: nil)
+        symbol: ShellSymbol.more, accessibilityLabel: L("More actions"), target: nil, action: nil)
     private let scroll = SidebarListScrollView()
     private let table = NSTableView()
     private struct RowItem {
@@ -68,8 +67,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     init() {
         super.init(frame: .zero)
 
-        sectionLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
-        sectionLabel.textColor = ShellStyle.tertiaryText
+        sectionLabel.font = ShellStyle.Font.section
+        sectionLabel.textColor = ShellStyle.secondaryText
 
         splitRightButton.target = self
         splitRightButton.action = #selector(splitRight)
@@ -87,7 +86,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.setAccessibilityLabel(L("Tabs"))
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .none
-        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.intercellSpacing = NSSize(width: 0, height: ShellStyle.listRowGap)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self
         table.delegate = self
@@ -102,23 +101,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         NSLayoutConstraint.activate([
-            // 首行行心对齐 pane header 行心（两者都从各自 chrome 顶开始 + 14）
-            newTabButton.topAnchor.constraint(equalTo: topAnchor),
+            // 与第一侧栏的模式切换共享标题带，按钮在带内居中。
+            newTabButton.topAnchor.constraint(equalTo: topAnchor,
+                constant: (ShellStyle.SidebarHeader.height - ShellStyle.chromeRowHeight) / 2),
             newTabButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
-            newTabButton.widthAnchor.constraint(equalToConstant: 28),
-            newTabButton.heightAnchor.constraint(equalToConstant: 28),
+            newTabButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            newTabButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             splitDownButton.trailingAnchor.constraint(
                 equalTo: newTabButton.leadingAnchor, constant: -1),
             splitDownButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            splitDownButton.widthAnchor.constraint(equalToConstant: 28),
-            splitDownButton.heightAnchor.constraint(equalToConstant: 28),
+            splitDownButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            splitDownButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             splitRightButton.trailingAnchor.constraint(
                 equalTo: splitDownButton.leadingAnchor, constant: -1),
             splitRightButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            splitRightButton.widthAnchor.constraint(equalToConstant: 28),
-            splitRightButton.heightAnchor.constraint(equalToConstant: 28),
+            splitRightButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            splitRightButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             // 12 边距 + 行内 10 缩进：标题与行文字左对齐
             sectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
@@ -127,10 +127,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 lessThanOrEqualTo: splitRightButton.leadingAnchor, constant: -4),
             clearTabsButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             clearTabsButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
-            clearTabsButton.widthAnchor.constraint(equalToConstant: 28),
-            clearTabsButton.heightAnchor.constraint(equalToConstant: 28),
+            clearTabsButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            clearTabsButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
-            scroll.topAnchor.constraint(equalTo: newTabButton.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: topAnchor,
+                constant: ShellStyle.SidebarHeader.height + ShellStyle.SidebarHeader.listGap),
             // Keep the leading gutter; the shared trailing rail keeps scrolling clear of row actions.
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
@@ -210,11 +211,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard let state = controller.sessionLibrary.paneState(for: id) else { continue }
             paneRows.object(forKey: id as NSUUID)?.applySession(state)
         }
-        // 控制器每次改焦点都会同步一次窗口选中项，这条变更就是焦点变了的信号；
-        // 高亮本身仍只从 activePane 派生。
+        // 和第一侧栏 Sessions 消费同一份窗口选中项，不再从 responder 链反推焦点。
         if change.windows.contains(controller.sessionWindowID) {
-            applyActivePane(controller.activePane?.dragIdentifier)
+            applyActivePane(selectedPaneID)
         }
+    }
+
+    private var selectedPaneID: UUID? {
+        guard let controller else { return nil }
+        return controller.sessionLibrary.selectedPane(in: controller.sessionWindowID)
     }
 
     /// pane 焦点变化只原地切换行底色，不拆建标签页树。
@@ -239,7 +244,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func clearTabs() {
         ShellMenuPopover.present(from: clearTabsButton, items: [
-            .action(L("Close all tabs in this window"), destructive: true) { [weak self] in
+            .action(L("Close all tabs in this window"), destructive: true, symbol: ShellSymbol.close) { [weak self] in
                 self?.controller?.requestClearTabs()
             },
         ])
@@ -297,7 +302,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 rowItems.append(RowItem(kind: .pane(tab: entry.id, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
                     guard let self, let pane else { return NSView() }
                     return self.makePaneRow(for: pane, leading: .nested,
-                        isActive: pane.dragIdentifier == self.controller?.activePane?.dragIdentifier,
+                        isActive: pane.dragIdentifier == self.selectedPaneID,
                         reusing: existing as? PaneRowView)
                 }))
             }
@@ -343,7 +348,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onMenu = { [weak self, weak row] in
             guard let self, let anchor = row else { return }
             ShellMenuPopover.present(from: anchor, items: [
-                .action(L("Rename tab")) { [weak self] in
+                .action(L("Rename tab"), symbol: ShellSymbol.rename) { [weak self] in
                     guard let controller = self?.controller else { return }
                     NameEditorPopover.present(
                         from: anchor, title: L("Rename tab"),
@@ -377,7 +382,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         reusing existing: PaneRowView?
     ) -> PaneRowView {
         let row = makePaneRow(for: pane, leading: .leafTab,
-            isActive: pane.dragIdentifier == controller?.activePane?.dragIdentifier,
+            isActive: pane.dragIdentifier == selectedPaneID,
             reusing: existing)
         // 落点语义换成标签页的：拖进来 = 移入该标签页（内核会把它排到这个 pane 旁边）。
         row.onPaneDrop = { [weak self] sourceID in
@@ -393,7 +398,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onRename = rename
         row.onMenu = { [weak row] in
             guard let anchor = row else { return }
-            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), handler: rename)])
+            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), symbol: ShellSymbol.rename, handler: rename)])
         }
         return row
     }
@@ -419,7 +424,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             workingDirectory: state.workingDirectory)
         paneRow.configure(paneID: pane.dragIdentifier, name: state.title,
             taskName: taskName, isActive: isActive,
-            workingDirectory: state.workingDirectory, sessionAgent: state.sessionKey?.agent)
+            workingDirectory: state.workingDirectory, sessionAgent: state.displayAgent)
         // 标签页语义的回调只有叶子行会装；普通 pane 行复用时必须清掉。
         paneRow.onMenu = nil
         paneRow.onRename = nil
@@ -496,9 +501,17 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         var insertion: Int? = nil
         /// 压着中央带的那一行（按行身份记）。
         var merge: TabRowKind? = nil
+        /// 光标在列表外、压在某个终端 pane 上：落点半区（只有 pane 行有）。
+        var paneDrop: PaneDropTarget? = nil
         /// 松手之后、命令执行完之前：显示冻结在松手那一刻，不再响应指针。
         var committing = false
         let card: NSView
+    }
+
+    /// 侧栏行拖到终端区域时的落点：目标 pane 和它的哪一侧，规则同 pane 头部拖动。
+    struct PaneDropTarget: Equatable {
+        let pane: UUID
+        let zone: PaneDropZone
     }
 
     /// 行高的这个比例之内算中央带（上下各留 25% 给排序）。
@@ -607,6 +620,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             snapshotView: card,
             startEvent: event,
             grabOffsetY: grabOffsetY,
+            // pane 行可以拖到终端上分屏，卡片要跟着光标出列表；标签页行只在列表里排序。
+            followsPointerFreely: { if case .pane = source { return true } else { return false } }(),
             onMove: { [weak self] cursor in self?.moveDrag(to: cursor) },
             dropFrame: { landing },
             onCommit: { [weak self] in landing = self?.finishDrag() },
@@ -628,6 +643,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 指针移动（self 坐标）：压在中央带就进入合并态并停止让位，否则算插入位让列表让位。
     func moveDrag(to cursor: NSPoint) {
         guard var current = drag, !current.committing else { return }
+        guard bounds.contains(cursor) else { moveDragOutsideList(to: cursor); return }
+        if current.paneDrop != nil {
+            setPaneDrop(nil)
+            current = drag ?? current
+        }
         var target: TabRowKind?
         if case .pane = current.source { target = mergeTarget(at: cursor, source: current.source) }
         if target != current.merge {
@@ -654,6 +674,52 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.endUpdates()
     }
 
+    /// 光标离开列表：列表回到原样，不再让位；pane 行压在终端 pane 上时高亮落点半区。
+    /// 标签页行只在列表里排序，拖到外面不响应。
+    private func moveDragOutsideList(to cursor: NSPoint) {
+        guard var current = drag else { return }
+        if case .pane(let source) = current.source {
+            setPaneDrop(paneDropTarget(at: cursor, excluding: source))
+            current = drag ?? current
+        }
+        let wasMerging = current.merge != nil
+        let wasMoved = current.insertion != nil
+        guard wasMerging || wasMoved else { return }
+        current.merge = nil
+        current.insertion = nil
+        drag = current
+        if wasMerging {
+            applyDragDecorations()
+            applySnapshotLook(merging: false)
+        }
+        if wasMoved { reload() }
+    }
+
+    private func setPaneDrop(_ target: PaneDropTarget?) {
+        guard var current = drag, current.paneDrop != target else { return }
+        if let old = current.paneDrop { pane(withID: old.pane)?.clearDropPreview() }
+        if let target { pane(withID: target.pane)?.showDropPreview(target.zone) }
+        current.paneDrop = target
+        drag = current
+    }
+
+    /// 光标（self 坐标）下可见的终端 pane。压在源 pane 自己身上不算落点。
+    private func paneDropTarget(at cursor: NSPoint, excluding source: UUID) -> PaneDropTarget? {
+        guard let controller, let window else { return nil }
+        let inWindow = convert(cursor, to: nil)
+        for pane in controller.panes() where pane.window === window && !pane.isHiddenOrHasHiddenAncestor {
+            let point = pane.convert(inWindow, from: nil)
+            guard pane.bounds.contains(point) else { continue }
+            guard pane.dragIdentifier != source else { return nil }
+            return PaneDropTarget(pane: pane.dragIdentifier, zone: .calculate(at: point, in: pane.bounds))
+        }
+        return nil
+    }
+
+    private func pane(withID id: UUID) -> PaneView? {
+        controller?.panes().first { $0.dragIdentifier == id }
+    }
+
     /// 松手：定下命令、冻结显示，返回卡片的落点；命令在下一拍交给控制器。
     ///
     /// 命令不在跟踪循环里执行，落地动画也不等它：卡片的去留与改树的成败互不牵连，
@@ -667,6 +733,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let sourceIndex = rows.firstIndex { Self.matches($0, current.source) }
         let original = modelRows.firstIndex { Self.matches($0.kind, current.source) }
         var command: RowDropCommand?
+        if let paneDrop = current.paneDrop, case .pane(let source) = current.source {
+            pane(withID: paneDrop.pane)?.clearDropPreview()
+            let command = RowDropCommand.movePaneBeside(source, target: paneDrop.pane, zone: paneDrop.zone)
+            DispatchQueue.main.async { [weak self] in self?.completeDrag(command) }
+            return nil  // 落在列表外，卡片原地淡出
+        }
         if let sourceIndex, current.merge != nil || sourceIndex != original {
             command = Self.dropCommand(rows: rows, sourceIndex: sourceIndex, merge: current.merge)
         }
@@ -754,7 +826,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         aligned.origin.x = (frame.origin.x * scale).rounded() / scale
         aligned.origin.y = (frame.origin.y * scale).rounded() / scale
         let card = ReorderDrag.makeSnapshot(image, frame: aligned)
-        card.layer?.cornerRadius = 7
+        card.layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         card.layer?.backgroundColor =
             ShellStyle.sidebarBackground.shellResolvedCGColor(for: effectiveAppearance)
         // 位图层若按 1x 栅格化，2x 屏上等于把文字放大一倍，同样是发虚。
@@ -821,6 +893,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             applyGlyph()
             menuButton.isHidden = !hovered
             closeButton.isHidden = !hovered
+            needsLayout = true
             // tooltip 只在 hover 时挂：NSToolTipManager 每帧都会重算所有已注册
             // tooltip 的矩形，几十行常驻就是滚动期的一笔固定开销。
             closeButton.toolTip = hovered ? L("Close tab") : nil
@@ -834,12 +907,13 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         self.isCollapsed = isCollapsed
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         registerForDraggedTypes([.lighttyPaneID])
         HoverCursor.installPointingHand(on: self)
 
         label.stringValue = title
-        label.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        label.wantsLayer = true  // RowActionFade 的遮罩挂在它自己的 layer 上
+        label.font = ShellStyle.Font.groupTitle
         label.textColor = isActive ? ShellStyle.navigationAccent : ShellStyle.primaryText
         label.lineBreakMode = .byTruncatingTail
 
@@ -853,11 +927,11 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyGlyph()
 
         countLabel.stringValue = "\(count)"
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        countLabel.font = ShellStyle.Font.count
         countLabel.textColor = ShellStyle.tertiaryText
 
         menuButton.image = SymbolImages.image(
-            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
+            ShellSymbol.more, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("More actions"))
         menuButton.isBordered = false
         menuButton.imagePosition = .imageOnly
         menuButton.focusRingType = .none
@@ -867,7 +941,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         menuButton.action = #selector(menuTapped)
 
         closeButton.image = SymbolImages.image(
-            "xmark", pointSize: 8.5, weight: .bold, description: L("Close tab"))
+            ShellSymbol.close, pointSize: ShellStyle.closeIconSize, weight: .bold, description: L("Close tab"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -888,18 +962,19 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             disclosureButton.heightAnchor.constraint(equalToConstant: 22),
             label.leadingAnchor.constraint(equalTo: disclosureButton.trailingAnchor, constant: 3),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // 平时只给计数让位；hover 时计数隐藏、⋯/✕ 浮在标题上，由 RowActionFade 渐隐。
             label.trailingAnchor.constraint(
-                lessThanOrEqualTo: menuButton.leadingAnchor, constant: -6),
+                lessThanOrEqualTo: countLabel.leadingAnchor, constant: -6),
             countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 20),
-            closeButton.heightAnchor.constraint(equalToConstant: 20),
+            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
+            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
             menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            menuButton.widthAnchor.constraint(equalToConstant: 20),
-            menuButton.heightAnchor.constraint(equalToConstant: 20),
+            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
+            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
         ])
         applyFill()
     }
@@ -907,6 +982,12 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func toggleCollapse() { onToggleCollapse?() }
+
+    override func layout() {
+        super.layout()
+        RowActionFade.apply(to: [label], in: self, clearFrom: hovered ? menuButton.frame.minX : nil)
+    }
+
     func configure(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {
         sidebarHoverExited()
         hovered = false
@@ -933,8 +1014,8 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         guard key != glyphKey else { return }
         glyphKey = key
         disclosureButton.image = SymbolImages.image(
-            isCollapsed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle",
-            pointSize: 10, weight: .medium,
+            isCollapsed ? ShellSymbol.collapsedTab : ShellSymbol.tab,
+            pointSize: ShellStyle.compactIconSize, weight: .medium,
             description: isCollapsed ? L("Collapsed tab") : L("Tab"))
         disclosureButton.contentTintColor =
             isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
@@ -947,7 +1028,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         if hovered {
             fill = ShellStyle.selectionFill
         } else if isActive {
-            fill = ShellStyle.navigationTint(0.08)
+            fill = ShellStyle.activeContainerFill
         } else {
             fill = .clear
         }
@@ -1109,10 +1190,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private let nameLabel = NSTextField(labelWithString: "")
     private let agentIcon = NSImageView()
     private var displayedAgent: SessionAgent?
-    private var agentIconWidth: NSLayoutConstraint!
-    private var agentIconGap: NSLayoutConstraint!
     private let taskLabel = NSTextField(labelWithString: "")
-    private let directoryLabel = NSTextField(labelWithString: "")
+    private let directoryLabel = SidebarDirectoryLabel(labelWithString: "")
+    private let secondaryStack = NSStackView()
     private let statusLabel = PaneStatusLabel()
     private var status: PaneStatus?
     private var isUnread = false
@@ -1125,6 +1205,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             applyFill()
             closeButton.isHidden = !hovered
             menuButton.isHidden = !hovered || onMenu == nil
+            needsLayout = true
             applyToolTips()
         }
     }
@@ -1146,15 +1227,15 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         tabGlyph = leading == .leafTab ? NSImageView() : nil
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = ShellStyle.compactRowCornerRadius
         registerForDraggedTypes([.lighttyPaneID])
         HoverCursor.installPointingHand(on: self)
 
         dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 3
+        dotView.layer?.cornerRadius = ShellStyle.statusDotSize / 2
 
         closeButton.image = SymbolImages.image(
-            "xmark", pointSize: 7.5, weight: .bold, description: L("Close pane"))
+            ShellSymbol.close, pointSize: ShellStyle.closeIconSize, weight: .bold, description: L("Close pane"))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -1164,7 +1245,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         closeButton.action = #selector(closeTapped)
 
         menuButton.image = SymbolImages.image(
-            "ellipsis", pointSize: 10, weight: .medium, description: L("More actions"))
+            ShellSymbol.more, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("More actions"))
         menuButton.isBordered = false
         menuButton.imagePosition = .imageOnly
         menuButton.focusRingType = .none
@@ -1174,28 +1255,28 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         menuButton.action = #selector(menuTapped)
 
         nameLabel.stringValue = name
-        nameLabel.font = .systemFont(ofSize: 12)
+        nameLabel.font = ShellStyle.Font.body
         nameLabel.textColor = ShellStyle.primaryText
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        taskLabel.font = ShellStyle.Font.captionStrong
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
         taskLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(740), for: .horizontal)
 
-        directoryLabel.font = .systemFont(ofSize: 10)
+        directoryLabel.font = ShellStyle.Font.caption
         directoryLabel.textColor = ShellStyle.tertiaryText
         directoryLabel.lineBreakMode = .byTruncatingHead
         directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         directoryLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(750), for: .horizontal)
 
-        let secondaryStack = NSStackView(views: [taskLabel, directoryLabel])
+        [taskLabel, directoryLabel].forEach(secondaryStack.addArrangedSubview)
         secondaryStack.orientation = .horizontal
         secondaryStack.alignment = .firstBaseline
-        secondaryStack.spacing = 4
+        secondaryStack.spacing = ShellStyle.inlineGap
 
         statusLabel.isHidden = true
         statusLabel.textColor = ShellStyle.secondaryText
@@ -1204,8 +1285,9 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         agentIcon.contentTintColor = ShellStyle.primaryText
-        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
-        agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
+        applyAgentIcon()
+        // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
+        for view in [nameLabel, statusLabel, secondaryStack] as [NSView] { view.wantsLayer = true }
         menuButtonWidth = menuButton.widthAnchor.constraint(equalToConstant: 0)
         for v in [dotView, closeButton, menuButton, agentIcon, nameLabel, statusLabel, secondaryStack] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -1213,7 +1295,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         }
         if let tabGlyph {
             tabGlyph.image = SymbolImages.image(
-                "rectangle.on.rectangle", pointSize: 10, weight: .medium, description: L("Tab"))
+                ShellSymbol.tab, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("Tab"))
             tabGlyph.translatesAutoresizingMaskIntoConstraints = false
             addSubview(tabGlyph)
             // 与容器行的图标同列同尺寸（leading 5、宽 18），跟第一行对齐。
@@ -1231,8 +1313,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             // 圆点跟第一行对齐，不悬在两行中间。叶子行同样从子级位起，前面的
             // 标签页图标负责说明"这是一个标签页"。
             dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26),
-            dotView.widthAnchor.constraint(equalToConstant: 6),
-            dotView.heightAnchor.constraint(equalToConstant: 6),
+            dotView.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
+            dotView.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1247,24 +1329,24 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
             agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
             agentIcon.heightAnchor.constraint(equalToConstant: 12),
-            agentIconWidth,
-            agentIconGap,
+            // Agent 有无变化不推动名称与副标题左右跳动。
+            agentIcon.widthAnchor.constraint(equalToConstant: 12),
+            nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor, constant: 5),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
             // 状态固定在行尾且保持完整；pane 名吃掉中间弹性空间，过长时先截断。
-            // close 槽位始终预留，hover 出现 ✕ 时状态不会横跳。
+            // 文字铺到行尾，不为隐藏的 ⋯/✕ 预留空白；hover 时按钮浮在上面、
+            // 文字渐隐（RowActionFade），状态与截断位置都不横跳。
             statusLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 6),
-            statusLabel.trailingAnchor.constraint(
-                equalTo: menuButton.leadingAnchor, constant: -4),
+            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.textTrailingInset),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
-            // 第二行顶到 pane 内容左轴；不再为第一行的状态圆点留空，
-            // 路径也能多拿到 13pt 的有效宽度。
-            secondaryStack.leadingAnchor.constraint(equalTo: dotView.leadingAnchor),
+            // 副标题与名称共用文字轴，图标及状态点不参与文字缩进。
+            secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
-            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+                lessThanOrEqualTo: trailingAnchor, constant: -Self.textTrailingInset),
+            secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: ShellStyle.textLineGap),
             secondaryStack.bottomAnchor.constraint(
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
@@ -1280,14 +1362,32 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     @objc private func closeTapped() { onClose?() }
     @objc private func menuTapped() { onMenu?() }
 
+    /// 图标位固定 12pt（agent 有无变化不推动文字左右跳），没进 agent 时放应用图标
+    /// 里的提示符「>」补位。与 OpenAI 标识同色：淡灰细线认不出是我们的图标。
+    private func applyAgentIcon() {
+        agentIcon.image = displayedAgent.flatMap { AgentSessionIcon.image(for: $0) }
+            ?? AgentSessionIcon.terminalPrompt
+    }
+
+    /// 文字右缘距行尾：与容器行计数的右距一致，两种行的行尾对齐。
+    static let textTrailingInset: CGFloat = 10
+
+    override func layout() {
+        super.layout()
+        let actionsMinX = onMenu == nil ? closeButton.frame.minX : menuButton.frame.minX
+        RowActionFade.apply(to: [nameLabel, statusLabel, secondaryStack], in: self,
+                            clearFrom: hovered ? actionsMinX : nil)
+    }
+
     /// 与容器行一致：活跃标签页的图标染导航色。
     private func applyTabGlyphTint() {
         tabGlyph?.contentTintColor = isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
     }
 
     private func applyMenuSlot() {
-        menuButtonWidth.constant = onMenu == nil ? 0 : 20
+        menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.compactActionSize
         menuButton.isHidden = !hovered || onMenu == nil
+        needsLayout = true
     }
 
     func setActive(_ active: Bool) {
@@ -1314,9 +1414,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         isUnread = false
         nameLabel.stringValue = name
         displayedAgent = sessionAgent
-        agentIcon.image = sessionAgent.flatMap { AgentSessionIcon.image(for: $0) }
-        agentIconWidth.constant = sessionAgent == nil ? 0 : 12
-        agentIconGap.constant = sessionAgent == nil ? 0 : 5
+        applyAgentIcon()
         applyDotColor()
         applyStatusLabel()
         applyMetadataLine()
@@ -1336,12 +1434,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             nameLabel.stringValue = state.title
             applyToolTips()
         }
-        let agent = state.sessionKey?.agent
+        let agent = state.displayAgent
         if displayedAgent != agent {
             displayedAgent = agent
-            agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
-            agentIconWidth.constant = agent == nil ? 0 : 12
-            agentIconGap.constant = agent == nil ? 0 : 5
+            applyAgentIcon()
         }
         applyWorkingDirectory(state.workingDirectory)
         applyStatus(state.status, isUnread: state.isUnread)
@@ -1413,7 +1509,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             displayDirectory == nil ? $0 : "\($0) ·"
         } ?? ""
         directoryLabel.isHidden = displayDirectory == nil
-        directoryLabel.stringValue = displayDirectory ?? ""
+        directoryLabel.path = displayDirectory ?? ""
         applyToolTips()
     }
 
@@ -1439,7 +1535,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     private func applyFill() {
         // Fill means selection/hover only. Completion is conveyed by the dot and text.
         if isActive {
-            layer?.backgroundColor = ShellStyle.navigationTint(0.14)
+            layer?.backgroundColor = ShellStyle.activeItemFill
                 .shellResolvedCGColor(for: effectiveAppearance)
         } else if hovered {
             layer?.backgroundColor = ShellStyle.controlFill

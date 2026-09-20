@@ -4,59 +4,28 @@ public enum SessionAgent: String, Codable, CaseIterable, Sendable {
     case claude, codex
 }
 
-/// 一家 Agent 的全部描述：可执行名、配置根、显示名。
+/// 一家 Agent 最常用的几项描述，都取自 `spec`（见 `AgentSpec.swift`）。
 ///
-/// Agent 的描述只在这里写，别处按 Agent 取值都经这些属性。每一项都是穷举 switch 而不是
-/// `== .codex ? … : …`：多一家 Agent 时必须是编译错误，而不是默默被当成 Claude。
-/// 会话操作里的差异（列表、改名、删除、占用）不在这里，归各自的 provider adapter。
+/// 这里只是给调用点省掉一个 `.spec.`，值本身写在各家自己的文件里。
+/// 会话操作里的差异（列表、改名、删除、占用）既不是常量也不在这里，归各自的 provider adapter。
 extension SessionAgent {
-    /// PATH 上的可执行文件名，也是 `lsof -c` / `ps` 里看到的进程名。
-    public var executableName: String {
-        switch self {
-        case .claude: return "claude"
-        case .codex: return "codex"
-        }
-    }
+    /// PATH 上的可执行文件名。
+    public var executableName: String { spec.executableName }
 
     /// CLI 用来改写配置根的环境变量。
-    public var configurationVariable: String {
-        switch self {
-        case .claude: return "CLAUDE_CONFIG_DIR"
-        case .codex: return "CODEX_HOME"
-        }
-    }
+    public var configurationVariable: String { spec.configurationVariable }
 
     /// 标准配置根相对家目录的名字。
-    public var standardConfigurationDirectory: String {
-        switch self {
-        case .claude: return ".claude"
-        case .codex: return ".codex"
-        }
-    }
+    public var standardConfigurationDirectory: String { spec.standardConfigurationDirectory }
 
     /// 会话来源的名字：Sessions 侧栏的筛选、错误前缀、搜索结果标签。
-    public var sourceName: String {
-        switch self {
-        case .claude: return "Claude Code"
-        case .codex: return "Codex CLI"
-        }
-    }
+    public var sourceName: String { spec.sourceName }
 
     /// 启动选择里的短名（启动浮层、设置页）。
-    public var launchName: String {
-        switch self {
-        case .claude: return "Claude Code"
-        case .codex: return "Codex"
-        }
-    }
+    public var launchName: String { spec.launchName }
 
     /// 会话行图标的提示文字。
-    public var iconToolTip: String {
-        switch self {
-        case .claude: return "Claude Code"
-        case .codex: return "OpenAI Codex"
-        }
-    }
+    public var iconToolTip: String { spec.iconToolTip }
 }
 
 /// Configuration provenance, not the directory containing a transcript.
@@ -285,9 +254,9 @@ public struct AgentLaunchContext: Equatable, Sendable {
     /// Each CLI keeps its own resume shape: codex takes a subcommand, claude a flag. The launch
     /// flags go where that CLI accepts them, never in front of the subcommand.
     func arguments(tail: [String]) -> [String] {
-        switch agent {
-        case .claude: return launchArguments + ["--resume"] + tail
-        case .codex: return ["resume"] + launchArguments + tail
+        switch agent.spec.resumeShape {
+        case .flag(let flag): return launchArguments + [flag] + tail
+        case .subcommand(let name): return [name] + launchArguments + tail
         }
     }
 
@@ -356,12 +325,7 @@ public struct SessionPickerPlan: Equatable, Sendable {
     }
 
     /// codex 默认只列当前目录的会话，`--all` 才是全部；claude 的选择器不带尾巴。
-    private var tail: [String] {
-        switch context.agent {
-        case .claude: return []
-        case .codex: return ["--all"]
-        }
-    }
+    private var tail: [String] { context.agent.spec.pickerArguments }
 
     public var arguments: [String] { context.arguments(tail: tail) }
     public var shellInput: String { context.shellInput(tail: tail) }

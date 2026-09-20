@@ -93,6 +93,11 @@ struct TerminalSurfaceConfiguration {
 /// 渲染硬约束：不设 wantsLayer、不建自己的 layer。`ghostty_surface_new`
 /// 会安装 IOSurfaceLayer 并把视图变成 layer-hosting，壳层不能踢掉它。
 final class TerminalSurfaceView: NSView {
+    /// 进窗口时是否真的创建 ghostty surface（随之 spawn `login → shell`、起渲染和 IO 线程）。
+    /// 生产恒为 `true`；只有测试运行时把它关掉，让 pane 只当布局/状态载体，见
+    /// `Tests/LighttyTests/TerminalRuntimeTestSupport.swift`。
+    static var spawnsSurfaces = true
+
     private(set) var surface: ghostty_surface_t?
     /// close_surface 回调（进程退出）时由 runtime 调用。
     var onCloseRequest: (() -> Void)?
@@ -100,6 +105,8 @@ final class TerminalSurfaceView: NSView {
     /// Viewing is a user event, not a focus-state transition: clicking/typing in an
     /// already-focused terminal must acknowledge a completion received since then.
     var onInteraction: (() -> Void)?
+    /// 程序经 OSC 0 写的标题变了。agent 用它推送忙/闲前缀和会话标题，见 `AgentTerminalTitle`。
+    var onTitleChange: ((String) -> Void)?
     var onWorkingDirectoryChange: ((String?) -> Void)?
 
     private(set) var currentWorkingDirectory: String?
@@ -156,7 +163,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     private func createSurface() {
-        guard let window else { return }
+        guard Self.spawnsSurfaces, let window else { return }
 
         // 必须从 libghostty 的 default constructor 开始。默认 surface 不覆盖 cwd；
         // 由 core 请求的新 surface 仅使用 core 返回的 inherited config。
@@ -988,6 +995,7 @@ final class TerminalSurfaceView: NSView {
     private(set) var terminalTitle: String = "" {
         didSet {
             guard terminalTitle != oldValue else { return }
+            onTitleChange?(terminalTitle)
             NotificationCenter.default.post(
                 name: .terminalTitleDidChange,
                 object: self,
@@ -1025,11 +1033,16 @@ final class TerminalSurfaceView: NSView {
     }
 
     /// shell 就绪后把 agent 启动/续接命令发进去，发一次即清。surface 未建（极少见）则留待下次。
+    ///
+    /// 提交必须另按一次回车键，不能靠命令末尾的换行：`sendText` 是粘贴，而 OSC 7 发自
+    /// precmd，紧接着 zsh 的行编辑器就打开括号粘贴模式。主线程稍慢（启动时恢复多个 pane、
+    /// 机器负载高）落到模式打开之后，粘进去的换行只是插入，命令会停在提示符上。
     private func fireReadyInputIfNeeded() {
         guard !sentReadyInput, let command = pendingReadyInput, surface != nil else { return }
         sentReadyInput = true
         pendingReadyInput = nil
-        sendText(command)
+        sendText(command.hasSuffix("\n") ? String(command.dropLast()) : command)
+        sendReturn()
     }
 
     private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {

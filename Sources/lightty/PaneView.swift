@@ -61,8 +61,8 @@ final class PaneView: NSView {
     /// Rendering has no model mutations or secondary notifications.
     private func applySessionState() {
         let state = sessionState
-        let metadataChanged = header.title != state.title || header.sessionAgent != state.sessionKey?.agent
-        if header.sessionAgent != state.sessionKey?.agent { header.sessionAgent = state.sessionKey?.agent }
+        let metadataChanged = header.title != state.title || header.sessionAgent != state.displayAgent
+        if header.sessionAgent != state.displayAgent { header.sessionAgent = state.displayAgent }
         if header.title != state.title { header.title = state.title }
         header.apply(state.status, isUnread: state.isUnread)
         if metadataChanged { refreshIdentityPanel() }
@@ -395,7 +395,9 @@ final class PaneView: NSView {
     private func showIdentityPanel() {
         let panel = PaneIdentityPanel()
         // 第一行显示的是「有会话就用会话标题」，所以改的也应该是会话名——否则用户
-        // 打了个名字、存进了终端名，却被会话标题盖住，看不见。
+        // 打了个名字、存进了终端名，却被会话标题盖住，看不见。没有 hook、显示的是 agent
+        // 自己写的标题时，第一行是只读的（见 `refresh(panel:)`）：lightty 认不准那是不是
+        // 一个能收 `/rename` 的会话，不提供快捷改名最简单。
         panel.onPaneNameCommit = { [weak self] name in
             guard let self else { return }
             guard self.displayedSessionKey != nil else {
@@ -554,11 +556,14 @@ final class PaneView: NSView {
     }
 
     private func refresh(panel: PaneIdentityPanel) {
+        let state = sessionState
         panel.update(
             paneName: header.title,
             taskName: header.titleOfBoundTask,
             dot: header.dot.color,
-            agent: header.sessionAgent)
+            agent: header.sessionAgent,
+            // 没有 hook 绑定、显示的是 agent 自己写的标题：只读
+            nameEditable: state.sessionKey != nil || state.titleAgent == nil)
         panel.applyStatusDot(header.activityDotColor)
     }
 
@@ -785,7 +790,12 @@ final class PaneView: NSView {
             return []
         }
         let point = convert(sender.draggingLocation, from: nil)
-        let zone = PaneDropZone.calculate(at: point, in: bounds)
+        showDropPreview(PaneDropZone.calculate(at: point, in: bounds))
+        return .move
+    }
+
+    /// 高亮落点半区。系统拖放（pane 头部）和侧栏行拖动（自建跟手循环，不经过系统拖放）共用。
+    func showDropPreview(_ zone: PaneDropZone) {
         let overlay = dropOverlay ?? PaneDropOverlayView(frame: .zero)
         overlay.frame = zone.frame(in: bounds)
         overlay.autoresizingMask = []
@@ -793,7 +803,6 @@ final class PaneView: NSView {
             addSubview(overlay, positioned: .above, relativeTo: nil)
         }
         dropOverlay = overlay
-        return .move
     }
 
     private func hideDropOverlay() {

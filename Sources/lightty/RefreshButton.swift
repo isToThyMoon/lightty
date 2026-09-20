@@ -9,6 +9,7 @@ final class RefreshButton: NSButton {
     private let glyph = CALayer()
     private static let spinKey = "refresh.spin"
     private static let spinTurn: CFTimeInterval = 0.9
+    var allowsCancel = true
     var isRefreshing = false {
         didSet {
             guard oldValue != isRefreshing else { return }
@@ -26,8 +27,9 @@ final class RefreshButton: NSButton {
         isBordered = false
         imagePosition = .imageOnly
         contentTintColor = ShellStyle.secondaryText
-        image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("Refresh"))
+        image = NSImage(systemSymbolName: ShellSymbol.refresh, accessibilityDescription: L("Refresh"))
         wantsLayer = true
+        HoverCursor.installPointingHand(on: self)
         glyph.contentsGravity = .resizeAspect
         layer?.addSublayer(glyph)
         updateSymbol()
@@ -84,7 +86,7 @@ final class RefreshButton: NSButton {
     }
 
     @objc private func updateAnimation() {
-        let title = isRefreshing ? L("Cancel") : L("Refresh")
+        let title = isRefreshing && allowsCancel ? L("Cancel") : L("Refresh")
         toolTip = title
         setAccessibilityLabel(title)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion

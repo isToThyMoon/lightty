@@ -22,13 +22,24 @@ final class SettingsViewTests: XCTestCase {
         super.tearDown()
     }
 
-    func testAppearancePreferenceRoundTripsAndApplies() {
+    /// 偏好的 current()/set 往返、出厂默认，以及外观偏好落到 NSApp.appearance。
+    func testPreferencesRoundTripAndApply() {
+        // 外观：读写往返，并应用到进程
         XCTAssertEqual(AppearancePreference.current(in: defaults), .system)
         AppearancePreference.set(.dark, in: defaults)
         XCTAssertEqual(AppearancePreference.current(in: defaults), .dark)
         XCTAssertEqual(NSApp.appearance?.name, .darkAqua)
         AppearancePreference.set(.system, in: defaults)
         XCTAssertNil(NSApp.appearance)
+
+        // 重点色：读写往返；删键回出厂默认（粉色）
+        defer { AccentPreference.set(.default, in: defaults); FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey) }
+        AccentPreference.set(.pink)
+        XCTAssertEqual(AccentPreference.current(), .pink)
+        AccentPreference.set(.default)
+        XCTAssertEqual(AccentPreference.current(), .default)
+        FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey)
+        XCTAssertEqual(AccentPreference.current(), .pink, "出厂重点色是粉色")
     }
 
     func testLanguagePreferenceSwitchesLocalizedStrings() {
@@ -40,7 +51,8 @@ final class SettingsViewTests: XCTestCase {
     }
 
     /// 设置页：左栏导航 + 右侧页面；切页只换右侧，选中态跟随。
-    func testSettingsViewNavigatesBetweenPages() {
+    /// 语言变更通知到达后页面文案就地重建。
+    func testSettingsViewSwitchesPagesAndRebuildsOnLanguageChange() {
         let view = SettingsView(page: .appearance)
         view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
         view.layoutSubtreeIfNeeded()
@@ -58,37 +70,13 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertFalse(labels(in: view).contains(L("Theme")))
         XCTAssertFalse(labels(in: view).contains(L("Use the built-in Lightty terminal configuration")))
         XCTAssertTrue(labels(in: view).contains(L("Agent status hooks")))
-    }
 
-    /// 语言变更通知到达后页面文案就地重建。
-    func testSettingsViewRebuildsOnLanguageChange() {
-        let view = SettingsView(page: .general)
-        view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
-        view.layoutSubtreeIfNeeded()
+        // 语言切换：当前页（通用）的文案就地变中文
         LanguagePreference.set(.simplifiedChinese, in: defaults)
         view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(view.currentPage, .general)
         XCTAssertTrue(labels(in: view).contains("通用"))
         XCTAssertTrue(labels(in: view).contains("返回应用"))
-    }
-
-    /// 重点色偏好：带色相的档位同时接管导航色；默认/白退回内置导航蓝。
-    func testAccentPreferenceDrivesShellColors() {
-        defer { AccentPreference.set(.default, in: defaults); FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey) }
-        func rgb(_ color: NSColor) -> [Int] {
-            let c = color.usingColorSpace(.sRGB)!
-            return [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) }
-        }
-        AccentPreference.set(.pink)
-        XCTAssertEqual(AccentPreference.current(), .pink)
-        XCTAssertEqual(rgb(ShellStyle.accent), rgb(AccentPreference.pink.color))
-        XCTAssertEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "有色相：导航跟重点色")
-
-        AccentPreference.set(.default)
-        XCTAssertNotEqual(rgb(ShellStyle.navigationAccent), rgb(ShellStyle.accent), "无色相：导航退回蔚蓝")
-        XCTAssertFalse(AccentPreference.white.hasHue)
-        XCTAssertEqual(AccentPreference.allCases.count, 8)
-        FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey)
-        XCTAssertEqual(AccentPreference.current(), .pink, "出厂重点色是粉色")
     }
 
     /// 自绘控件：下拉标题跟随选中项并回调；开关翻转并回调。
@@ -111,6 +99,10 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(toggle.accessibilityPerformPress())
         XCTAssertTrue(toggle.isOn)
         XCTAssertEqual(states, [true])
+        toggle.isEnabled = false
+        XCTAssertFalse(toggle.accessibilityPerformPress())
+        XCTAssertTrue(toggle.isOn)
+        XCTAssertEqual(states, [true], "禁用态不能通过辅助功能触发写入")
     }
 
     private func labels(in view: NSView) -> [String] {

@@ -5,39 +5,36 @@ import LighttyCore
 
 @MainActor
 final class WorkspaceSnapshotTests: XCTestCase {
-    func testCatalogConfigurationProvenanceSurvivesSnapshot() throws {
+    /// 整棵 WorkspaceSnapshot 的 Codable 往返，pane 夹具带齐每个字段——
+    /// 包括会话关联（catalogSession）与配置来源（standard / custom 两种）。
+    func testSnapshotCodableRoundTripCoversEveryField() throws {
         for location: SessionConfigurationLocation in [.standard, .custom("/fixture/.claude")] {
-            let snapshot = PaneSnapshot(name: "fixture", agentAlive: true,
+            let pane = PaneSnapshot(
+                name: "api", workingDirectory: "/tmp", taskFile: "/tmp/t.md",
+                agent: "claude", sessionID: "abc-123", agentCWD: "/tmp/proj", agentAlive: true,
                 catalogSession: .init(agent: .claude, sourceRoot: "/fixture/.claude", nativeID: "abc-123"),
                 catalogConfiguration: location)
-            let restored = try JSONDecoder().decode(PaneSnapshot.self, from: JSONEncoder().encode(snapshot))
-            XCTAssertEqual(restored, snapshot)
-        }
-    }
-
-    func testSnapshotCodableRoundTrip() throws {
-        let pane = PaneSnapshot(
-            name: "api", workingDirectory: "/tmp", taskFile: "/tmp/t.md",
-            agent: "claude", sessionID: "abc-123", agentCWD: "/tmp/proj", agentAlive: true)
-        let tree = SplitNodeSnapshot.split(
-            vertical: true, fractions: [0.3, 0.7],
-            children: [
-                .pane(pane),
-                .split(vertical: false, fractions: [0.5, 0.5],
-                       children: [.pane(pane), .pane(pane)]),
+            let tree = SplitNodeSnapshot.split(
+                vertical: true, fractions: [0.3, 0.7],
+                children: [
+                    .pane(pane),
+                    .split(vertical: false, fractions: [0.5, 0.5],
+                           children: [.pane(pane), .pane(pane)]),
+                ])
+            let snapshot = WorkspaceSnapshot(windows: [
+                WindowSnapshot(
+                    frame: CGRect(x: 10, y: 20, width: 800, height: 600),
+                    activeTabIndex: 1,
+                    tabs: [TabSnapshot(title: "A", root: .pane(pane)), TabSnapshot(title: "B", root: tree)],
+                    taskPanelOpen: false, tabSidebarOpen: true),
             ])
-        let snapshot = WorkspaceSnapshot(windows: [
-            WindowSnapshot(
-                frame: CGRect(x: 10, y: 20, width: 800, height: 600),
-                activeTabIndex: 1,
-                tabs: [TabSnapshot(title: "A", root: .pane(pane)), TabSnapshot(title: "B", root: tree)],
-                taskPanelOpen: false, tabSidebarOpen: true),
-        ])
-        let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
-        XCTAssertEqual(decoded, snapshot)
-        XCTAssertEqual(tree.leaves.count, 3)
-        XCTAssertEqual(tree.firstLeaf.name, "api")
+            let data = try JSONEncoder().encode(snapshot)
+            let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
+            XCTAssertEqual(decoded, snapshot, "\(location)")
+            XCTAssertEqual(decoded.windows.first?.tabs.first?.root.firstLeaf.catalogConfiguration, location)
+            XCTAssertEqual(tree.leaves.count, 3)
+            XCTAssertEqual(tree.firstLeaf.name, "api")
+        }
     }
 
     func testStoreRejectsUnknownVersionAndPersistsFreeze() throws {
@@ -59,72 +56,20 @@ final class WorkspaceSnapshotTests: XCTestCase {
         XCTAssertTrue(store.frozen)
     }
 
-    /// 真窗口：建两个标签页、一处分屏、改名 → 快照 → 按快照重建 → 再快照，结构与命名一致。
-    func testControllerSnapshotRestoreRoundTrip() throws {
-        let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("session-controller-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: taskDirectory) }
-        _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
-
-        let controller = TerminalWindowController()
-        AppState.shared.windowControllers.append(controller)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
-
-        let first = try XCTUnwrap(controller.panes().first)
-        first.rename(to: "编译")
-        controller.split(first, direction: .right)
-        let second = try XCTUnwrap(controller.panes().last)
-        second.rename(to: "日志")
-        controller.renameTab(at: 0, to: "后端")
-        controller.addTab(initialPane: PaneView())
-        controller.renameTab(at: 1, to: "前端")
-        controller.selectTab(at: 0)
-        controller.window?.contentView?.superview?.layoutSubtreeIfNeeded()
-
-        let snapshot = try XCTUnwrap(controller.snapshot())
-        XCTAssertEqual(snapshot.tabs.map(\.title), ["后端", "前端"])
-        XCTAssertEqual(snapshot.activeTabIndex, 0)
-        guard case .split(let vertical, let fractions, let children) = snapshot.tabs[0].root else {
-            return XCTFail("标签页 0 应是左右分屏")
-        }
-        XCTAssertTrue(vertical)
-        XCTAssertEqual(fractions.count, 2)
-        XCTAssertEqual(children.map(\.firstLeaf.name), ["编译", "日志"])
-
-        let restored = TerminalWindowController(restoring: snapshot)
-        AppState.shared.windowControllers.append(restored)
-        restored.window?.contentView?.superview?.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
-
-        let again = try XCTUnwrap(restored.snapshot())
-        XCTAssertEqual(again.tabs.map(\.title), snapshot.tabs.map(\.title))
-        XCTAssertEqual(again.activeTabIndex, 0)
-        XCTAssertEqual(
-            again.tabs.map { $0.root.leaves.map(\.name) },
-            snapshot.tabs.map { $0.root.leaves.map(\.name) })
-        guard case .split(let v2, _, _) = again.tabs[0].root else {
-            return XCTFail("恢复后标签页 0 应仍是分屏")
-        }
-        XCTAssertTrue(v2)
-        XCTAssertTrue(restored.suppressesInitialSize)
-
-        AppState.shared.windowControllers.removeAll()
-    }
-
-    /// 标签页名的存法：新快照显式存「是否改过名」与默认名序号；还没有这两个字段的旧快照
-    /// 读入时按旧规则迁移一次。恢复出的默认名序号全局占号，别的窗口新开的标签页不撞名。
-    func testTabTitlesPersistExplicitlyAndLegacySnapshotsMigrate() throws {
+    /// 旧快照读入时的默认值：
+    /// - 标签页名：新快照显式存「是否改过名」与默认名序号；还没有这两个字段的旧快照
+    ///   读入时按旧规则迁移一次。恢复出的默认名序号全局占号，别的窗口新开的标签页不撞名。
+    /// - 主侧栏模式：没有这个字段的旧快照解出 nil，恢复时按 Handoff 兼容处理。
+    func testLegacyWindowSnapshotsDecodeWithDefaults() throws {
         let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("session-titles-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         defer { AppState.shared.windowControllers.removeAll() }
 
-        // 旧快照：只有 title 字符串。
+        // 旧快照：只有 title 字符串，没有 primarySidebarMode。
         let legacy = """
         {"activeTabIndex":0,"taskPanelOpen":false,"tabSidebarOpen":false,"tabs":[
           {"title":"\(L("Tab %d", 5))","root":{"kind":"pane","pane":{"name":"a","agentAlive":false}}},
@@ -132,6 +77,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
         """
         let window = try JSONDecoder().decode(WindowSnapshot.self, from: Data(legacy.utf8))
         XCTAssertNil(window.tabs[0].customTitle)
+        XCTAssertNil(window.primarySidebarMode, "旧快照没有主侧栏模式字段，解出 nil 以兼容 Handoff")
         let restored = TerminalWindowController(restoring: window)
         AppState.shared.windowControllers.append(restored)
         XCTAssertEqual(restored.tabOverview().map(\.hasCustomTitle), [false, true])
@@ -149,19 +95,19 @@ final class WorkspaceSnapshotTests: XCTestCase {
 
     /// 最复杂场景：两个窗口、各两个标签页、**非活跃**标签页里有嵌套分屏（左右套上下），
     /// 整体快照 → 整体恢复 → 再快照，结构、命名、活跃标签页逐窗一致；恢复后新建 pane
-    /// 的默认名不与恢复出的重名。
+    /// 的默认名不与恢复出的重名；按快照重建的控制器不再按首帧尺寸重排（`suppressesInitialSize`）。
     func testMultiWindowNestedSplitsRoundTrip() throws {
         let taskDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("session-multi-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
 
         let a = TerminalWindowController()
         let b = TerminalWindowController()
         AppState.shared.windowControllers = [a, b]
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        for c in [a, b] { try c.waitForInitialLayout() }
 
         // 窗口 A：标签页 0 = [A1 | A2]，标签页 1 = [A3]（活跃）
         let a1 = try XCTUnwrap(a.panes().first)
@@ -188,11 +134,17 @@ final class WorkspaceSnapshotTests: XCTestCase {
         try XCTUnwrap(b.panes().last).rename(to: "Q3")
         b.selectTab(at: 0)
         for c in [a, b] { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try drainMainQueue()
 
         let snapshot = WorkspaceStore.capture()
         XCTAssertEqual(snapshot.windows.count, 2)
         XCTAssertEqual(snapshot.windows.map(\.activeTabIndex), [1, 0])
+        XCTAssertEqual(snapshot.windows[0].tabs.map(\.title), ["A-first", "A-second"])
+        guard case .split(true, let fractions, let aKids) = snapshot.windows[0].tabs[0].root else {
+            return XCTFail("窗口 A 标签页 0 应是左右分屏")
+        }
+        XCTAssertEqual(fractions.count, 2)
+        XCTAssertEqual(aKids.map(\.firstLeaf.name), ["A1", "A2"])
         guard case .split(true, _, let kids) = snapshot.windows[1].tabs[1].root,
               case .split(false, _, let inner) = kids[1] else {
             return XCTFail("后台标签页应是 左右分屏 套 上下分屏")
@@ -205,8 +157,8 @@ final class WorkspaceSnapshotTests: XCTestCase {
         AppState.shared.windowControllers.removeAll()
         let restored = WorkspaceRestorer.restore(snapshot)
         XCTAssertEqual(restored.count, 2)
-        for c in restored { c.window?.contentView?.superview?.layoutSubtreeIfNeeded() }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        for c in restored { try c.waitForInitialLayout() }
+        XCTAssertTrue(restored.allSatisfy(\.suppressesInitialSize), "按快照重建的窗口不按首帧尺寸重排")
 
         let again = WorkspaceStore.capture()
         XCTAssertEqual(
@@ -216,6 +168,9 @@ final class WorkspaceSnapshotTests: XCTestCase {
             again.windows.map { $0.tabs.map { $0.root.leaves.map(\.name) } },
             snapshot.windows.map { $0.tabs.map { $0.root.leaves.map(\.name) } })
         XCTAssertEqual(again.windows.map(\.activeTabIndex), snapshot.windows.map(\.activeTabIndex))
+        guard case .split(true, _, _) = again.windows[0].tabs[0].root else {
+            return XCTFail("恢复后窗口 A 标签页 0 应仍是左右分屏")
+        }
         guard case .split(true, _, let kids2) = again.windows[1].tabs[1].root,
               case .split(false, _, _) = kids2[1] else {
             return XCTFail("恢复后后台标签页的嵌套分屏应保持")

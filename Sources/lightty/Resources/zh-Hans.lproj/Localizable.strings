@@ -150,8 +150,6 @@
 "You can show it again from the lightty menu." = "可以从 lightty 菜单里重新打开。";
 "Agent finished" = "Agent 已完成";
 "Needs your attention" = "等待你处理";
-"%d agents finished" = "%d 个 Agent 已完成";
-"%d panes need your attention" = "%d 个 pane 等待你处理";
 "Move Split" = "移动分屏";
 "%d running" = "%d 个运行中";
 "%d needs you" = "%d 个待处理";
@@ -250,13 +248,7 @@
 "Purple" = "紫色";
 "White" = "白色";
 
-"Handoff tasks" = "Handoff 任务";
-"Sessions" = "Sessions 会话";
-"Start an agent with a task. Try saying: “Summarize the task.”" = "启动 Agent 时自动注入任务\n试着说：“总结交接文档”";
-"Click to resume your last session." = "点击继续上次会话";
 "Primary sidebar" = "第一侧栏";
-"Manage handoff tasks" = "管理 Handoff 任务";
-"Continue local CLI sessions" = "继续本机 CLI 会话";
 "The CLI session interface is not supported by this version." = "当前 CLI 版本不支持此会话接口。";
 "Reading CLI sessions timed out. Try refreshing." = "读取 CLI 会话超时，请刷新重试。";
 "The session catalog exceeded the loading limit." = "会话目录超出加载上限。";
@@ -382,3 +374,142 @@
 "Typed in when the plugin is not installed" = "插件没装时敲进终端的内容";
 "The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text." = "按钮会退回到这一段。它自带全部约定，所以不依赖插件，也不依赖开场注入的那段文字。";
 "Unbinding: nothing is injected, and the next binding starts fresh." = "解除绑定：不再注入；下次绑定重新开始。";
+
+/* Skills 浏览器 */
+"Skills" = "Skills";
+"Refresh skills" = "刷新技能";
+"Favorite" = "收藏";
+"Not favorited" = "未收藏";
+"Skill actions" = "技能操作";
+"Open file" = "打开文件";
+"Open source" = "打开来源";
+"Source" = "原文";
+"Preview" = "预览";
+"Skill sources" = "技能来源";
+"Search skills or sources…" = "搜索技能或来源…";
+"Skill content" = "技能内容";
+"Select a skill to read its instructions." = "选择技能，查看使用说明";
+"Reading skills…" = "正在读取技能…";
+"All skills" = "全部技能";
+"Favorites" = "收藏";
+"Mine" = "我的";
+"Unclassified" = "待归类";
+"Sources" = "来源";
+"Provided by agents" = "Agent 提供";
+"Plugin skills" = "Plugin skills";
+"Built-in skills" = "Built-in skills";
+"No skills in this category." = "此分类暂无技能";
+"No matching skills." = "没有匹配的技能";
+"The skill file could not be opened." = "无法打开技能文件。";
+"Mark as mine" = "标记为我的";
+"Copy file path" = "复制文件路径";
+"Found in" = "发现位置";
+"%d notices" = "%d 条提示";
+"Skills notices" = "技能提示";
+
+"Common installations" = "通用安装";
+
+
+"Bundled with Claude Code; reading is not supported yet." = "随程序提供，暂不支持读取";
+
+"File locations" = "文件位置";
+
+"Actual file" = "实际文件";
+
+/* Plugins settings page；插件、内容类别等产品名保持英文 */
+"Plugins" = "Plugins";
+"Installed plugins" = "已安装的插件";
+"Plugin contents" = "插件内容";
+"Plugin content" = "插件内容正文";
+"Search plugin contents…" = "搜索插件内容…";
+"Select an item to see what the plugin provides." = "选择一条内容，查看这个插件提供了什么。";
+"This plugin provides no contents." = "这个插件没有可展示的内容。";
+"No matching contents." = "没有匹配的内容。";
+"Refresh plugins" = "刷新插件";
+"Enable plugin" = "启用插件";
+"Enabled" = "已启用";
+"Disabled" = "已停用";
+"Cached only" = "仅缓存";
+"Cached in Codex but not in its installed list, so it cannot be enabled here." = "只存在于 Codex 缓存，未列入已安装清单，无法在这里启用。";
+"Remote plugin that Codex has not downloaded to this Mac; its contents cannot be browsed." = "远程插件，Codex 尚未下载到本机，暂时无法浏览内容。";
+"Skill" = "Skill";
+"Command" = "Command";
+"Subagent" = "Subagent";
+"Hook" = "Hook";
+"MCP server" = "MCP server";
+"Plugin notices" = "插件提示";
+"The plugin file could not be opened." = "无法打开这个插件文件。";
+
+/* Handoff 设置页（三栏浏览器） */
+"In progress" = "进行中";
+
+"Protocol" = "协议";
+
+"Handoff categories" = "Handoff 分类";
+
+"Handoff documents" = "Handoff 文档";
+
+"Handoff document" = "Handoff 文档";
+
+"Search handoff documents…" = "搜索 Handoff 文档…";
+
+"No matching documents." = "没有匹配的文档";
+
+"The protocol is the same for every task." = "协议对每个任务都一样";
+
+"Select a handoff document to read it." = "选择一份 Handoff 文档查看内容。";
+
+"The handoff file could not be opened." = "无法打开 Handoff 文件。";
+
+"Rescan the task folder" = "重新扫描任务目录";
+
+/* 插件内容的分组标题：类别名保持英文 */
+"Commands" = "Commands";
+"Subagents" = "Subagents";
+"Hooks" = "Hooks";
+"MCP servers" = "MCP servers";
+"App connector" = "App connector";
+"App connectors" = "App connectors";
+
+/* 技能里 SKILL.md 之外的文件 */
+"%d files in this skill" = "这个技能里有 %d 份文件";
+"This file is not text. Open it to read it." = "这份文件不是文本，打开它来查看。";
+"This file is too large to preview." = "这份文件太大，无法预览。";
+
+/* 独立 MCP server 设置页 */
+"All servers" = "全部 server";
+"MCP server sources" = "MCP server 来源";
+"Search MCP servers…" = "搜索 MCP server…";
+"No MCP servers configured here." = "这里没有独立配置的 MCP server。";
+"No matching servers." = "没有匹配的 server。";
+"Select a server to see how it is configured." = "选择一台 server 查看它的配置。";
+"Refresh MCP servers" = "重新扫描 MCP server";
+"Enable MCP server" = "启用 MCP server";
+"MCP server configuration" = "MCP server 配置";
+"MCP notices" = "MCP 提示";
+"The configuration file could not be opened." = "无法打开配置文件。";
+"Claude Code has no enabled switch for a user-level server: it is on while it is configured." = "Claude Code 的用户级 server 没有启用开关：配置在那里就是开着的。";
+
+"Open the skill folder" = "打开技能文件夹";
+
+/* Claude Code 的使用计数 */
+"Unused" = "未用过";
+"Used %d times by Claude Code" = "Claude Code 用过 %d 次";
+"Never used by Claude Code" = "Claude Code 没用过";
+"No usage record from Claude Code" = "Claude Code 没有使用记录";
+
+"Save task progress for an agent to pick up." = "保存任务进展，供 Agent 接手。";
+
+"Browse and continue local Agent sessions." = "浏览并继续本地 Agent 会话。";
+
+"Create a task with the toolbar to save progress for an agent to pick up." = "从顶部新建任务，保存进展供 Agent 接手。";
+
+"No matching tasks." = "没有匹配的任务。";
+
+"Not open" = "未打开";
+
+"Task document updated" = "任务文档更新于";
+
+"No local sessions yet. Start a session with the toolbar; return here to continue it." = "还没有本地会话。从顶部新建会话，之后可在这里继续。";
+
+"Opened" = "已打开";

@@ -1,12 +1,11 @@
 import Foundation
 import LighttyCore
-import Darwin
 
 /// Adapter to the pinned official SDK. File-format knowledge stays in the SDK.
 ///
 /// 列表、改名、删除走打包的 SDK helper（`list-sessions.mjs` / `rename-session.mjs` /
-/// `delete-session.mjs`）；占用与存活进程先问 Claude 自己的活会话表
-/// （`claude agents --json`），删除前再扫一遍进程表，因为 Claude 不一定一直开着转录文件。
+/// `delete-session.mjs`）；占用与存活进程只问 Claude 自己的活会话表
+/// （`claude agents --json`）。问不出来就是问不出来，不去读进程表或文件表反推。
 struct ClaudeSessionProvider: AgentSessionProvider {
     let source: SessionCatalogSource
     var helperDirectory: URL? = nil // Injected fixture/build artifact, never a user shell command.
@@ -94,23 +93,11 @@ struct ClaudeSessionProvider: AgentSessionProvider {
 
     // MARK: - 占用与存活进程
 
-    /// 先问活会话表，问不出或表里没有再读文件表。
+    /// 只问活会话表：表里有这段会话就是正面证据，问不出来或表里没有都只是「说不清」。
     func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result {
-        if let live = Self.liveSessions(executable: source.executable, root: key.sourceRoot),
-           let row = live.first(where: { $0.sessionID == key.nativeID }) {
-            return .inUse(pid: row.pid)
-        }
-        guard let data = SessionOccupancy.openFiles(command: SessionAgent.claude.executableName, timeout: 2)
-        else { return .unknown }
-        return Self.inspect(data, for: key)
-    }
-
-    static func inspect(_ data: Data, for key: AgentSessionKey) -> SessionOccupancy.Result {
-        guard UUID(uuidString: key.nativeID) != nil else { return .unknown }
-        return SessionOccupancy.firstWriter(data, command: SessionAgent.claude.executableName,
-                                            root: key.sourceRoot, directories: ["projects"]) {
-            $0 == key.nativeID + ".jsonl"
-        }
+        guard let live = Self.liveSessions(executable: source.executable, root: key.sourceRoot),
+              let row = live.first(where: { $0.sessionID == key.nativeID }) else { return .unknown }
+        return .inUse(pid: row.pid)
     }
 
     /// 问一次 Claude 的活会话表（`claude agents --json`），补两件事：
@@ -166,46 +153,15 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         return live
     }
 
-    // MARK: - 删除前的进程核查
+    // MARK: - 删除前的核查
 
-    /// 启动不到这么久、又不在活会话表里的 claude，可能只是还没来得及登记。
-    /// 实测（claude 2.1.270，本机）从内核记下的启动时间到登记进表约 2.2 秒；取 5 秒，
-    /// 给负载高、冷启动慢的时候留出一倍多的余量。再长就会把早已稳定却确实查不出身份的进程
-    /// 也拖进等待，白白让删除变慢。
-    static let registrationWindow: TimeInterval = 5
-    /// 给年轻进程的那一次等待，之后只重读一次活会话表。取 2 秒：用户通常是确认删除框
-    /// 一两秒前才起的 claude，这时它离登记只差不到 2 秒；更长的等待会让删除明显卡顿，
-    /// 而没等到的代价只是多问一次「仍然删除」，不涉及数据安全。
-    static let registrationWait: TimeInterval = 2
-
-    /// 删除核查要读的外部状态。拆成可替换的几项，测试不起进程、不真的等。
+    /// 删除核查要读的外部状态。拆成可替换的一项，测试不起进程。
     struct DeletionProbe {
-        /// `ps -axo pid=,comm=` 的输出；读不出返回 nil。
-        var processTable: () -> Data?
         /// Claude 的活会话表；问不出来返回 nil。
         var liveSessions: () -> [LiveSession]?
-        /// 进程的内核身份（含启动时间）；进程不在或读不出返回 nil。
-        var identity: (Int32) -> AgentProcessIdentity?
-        var now: () -> Date
-        /// 阻塞当前线程指定秒数。
-        var wait: (TimeInterval) -> Void
 
         static func system(executable: String, root: String) -> Self {
-            Self(
-                // lsof alone misses Claude, which need not keep its transcript descriptor open.
-                processTable: {
-                    try? SessionHelperProcess.readPage(executable: URL(fileURLWithPath: "/bin/ps"),
-                        arguments: ["-axo", "pid=,comm="], directory: URL(fileURLWithPath: "/"),
-                        environment: ["PATH": "/usr/bin:/bin"], cancelled: { false }, timeout: 3)
-                },
-                liveSessions: { ClaudeSessionProvider.liveSessions(executable: executable, root: root) },
-                identity: { AgentProcessIdentity.read($0) },
-                now: { Date() },
-                wait: { seconds in
-                    // 删除核查只在 SessionDeletion.perform 派出的后台队列上跑；主线程上等会卡住界面。
-                    assert(!Thread.isMainThread, "Claude deletion check must not wait on the main thread")
-                    Thread.sleep(forTimeInterval: seconds)
-                })
+            Self(liveSessions: { ClaudeSessionProvider.liveSessions(executable: executable, root: root) })
         }
     }
 
@@ -214,91 +170,25 @@ struct ClaudeSessionProvider: AgentSessionProvider {
             probe: .system(executable: source.executable, root: target.sourceRoot))
     }
 
-    /// 进程表里每个 claude 进程都要有身份：来自活会话表，或本应用 pane 核对过的关联。
-    /// 有一个在跑目标会话就拒绝；有身份不明的就说不清。
+    /// 只认两处正面证据：Claude 自己的活会话表，和本应用 pane 核对过的进程身份。
+    /// 表问不出来（命令不在、版本旧、输出改格式）就是「说不清」——绝不能把问不出来读成没人用。
     ///
-    /// 刚启动的 claude 还没登记进活会话表（见 `registrationWindow`），会被误判成身份不明。
-    /// 所以身份不明的进程里有启动不久的，就等 `registrationWait` 后重读一次表再判。
-    /// 同时有老的也照样等：结论虽然注定是说不清，但用户随后可以点「仍然删除」压掉它，
-    /// 若年轻的那个跑的正是目标，必须先以确认占用拒绝，不能被那次同意一并压过去。
-    /// 只有身份不明的全是老的才立即返回，不等。
-    /// 第一次读表就失败时同样不等：「问不出来」不能靠多等一会儿变成「没人用」。
+    /// 不再扫进程表：那要按可执行文件名认 claude，而进程名随安装方式变，认错一个就把
+    /// 「有人在用」读成「没人用」。代价是刚启动、还没登记进活会话表的外部 claude 查不出来，
+    /// 这时表里没有它，结论是通过；接受。
     static func checkDeletable(_ target: AgentSessionKey, known: [AgentProcessIdentity: AgentSessionKey],
                                probe: DeletionProbe) throws {
-        guard let data = probe.processTable() else {
+        guard let live = probe.liveSessions() else {
             throw SessionDeletion.Failure.unknownOccupancy(nil)
         }
-        func key(_ row: LiveSession) -> AgentSessionKey {
-            AgentSessionKey(agent: .claude, sourceRoot: target.sourceRoot, nativeID: row.sessionID)
+        if let row = live.first(where: { $0.sessionID == target.nativeID }) {
+            throw SessionDeletion.Failure.occupiedProcess(row.pid)
         }
-        var live: [Int32: AgentSessionKey] = [:]
-        // Claude 自己就知道每个活着的进程在跑哪段会话。以前只认 lightty 自己开的 pane，
-        // 用户在别处开着的 claude 一律算「说不清」，于是删除几乎每次都要弹一次警告。
-        let registry = probe.liveSessions()
-        for row in registry ?? [] { live[row.pid] = key(row) }
         // PID reuse must never inherit the previous process's session identity.
-        // 自己的 pane 后合并：这份身份是核对过进程标识的，比问来的更可信。
-        for (identity, key) in known where probe.identity(identity.pid) == identity {
-            live[identity.pid] = key
+        // Native IDs alone are not enough: custom configuration roots are independent.
+        for (identity, key) in known
+        where key == target && AgentProcessIdentity.read(identity.pid) == identity {
+            throw SessionDeletion.Failure.occupiedProcess(identity.pid)
         }
-        let unknown = try unidentifiedProcesses(data, target: target, known: live)
-        guard let last = unknown.last else { return }
-        guard registry != nil else { throw SessionDeletion.Failure.unknownOccupancy(last) }
-
-        // 登记窗口：先记下每个身份不明进程的内核身份，等完核对没换人，才认它后来的登记。
-        let now = probe.now()
-        var young: [(pid: Int32, identity: AgentProcessIdentity)] = []
-        var old: Int32?
-        for pid in unknown {
-            guard let identity = probe.identity(pid),
-                  now.timeIntervalSince(identity.startDate) < registrationWindow else { old = pid; continue }
-            young.append((pid, identity))
-        }
-        guard !young.isEmpty else { throw SessionDeletion.Failure.unknownOccupancy(old ?? last) }
-        probe.wait(registrationWait)
-        guard let second = probe.liveSessions() else { throw SessionDeletion.Failure.unknownOccupancy(last) }
-        let registered = Dictionary(second.map { ($0.pid, key($0)) }, uniquingKeysWith: { first, _ in first })
-        var stillUnknown = old
-        for (pid, identity) in young {
-            guard let key = registered[pid] else { stillUnknown = stillUnknown ?? pid; continue }
-            // 登记的正是目标就是正面证据，哪怕 PID 刚被复用也有 claude 在跑它，先于换人判断。
-            if key == target { throw SessionDeletion.Failure.occupiedProcess(pid) }
-            if probe.identity(pid) != identity { stillUnknown = stillUnknown ?? pid }
-        }
-        if let stillUnknown { throw SessionDeletion.Failure.unknownOccupancy(stillUnknown) }
-    }
-
-    static func inspectProcesses(_ data: Data, target: AgentSessionKey,
-                                 known: [Int32: AgentSessionKey]) throws {
-        if let unknown = try unidentifiedProcesses(data, target: target, known: known).last {
-            throw SessionDeletion.Failure.unknownOccupancy(unknown)
-        }
-    }
-
-    /// 按进程表顺序返回身份不明的 claude 进程；已知在跑目标会话、或进程表认不出时直接抛。
-    private static func unidentifiedProcesses(_ data: Data, target: AgentSessionKey,
-                                              known: [Int32: AgentSessionKey]) throws -> [Int32] {
-        guard !data.isEmpty else { throw SessionDeletion.Failure.unknownOccupancy(nil) }
-        var unknown: [Int32] = []
-        let command = SessionAgent.claude.executableName
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-            let fields = line.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
-            guard fields.count == 2, let pid = Int32(fields[0]) else {
-                throw SessionDeletion.Failure.unknownOccupancy(nil)
-            }
-            let name = fields[1].trimmingCharacters(in: .whitespaces)
-            guard name == command || name.hasSuffix("/" + command) else { continue }
-            guard let key = known[pid] else { unknown.append(pid); continue }
-            // Native IDs alone are not enough: custom configuration roots are independent.
-            if key == target { throw SessionDeletion.Failure.occupiedProcess(pid) }
-        }
-        return unknown
-    }
-}
-
-private extension AgentProcessIdentity {
-    /// 内核记下的进程启动时刻。
-    var startDate: Date {
-        Date(timeIntervalSince1970: TimeInterval(startedSeconds) + TimeInterval(startedMicroseconds) / 1_000_000)
     }
 }

@@ -11,7 +11,7 @@ final class PaneHeaderWidthTests: XCTestCase {
 
     override func setUp() {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
     }
@@ -22,6 +22,7 @@ final class PaneHeaderWidthTests: XCTestCase {
         view.subviews.flatMap { [$0] + descendants($0) }
     }
 
+    /// 长标题在任何宽度下都被 pane 约束：标题截断而不是摊开，胶囊不溢出。
     func testANarrowPaneTruncatesTheTitleInsteadOfOverflowing() {
         let header = PaneHeaderView()
         header.title = String(repeating: "很长的标题", count: 40)
@@ -32,20 +33,11 @@ final class PaneHeaderWidthTests: XCTestCase {
         let label = nameLabel!
         XCTAssertLessThan(label.frame.width, label.intrinsicContentSize.width,
                           "窄 pane 里标题要截断，而不是按固有宽度摊开")
-        XCTAssertLessThanOrEqual(header.capsuleFrame.maxX, header.bounds.width,
-                                 "胶囊不该溢出 pane")
-    }
-
-    func testCapsuleStaysWithinItsShareOfThePane() {
-        let header = PaneHeaderView()
-        header.title = String(repeating: "长标题", count: 30)
-        for width in [200.0, 400.0, 900.0] as [CGFloat] {
+        for width in [200.0, 260.0, 400.0, 900.0] as [CGFloat] {
             header.frame = NSRect(x: 0, y: 0, width: width, height: PaneHeaderView.height)
             header.layoutSubtreeIfNeeded()
-            XCTAssertLessThanOrEqual(
-                header.capsuleFrame.width,
-                width * PaneHeaderView.capsuleWidthRatio + 0.5,
-                "\(width)pt 宽的 pane 里胶囊越界了")
+            XCTAssertLessThanOrEqual(header.capsuleFrame.maxX, header.bounds.width,
+                                     "\(width)pt 宽的 pane 里胶囊溢出了")
         }
     }
 

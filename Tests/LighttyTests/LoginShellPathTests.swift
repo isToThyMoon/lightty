@@ -38,7 +38,8 @@ final class LoginShellPathTests: XCTestCase {
         XCTAssertEqual(resolved.first, "/fake/bin")
     }
 
-    func testResolveGivesUpOnAHangingShell() throws {
+    /// 两种失败都返回 nil：shell 挂住（超时放弃，不能等 30 秒）、shell 路径不存在。
+    func testResolveReturnsNilWhenTheShellHangsOrIsMissing() throws {
         let shell = try makeFakeShell(
             """
             #!/bin/sh
@@ -47,37 +48,32 @@ final class LoginShellPathTests: XCTestCase {
         let started = Date()
         XCTAssertNil(LoginShellPath.resolve(shell: shell.path, environment: [:], timeout: 0.5))
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
-    }
-
-    func testResolveReturnsNilForMissingShell() {
         XCTAssertNil(LoginShellPath.resolve(shell: "/nonexistent/shell", environment: [:], timeout: 1))
     }
 
-    func testSearchPathIncludesLoginShellDirectoriesAndVersionManagers() {
-        let path = HookInstaller.searchPath()
-        for directory in LoginShellPath.directories {
-            XCTAssertTrue(path.contains(directory), "登录 shell 的 \(directory) 没进查找清单")
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        XCTAssertTrue(path.contains("\(home)/.volta/bin"))
-        XCTAssertTrue(path.contains("\(home)/Library/pnpm"))
-        XCTAssertTrue(path.contains("\(home)/.asdf/shims"))
-    }
+    /// `HookInstaller.searchPath()` 恰好是三段：进程 PATH → 登录 shell 的 PATH → 系统目录，
+    /// 按这个顺序、不重复、没有第四个来源。
+    ///
+    /// 「没有第四个来源」是这条的重点：写死的 homebrew / nvm / volta 目录清单已经删了。
+    /// 它凭空多出来的目录会让设置页说"已检测到"，而 pane 里的登录 shell 根本敲不出那个 CLI。
+    func testSearchPathIsOnlyTheProcessPathTheLoginShellAndSystemDirectories() {
+        let process = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":").map(String.init)
+        let system = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 
-    func testNvmVersionsAreListedNewestFirst() throws {
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: home) }
-        for version in ["v18.20.4", "v22.1.0", "v20.11.1"] {
-            try FileManager.default.createDirectory(
-                at: home.appendingPathComponent(".nvm/versions/node/\(version)/bin"),
-                withIntermediateDirectories: true)
+        let path = HookInstaller.searchPath()
+
+        XCTAssertEqual(path.count, Set(path).count, "PATH 里有重复目录")
+        XCTAssertEqual(Set(path), Set(process + LoginShellPath.directories + system),
+                       "查找清单里有三段之外的目录，或漏了某一段")
+        // 同一个目录出现在多段里时算最靠前的那一段：用户显式给的 PATH 优先，
+        // 登录 shell（版本管理器都在这儿）次之，系统目录兜底
+        func segment(_ directory: String) -> Int {
+            if process.contains(directory) { return 0 }
+            if LoginShellPath.directories.contains(directory) { return 1 }
+            return 2
         }
-        XCTAssertEqual(HookInstaller.nvmBinDirectories(home: home.path), [
-            "\(home.path)/.nvm/versions/node/v22.1.0/bin",
-            "\(home.path)/.nvm/versions/node/v20.11.1/bin",
-            "\(home.path)/.nvm/versions/node/v18.20.4/bin",
-        ])
-        XCTAssertEqual(HookInstaller.nvmBinDirectories(home: home.path + "/missing"), [])
+        XCTAssertEqual(path.map(segment), path.map(segment).sorted(), "三段的顺序乱了：\(path)")
     }
 
     private func makeFakeShell(_ script: String) throws -> URL {

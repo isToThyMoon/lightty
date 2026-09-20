@@ -11,7 +11,7 @@ extension SessionAssociationTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
         let store = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lt-\(UUID().uuidString).sock"))
         #expect(store.start())
@@ -33,21 +33,14 @@ extension SessionAssociationTests {
         json["agent_process"] = ["pid": process.processIdentifier, "startedSeconds": info.pbi_start_tvsec,
                                   "startedMicroseconds": info.pbi_start_tvusec]
         _ = PaneStatusDatagram.send(try JSONSerialization.data(withJSONObject: json), to: store.socketPath.path)
-        let readyDeadline = Date().addingTimeInterval(2)
-        while pane.displayedSessionKey == nil && Date() < readyDeadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        try await awaitUntil("SessionStart binds the pane") { pane.displayedSessionKey != nil }
         #expect(pane.displayedSessionKey == key)
         let encodedSnapshot = try JSONEncoder().encode(pane.snapshot())
         #expect(!String(decoding: encodedSnapshot, as: UTF8.self).contains("agent_process"))
         pane.terminal.commandFinished(at: Date())
         #expect(pane.displayedSessionKey == key, "Shell completion must not detach a live known Agent")
         process.terminate() // Only our fixture; the pane/shell remains alive.
-        let exitDeadline = Date().addingTimeInterval(2)
-        while pane.displayedSessionKey != nil && Date() < exitDeadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(pane.displayedSessionKey == nil)
+        try await awaitUntil("process exit detaches the pane") { pane.displayedSessionKey == nil }
         #expect(!pane.snapshot().agentAlive)
         // A late non-end hook from the exited instance must not resurrect the binding.
         json["ts"] = ISO8601DateFormatter().string(from: Date())
@@ -64,11 +57,7 @@ extension SessionAssociationTests {
         let next = PaneStatus(ts: Date(), state: .idle, agent: agent.rawValue, sessionID: "replacement",
             sourceRoot: root.path, agentProcess: identity, cwd: root.path, event: "SessionStart")
         _ = PaneStatusDatagram(pane: pane.dragIdentifier, status: next).send(to: store.socketPath)
-        let deadline = Date().addingTimeInterval(2)
-        while pane.displayedSessionKey?.nativeID != "replacement" && Date() < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(pane.displayedSessionKey?.nativeID == "replacement")
+        try await awaitUntil("replacement instance binds") { pane.displayedSessionKey?.nativeID == "replacement" }
         json["ts"] = ISO8601DateFormatter().string(from: Date().addingTimeInterval(10))
         _ = PaneStatusDatagram.send(try JSONSerialization.data(withJSONObject: json), to: store.socketPath.path)
         try await Task.sleep(for: .milliseconds(30))
@@ -88,7 +77,7 @@ extension SessionAssociationTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
         let store = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lt-\(UUID().uuidString).sock"))
         #expect(store.start())
@@ -117,11 +106,7 @@ extension SessionAssociationTests {
                 sessionID: "close-\(index)", sourceRoot: root.path, agentProcess: identity, cwd: root.path, event: "SessionStart")
             _ = PaneStatusDatagram(pane: pane.dragIdentifier, status: status).send(to: store.socketPath)
         }
-        let readyDeadline = Date().addingTimeInterval(2)
-        while panes.contains(where: { $0.displayedSessionKey == nil }) && Date() < readyDeadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(panes.allSatisfy { $0.displayedSessionKey != nil })
+        try await awaitUntil("every pane binds") { panes.allSatisfy { $0.displayedSessionKey != nil } }
 
         // 从这里起不再让出主线程：退出事件排在主队列里，只有关闭时的对账能看到它。
         for process in processes { kill(process.processIdentifier, SIGKILL) }

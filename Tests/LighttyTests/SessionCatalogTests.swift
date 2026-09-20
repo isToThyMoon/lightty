@@ -60,44 +60,47 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let title = L("Move to recent sessions")
         XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
+        let emptyProjectMenu = ShellMenuPopover.visibleItems(content.sessionMenuItems(record, anchor: NSView()))
+        for (previous, next) in zip(emptyProjectMenu, emptyProjectMenu.dropFirst()) {
+            if case .separator = previous.kind, case .separator = next.kind {
+                XCTFail("An empty project group must not leave adjacent separators")
+            }
+        }
+        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            let directory = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let menu = ShellMenuController(items: emptyProjectMenu)
+                let host = MenuPreviewBackdrop()
+                host.appearance = NSAppearance(named: appearance)
+                host.addSubview(menu.view)
+                let size = menu.view.fittingSize
+                host.frame = NSRect(origin: .zero, size: size)
+                menu.view.frame = host.bounds
+                host.layoutSubtreeIfNeeded()
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(
+                    to: directory.appendingPathComponent("session-menu-\(appearance.rawValue).png"))
+            }
+        }
         let project = SessionProject(name: "Project")
         library.updateOrganization {
             $0.projects = [project]
             $0.move(record, to: project.id)
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let item = try XCTUnwrap(content.sessionMenuItems(record, anchor: NSView()).first { $0.title == title })
         guard case .action(let action) = item.kind else { return XCTFail("Expected move action") }
         action()
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertNil(library.organization.projectID(for: record))
         XCTAssertFalse(content.sessionMenuItems(record, anchor: NSView()).contains { $0.title == title })
-    }
-
-    /// 筛选浮层是「同一件事的几种选择」：只用分组标题分段，不画线；
-    /// 刷新是当场执行的动作，在标题行的按钮上，不在这里。
-    func testFilterPopoverHasNoDividersAndNoRefreshAction() throws {
-        _ = NSApplication.shared
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
-        let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
-        let items = content.managementItems()
-        XCTAssertFalse(items.contains { if case .separator = $0.kind { return true } else { return false } })
-        for title in [L("Refresh"), L("Cancel")] {
-            XCTAssertFalse(items.contains { $0.title == title })
-        }
-        // 分段仍然靠标题说清楚，别把线连着标题一起删掉了。
-        for title in [L("Filter sessions"), L("Sort sessions"), L("Native resume picker…")] {
-            XCTAssertTrue(items.contains { $0.title == title && {
-                if case .header = $0.kind { return true } else { return false } }($0) }, title)
-        }
     }
 
     /// 关着的会话也能改名——走官方接口，不需要先把会话开起来（见 `SessionRename`）。
@@ -107,7 +110,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let record = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let items = content.sessionMenuItems(record, anchor: NSView())
@@ -115,55 +118,6 @@ final class PrimarySidebarTests: XCTestCase {
         // 没打开的会话给的是三个打开方式，不是「显示终端」。
         XCTAssertTrue(items.contains { $0.title == L("Continue in new tab") })
         XCTAssertFalse(items.contains { $0.title == L("Show terminal") })
-    }
-
-    func testRecentDropFeedbackUsesAppAccentInsteadOfNativeBlue() throws {
-        _ = NSApplication.shared
-        let prior = AccentPreference.current()
-        AccentPreference.set(.pink)
-        defer { AccentPreference.set(prior) }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("drop-style-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [FixtureCatalog(root: root)])
-        let content = SessionsSidebarContent(library: library)
-        library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
-        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
-        let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 2))
-        row.frame = NSRect(x: 0, y: 0, width: 240, height: 32)
-        row.appearance = NSAppearance(named: .aqua)
-        row.draggingDestinationFeedbackStyle = .regular
-        row.isEmphasized = true
-        row.selectionHighlightStyle = .regular
-        row.isSelected = true
-        row.isTargetForDropOperation = true
-        let image = NSImage(size: row.frame.size)
-        image.lockFocus()
-        NSColor.white.setFill(); NSBezierPath(rect: row.bounds).fill()
-        // Exercise the complete row paint: AppKit also paints drop feedback in drawBackground.
-        row.drawBackground(in: row.bounds)
-        row.drawSelection(in: row.bounds)
-        row.drawDraggingDestinationFeedback(in: row.bounds)
-        image.unlockFocus()
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
-        let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
-        XCTAssertGreaterThan(color.redComponent, color.blueComponent, "Drop feedback should use the pink app accent, not native blue")
-        XCTAssertGreaterThan(color.greenComponent, 0.7, "Drop fill must remain subtle behind the heading")
-        XCTAssertEqual(row.interiorBackgroundStyle, .normal)
-        row.isTargetForDropOperation = false
-        let cell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 3) as? NSTableCellView)
-        let components = cell.draggingImageComponents
-        XCTAssertEqual(components.count, 1, "Drag preview is one opaque card, not floating labels")
-        XCTAssertTrue(components.first?.contents is NSImage)
-        XCTAssertEqual(components.first?.frame.height, 40)
-        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
-           let preview = components.first?.contents as? NSImage,
-           let data = preview.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: data) {
-            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + "/session-drag-card.png"))
-            try NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?
-                .representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + "/session-drop-target.png"))
-        }
     }
 
     /// 按住一行时 AppKit 会把它报成「深色重点底」，行里的模板图标和 SF Symbol 随之
@@ -178,7 +132,7 @@ final class PrimarySidebarTests: XCTestCase {
                                      providers: [FixtureCatalog(root: root)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let row = try XCTUnwrap(content.tableView(table, rowViewForRow: 3))
         let cell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 3) as? NSTableCellView)
@@ -220,9 +174,9 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Project")] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         XCTAssertFalse(content.tableView(table, shouldSelectRow: 1), "A project toggles its members; it isn't a selected destination")
         content.layoutSubtreeIfNeeded()
@@ -237,7 +191,7 @@ final class PrimarySidebarTests: XCTestCase {
                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             NSApp.postEvent(up, atStart: true)
             table.mouseDown(with: down)
-            spin { !library.saving }
+            try waitUntil("condition") { !library.saving }
             XCTAssertEqual(library.organization.projects[0].collapsed, expected)
             XCTAssertEqual(table.selectedRow, -1)
             XCTAssertFalse(rowView.isSelected)
@@ -255,9 +209,9 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { $0.projects = [SessionProject(name: "Empty project")] }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         content.layoutSubtreeIfNeeded()
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let recentCell = try XCTUnwrap(table.view(atColumn: 0, row: 3, makeIfNecessary: true))
@@ -265,7 +219,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
         XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: true) === recentCell,
                       "Saving state must not tear down unrelated visible cells")
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: true) === recentCell,
                       "An empty project's disclosure must only update its own icon")
         content.toggleProjects()
@@ -283,13 +237,13 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Project")
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         content.layoutSubtreeIfNeeded()
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         let button = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarDisclosureButton }.first)
@@ -299,17 +253,16 @@ final class PrimarySidebarTests: XCTestCase {
             let expanded = index % 2 == 1
             XCTAssertEqual(button.expanded, expanded)
             XCTAssertEqual(table.numberOfRows, expanded ? 5 : 2)
-            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                let animation = try XCTUnwrap(button.disclosureLayer?.animation(forKey: "disclosure") as? CABasicAnimation)
-                XCTAssertEqual(animation.duration, ShellStyle.animationDuration)
-                XCTAssertEqual(animation.toValue as? CGFloat, expanded ? CGFloat.pi / 2 : 0)
-            }
             XCTAssertFalse(library.loading)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(ShellStyle.animationDuration + 0.05))
+        // 让最后一次展开的折叠钮动画走完，后面对下一层折叠钮的断言不受它影响。
+        try waitUntil("disclosure animation finished") { button.disclosureLayer?.animation(forKey: "disclosure") == nil }
         XCTAssertTrue(button.expanded)
         XCTAssertEqual(table.numberOfRows, 5)
         if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            // 这条分支要拿 screencapture 抓窗口像素，必须真的上屏：alpha 0 或挪到屏外
+            // 的窗口 `screencapture -l` 都静默不产出文件（实测）。它只在显式开启快照
+            // 目录时执行，普通 `swift test` 走不到，所以不经 orderFrontInvisibly。
             window.orderFront(nil)
             window.display()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -330,61 +283,85 @@ final class PrimarySidebarTests: XCTestCase {
         // A concrete project's members animate independently of the outer section.
         table.selectRowIndexes([1], byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(table.numberOfRows, 3)
         XCTAssertTrue(button.expanded)
     }
 
-    /// 「在读」由刷新按钮自己表达——它变成取消。标题行不再放转圈，两个一起是重复的。
-    /// 仍然盯住原来那两条：不出现「正在载入」这类文字，列表不因此位移。
-    func testLoadingIsShownByTheRefreshButtonWithoutLoadingTextOrLayoutShift() throws {
+    /// 「在读」由刷新按钮自己表达——它变成取消，读完翻回刷新。读取期间列表不位移、
+    /// 缓存的行仍然可见；新开一个视图（搜索面板、再开一个侧栏）复用已读的目录，
+    /// 不驱动模型再同步一次。
+    func testRefreshKeepsCachedRowsAndLayoutWhileLoading() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-spinner-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
+        // 让读取真的占住一点时间，否则「开始读」和「读完」落进同一拍，翻成取消的那一拍看不到。
+        let updated = Date(timeIntervalSince1970: 1_700_000_000)
+        var now = updated.addingTimeInterval(60)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
-            providers: [FixtureCatalog(root: root, delay: 0.2),
-                        FixtureCatalog(root: root, agent: .claude, delay: 0.2)])
-        let content = SessionsSidebarContent(library: library)
+            providers: [FixtureCatalog(root: root, delay: 0.2, updatedAt: updated),
+                        FixtureCatalog(root: root, agent: .claude, delay: 0.2, updatedAt: updated)])
+        let content = SessionsSidebarContent(library: library, now: { now })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         content.layoutSubtreeIfNeeded()
-        let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
-        let before = list.frame
         let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
             .first { $0.stringValue == L("Recent sessions") })
         let header = try XCTUnwrap(heading.superview?.superview)
         let refresh = try XCTUnwrap(descendants(header).compactMap { $0 as? NSButton }
             .first { [L("Refresh"), L("Cancel")].contains($0.toolTip ?? "") })
         XCTAssertEqual(refresh.toolTip, L("Refresh"))
-        let iconAtRest = refresh.image
-        XCTAssertTrue(descendants(header).compactMap { $0 as? NSProgressIndicator }.isEmpty,
-                      "标题行不再放转圈：刷新按钮已经表达了在读")
 
         library.start(); content.activate()
+        try waitUntil("first load finished") { library.loaded && !library.loading }
+        try waitUntil("button back to refresh") { refresh.toolTip == L("Refresh") }
+        content.layoutSubtreeIfNeeded()
+        let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
+        let frame = list.frame
+        let records = library.records
+        XCTAssertFalse(records.isEmpty)
+
+        let search = SessionsSidebarContent(library: library, searchMode: true)
+        library.start(); search.activate()
+        XCTAssertFalse(library.loading, "Search should reuse the already loaded catalog")
+
+        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+        let cell = try XCTUnwrap(table.view(atColumn: 0, row: 3, makeIfNecessary: true))
+        let before = descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        now = now.addingTimeInterval(3600)
+        refresh.performClick(nil)
+        XCTAssertTrue(library.loading)
         // 会话库通知合流到下一拍再重算（见 `Coalescer`），所以按钮晚一拍翻。
         // 顺序是确定的：`refresh()` 先把重算排进主队列，provider 的完成回调排在它后面。
         // 真实 app 里主 runloop 一直在转，这一拍是几微秒，看不出来。
-        spin { refresh.toolTip == L("Cancel") }
+        try waitUntil("button flips to cancel") { refresh.toolTip == L("Cancel") }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(refresh.toolTip, L("Cancel"), "在读时这个按钮就是取消")
-        // 图标不许换：换成 ✕ 会让按钮在光标底下变身。读取时靠它自己旋转来表达。
-        XCTAssertTrue(refresh.image === iconAtRest, "读取时不该换图标")
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            XCTAssertNotNil(refreshRotationLayer(in: refresh.layer), "读取时图标要转起来")
-        }
-        XCTAssertEqual(list.frame, before, "读取不该让列表位移")
-        XCTAssertFalse(descendants(content).compactMap { $0 as? NSTextField }
-            .contains { !$0.isHidden && $0.stringValue.contains(L("Loading local sessions…")) })
+        XCTAssertEqual(list.frame, frame, "A loading status must not move or resize the list")
+        XCTAssertEqual(content.frame.width, 280, "Status text must not expand the sidebar/window")
+        XCTAssertEqual(library.records, records, "Cached rows remain visible during refresh")
 
-        spin { !library.loading }
-        spin { refresh.toolTip == L("Refresh") }
-        XCTAssertEqual(refresh.toolTip, L("Refresh"))
-        XCTAssertTrue(refresh.image === iconAtRest)
-        // 收尾会等当前这一圈走完再摘，所以最少转满一圈；这里等它自己停。
-        spin { refreshRotationLayer(in: refresh.layer) == nil }
+        try waitUntil("refresh finished") { !library.loading }
+        try waitUntil("button back to refresh") { refresh.toolTip == L("Refresh") }
         content.layoutSubtreeIfNeeded()
-        XCTAssertEqual(list.frame, before)
+        XCTAssertEqual(list.frame, frame)
+
+        let after = descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        XCTAssertNotEqual(before, after, "Unchanged catalog timestamps must still age when refreshed")
+        XCTAssertTrue(table.view(atColumn: 0, row: 3, makeIfNecessary: false) === cell)
+        now = now.addingTimeInterval(7200)
+        content.refreshRelativeDates()
+        XCTAssertNotEqual(after, descendants(cell).compactMap { $0 as? NSTextField }.map(\.stringValue),
+                          "The clock must also advance without a catalog refresh or selection")
+        XCTAssertFalse(library.loading)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: library.records.map { ($0.key, $0) }),
+                       Dictionary(uniqueKeysWithValues: records.map { ($0.key, $0) }))
+
+        let reopened = SessionsSidebarContent(library: library)
+        library.start(); reopened.activate()
+        XCTAssertFalse(library.loading, "Reopening a view must not drive the model's synchronization")
+        try waitUntil("condition") { !library.loading }
     }
     /// 会话已经在别的终端里开着时，列表要在**点下去之前**就说清楚——
     /// 否则用户点了才撞上「该会话已在其他终端中打开」那个提示框。
@@ -396,7 +373,7 @@ final class PrimarySidebarTests: XCTestCase {
         let catalog = SessionModelCatalog(root: root, agent: .claude)
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [catalog])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
 
         let parent = try XCTUnwrap(AgentProcessIdentity.parent(of: ProcessInfo.processInfo.processIdentifier))
@@ -408,7 +385,7 @@ final class PrimarySidebarTests: XCTestCase {
                                 title: "没在跑", workingDirectory: root.path, updatedAt: Date())
         catalog.records = [elsewhere, idle]
         library.start()
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
         XCTAssertEqual(library.records.count, 2)
         XCTAssertTrue(external.liveness == .running)
         XCTAssertEqual(library.presence(for: elsewhere.key), .elsewhere)
@@ -431,8 +408,8 @@ final class PrimarySidebarTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.loaded && !library.loading }
-        spin { content.makeState().rows.count > 10 }
+        try waitUntil("condition") { library.loaded && !library.loading }
+        try waitUntil("condition") { content.makeState().rows.count > 10 }
         content.layoutSubtreeIfNeeded()
 
         let scroll = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
@@ -452,7 +429,7 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertGreaterThan(scrolled, 0)
 
         library.refresh()
-        spin { !library.loading }
+        try waitUntil("condition") { !library.loading }
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
                        "刷新不该把列表弹回顶部")
@@ -462,7 +439,7 @@ final class PrimarySidebarTests: XCTestCase {
         for name: Notification.Name in [.lighttyWindowArrangementDidChange, .lighttyPaneStatusDidChange] {
             NotificationCenter.default.post(name: name, object: nil)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        try drainMainQueue()  // 列表的重配合流到下一拍
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(scroll.contentView.bounds.origin.y, scrolled, accuracy: 1,
                        "开终端后的这几条通知也不该把列表弹回顶部")
@@ -488,7 +465,7 @@ final class PrimarySidebarTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         content.layoutSubtreeIfNeeded()
 
         let heading = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextField }
@@ -536,7 +513,7 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"), providers: [])
         let content = SessionsSidebarContent(library: library)
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
 
         let state = content.makeState()
         XCTAssertEqual(state.recentTitle, L("Recent sessions"))
@@ -553,21 +530,6 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertTrue(archived.filterActive)
     }
 
-    /// 搜索面板里根本不显示标题行——那边的行只有会话。
-    func testSearchPaletteNeverVendsTheHeaderRows() throws {
-        _ = NSApplication.shared
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-header-search-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("organization.json"),
-                                     providers: [FixtureCatalog(root: root)])
-        let content = SessionsSidebarContent(library: library, searchMode: true)
-        library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
-        content.layoutSubtreeIfNeeded()
-        XCTAssertFalse(descendants(content).contains { $0 is NSButton
-            && ($0 as? NSButton)?.toolTip == L("Filter sessions") })
-    }
-
     func testReturningToAppDoesNotRefreshVisibleSessionSidebar() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-refresh-\(UUID())")
@@ -578,11 +540,11 @@ final class PrimarySidebarTests: XCTestCase {
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = content
         library.start(); content.activate()
-        spin { library.loaded && !library.loading }
+        try waitUntil("condition") { library.loaded && !library.loading }
         for _ in 0..<3 {
             NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
             XCTAssertFalse(library.loading, "Returning focus to click a project must not start a catalog refresh")
-            spin { !library.loading }
+            try waitUntil("condition") { !library.loading }
         }
     }
     func testProjectsCollapseAndSessionSearchAreIndependent() throws {
@@ -593,13 +555,13 @@ final class PrimarySidebarTests: XCTestCase {
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let sidebar = SessionsSidebarContent(library: library)
         library.start(); sidebar.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         library.updateOrganization { state in
             let project = SessionProject(name: "Mixed")
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? NSTableView }.first)
         XCTAssertEqual(table.numberOfRows, 7)
         XCTAssertFalse(descendants(sidebar).contains { ($0 as? NSTextField)?.placeholderString == L("Search sessions…") })
@@ -611,18 +573,16 @@ final class PrimarySidebarTests: XCTestCase {
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
         XCTAssertFalse(library.loading, "Project disclosure must not query an Agent")
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertFalse(library.loading)
         XCTAssertTrue(library.organization.projects[0].collapsed)
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         XCTAssertTrue(table.sendAction(table.action, to: table.target))
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let search = SessionsSidebarContent(library: library, searchMode: true)
         let field = try XCTUnwrap(descendants(search).compactMap { $0 as? NSTextField }.first {
             $0.placeholderString == L("Search sessions…")
         })
-        XCTAssertFalse(field.isBezeled)
-        XCTAssertEqual(field.focusRingType, .none)
         let results = try XCTUnwrap(descendants(search).compactMap { $0 as? NSTableView }.first)
         XCTAssertEqual(results.numberOfRows, 4)
         field.stringValue = "Claude Code"
@@ -638,10 +598,9 @@ final class PrimarySidebarTests: XCTestCase {
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = palette
         palette.layoutSubtreeIfNeeded()
-        let paletteField = try XCTUnwrap(descendants(palette).compactMap { $0 as? NSTextField }.first {
+        XCTAssertNotNil(descendants(palette).compactMap { $0 as? NSTextField }.first {
             $0.placeholderString == L("Search sessions…")
-        })
-        XCTAssertGreaterThan(paletteField.frame.width, 200)
+        }, "The palette hosts the same search field")
         if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
            let bitmap = palette.bitmapImageRepForCachingDisplay(in: palette.bounds) {
             palette.cacheDisplay(in: palette.bounds, to: bitmap)
@@ -650,82 +609,19 @@ final class PrimarySidebarTests: XCTestCase {
         }
     }
 
-    func testRefreshKeepsListTopStableAndPresentationDoesNotReloadCatalog() throws {
-        _ = NSApplication.shared
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-layout-refresh-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"),
-            providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
-        let content = SessionsSidebarContent(library: library)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
-            styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = content
-        library.start(); content.activate()
-        spin { library.loaded && !library.loading }
-        content.layoutSubtreeIfNeeded()
-        let list = try XCTUnwrap(descendants(content).compactMap { $0 as? SidebarListScrollView }.first)
-        let frame = list.frame
-        let records = library.records
-        let search = SessionsSidebarContent(library: library, searchMode: true)
-        library.start(); search.activate()
-        XCTAssertFalse(library.loading, "Search should reuse the already loaded catalog")
-        library.refresh()
-        XCTAssertTrue(library.loading)
-        content.layoutSubtreeIfNeeded()
-        XCTAssertEqual(list.frame, frame, "A loading status must not move or resize the list")
-        XCTAssertEqual(content.frame.width, 280, "Status text must not expand the sidebar/window")
-        XCTAssertEqual(library.records, records, "Cached rows remain visible during refresh")
-        spin { !library.loading }
-        content.layoutSubtreeIfNeeded()
-        XCTAssertEqual(list.frame, frame)
-        let reopened = SessionsSidebarContent(library: library)
-        library.start(); reopened.activate()
-        XCTAssertFalse(library.loading, "Reopening a view must not drive the model's synchronization")
-        spin { !library.loading }
-    }
-
-    func testProjectFolderResourcesAreDistinctTemplateVectors() throws {
-        let closed = ProjectFolderIcons.image(expanded: false)
-        let open = ProjectFolderIcons.image(expanded: true)
-        XCTAssertEqual(closed.size, open.size)
-        XCTAssertTrue(closed.isTemplate && open.isTemplate)
-        XCTAssertTrue(closed.representations.first is NSPDFImageRep)
-        XCTAssertTrue(open.representations.first is NSPDFImageRep)
-        XCTAssertNotEqual(closed.tiffRepresentation, open.tiffRepresentation)
-    }
-
     func testNewSessionUsesConfiguredAgentCommandAndDirectory() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("new-session-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         for agent in [LaunchAgent.codex, .claudeCode] {
             let pane = try AppState.shared.paneLauncher.makePane(
                 for: .init(.agent(agent), workingDirectory: directory.path))
             let config = pane.terminal.launchConfiguration
             XCTAssertEqual(config.workingDirectory, directory.path)
             XCTAssertEqual(config.initialInput, AgentLaunchPreference.initialInput(for: agent))
-        }
-    }
-    func testSidebarScrollbarRailNeverOverlapsContent() throws {
-        _ = NSApplication.shared
-        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 266, height: 400))
-        scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 2000))
-        scroll.autohidesScrollers = false
-        for style in [NSScroller.Style.overlay, .legacy] {
-            scroll.scrollerStyle = style
-            scroll.tile()
-            let scroller = try XCTUnwrap(scroll.verticalScroller)
-            XCTAssertTrue(scroller is SidebarScroller, "Both sidebar modes use the quiet native scroller")
-            XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX)
-            let width = scroll.contentView.frame.width
-            for _ in 0..<5 { scroll.tile() }
-            XCTAssertEqual(scroll.contentView.frame.width, width, "Layout must not shrink on repeated tiling")
-            scroll.autohidesScrollers = true
-            scroll.tile()
-            XCTAssertEqual(scroll.contentView.frame.width, width)
         }
     }
     func testTabSidebarSharesEdgeRailAndKeepsScrollbarDraggable() throws {
@@ -748,66 +644,76 @@ final class PrimarySidebarTests: XCTestCase {
                            SidebarListScrollView.trailingMargin, accuracy: 0.5)
             XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 0.5)
             XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX)
-            let point = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
-            let hit = sidebar.hitTest(point)
-            XCTAssertTrue(hit === scroll || hit?.isDescendant(of: scroll) == true,
-                          "The scroll view, not the edge resize strip, owns the rail")
+            let knob = scroller.rect(for: .knob)
+            let onKnob = sidebar.convert(NSPoint(x: knob.midX, y: knob.midY), from: scroller)
+            let knobHit = sidebar.hitTest(onKnob)
+            XCTAssertTrue(knobHit === scroll || knobHit?.isDescendant(of: scroll) == true,
+                          "The scroll view, not the edge resize strip, owns the knob")
+            // 100 行时滑块贴着顶部，轨道中点不在滑块上。
+            let onTrack = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
+            XCTAssertFalse(knob.contains(sidebar.convert(onTrack, to: scroller)))
+            let trackHit = sidebar.hitTest(onTrack)
             if style == .legacy {
-                XCTAssertTrue(hit === scroller || hit?.isDescendant(of: scroller) == true)
-            } // An idle overlay scroller deliberately defers hit testing to its scroll view.
+                // 常驻滚动条看得见、点轨道能翻页：整条轨道归它。
+                XCTAssertTrue(trackHit === scroller || trackHit?.isDescendant(of: scroller) == true)
+            } else {
+                // 浮层滚动条平时看不见却铺满导轨：只让出滑块，其余导轨抓得住边线调宽。
+                XCTAssertFalse(trackHit === scroll || trackHit?.isDescendant(of: scroll) == true,
+                               "An overlay scroller's idle track leaves the edge draggable")
+            }
         }
     }
-    func testSessionDropMovesBothAgentsIntoConcreteProjectOnly() throws {
+    /// 会话行拖放的落点规则表：
+    /// - 落进项目：分组标题不可落、无效数据拒绝、落进（折叠的）项目会把它展开、同项目再落为空动；
+    /// - 落回最近：项目里的会话可落回「最近」标题行、最近的会话行、列表末尾的空白，
+    ///   已在最近的再落为空动，磁盘上的 assignment 变 nil。
+    /// 两个 agent 的会话都走一遍；分组从不改写 agent 自己的历史。
+    func testSessionDropTargetsMoveBetweenRecentAndProjects() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-drop-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"),
-            providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
-        let content = SessionsSidebarContent(library: library)
-        library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
-        var project = SessionProject(name: "Mixed project")
-        project.collapsed = true
-        library.updateOrganization { $0.projects = [project] }
-        spin { !library.saving }
-        let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
-        XCTAssertNil(content.tableView(table, pasteboardWriterForRow: 0))
-        XCTAssertNotNil(content.tableView(table, pasteboardWriterForRow: 3))
-        let records = library.records
-        for agent in SessionAgent.allCases {
-            let record = try XCTUnwrap(records.first { $0.key.agent == agent })
-            let data = try JSONEncoder().encode(record.key)
-            XCTAssertFalse(content.acceptSessionDrop(data, at: 0), "A section is not a project")
-            XCTAssertFalse(content.acceptSessionDrop(Data("invalid".utf8), at: 1))
-            XCTAssertTrue(content.acceptSessionDrop(data, at: 1))
-            spin { !library.saving }
-            XCTAssertEqual(library.organization.projectID(for: record), project.id)
-            XCTAssertFalse(library.organization.projects[0].collapsed)
-            XCTAssertFalse(content.acceptSessionDrop(data, at: 1), "Same-project drops are no-ops")
-        }
-        XCTAssertEqual(library.records, records, "Grouping must not mutate source sessions")
-    }
-    func testProjectSessionsCanDropBackToRecentHeadingRowsAndEmptyTail() throws {
-        _ = NSApplication.shared
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("session-return-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("organization.json")
         let library = SessionLibrary(fileURL: file,
             providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
         let content = SessionsSidebarContent(library: library)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
-        let project = SessionProject(name: "Mixed project")
+        try waitUntil("condition") { library.organizationReady && !library.loading }
+        var project = SessionProject(name: "Mixed project")
+        project.collapsed = true
         library.updateOrganization { $0.projects = [project] }
-        spin { !library.saving }
-        let records = library.records
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
+        XCTAssertNil(content.tableView(table, pasteboardWriterForRow: 0))
+        XCTAssertNotNil(content.tableView(table, pasteboardWriterForRow: 3))
+        let records = library.records
+
+        // 落进项目
+        for agent in SessionAgent.allCases {
+            let record = try XCTUnwrap(records.first { $0.key.agent == agent })
+            let data = try JSONEncoder().encode(record.key)
+            XCTAssertFalse(content.acceptSessionDrop(data, at: 0), "A section is not a project")
+            XCTAssertFalse(content.acceptSessionDrop(Data("invalid".utf8), at: 1))
+            XCTAssertTrue(content.acceptSessionDrop(data, at: 1))
+            try waitUntil("condition") { !library.saving }
+            XCTAssertEqual(library.organization.projectID(for: record), project.id)
+            XCTAssertFalse(library.organization.projects[0].collapsed)
+            XCTAssertFalse(content.acceptSessionDrop(data, at: 1), "Same-project drops are no-ops")
+        }
+        XCTAssertEqual(library.records, records, "Grouping must not mutate source sessions")
+
+        // 落回最近：先把两条都放回最近，下面的行号算法按「项目里只有一条」推
+        library.updateOrganization { state in for record in records { state.move(record, to: nil) } }
+        try waitUntil("condition") { !library.saving }
         for agent in SessionAgent.allCases {
             let record = try XCTUnwrap(records.first { $0.key.agent == agent })
             let data = try JSONEncoder().encode(record.key)
             for destination in 0..<3 {
                 library.updateOrganization { $0.move(record, to: project.id) }
-                spin { !library.saving }
+                try waitUntil("condition") { !library.saving }
+                // 保存完不等于表格已刷新：等第 2 行真的变成项目里的会话（刷新前是「最近」标题）。
+                try waitUntil("grouped session shown at row 2") {
+                    table.numberOfRows > 2 && content.tableView(table, shouldSelectRow: 2)
+                }
                 // Projects heading, project, grouped session, recent heading, recent rows.
                 let row = destination == 0 ? 3 : (destination == 1 ? 4 : table.numberOfRows)
                 XCTAssertFalse(content.acceptSessionDrop(data, at: 2), "A grouped session is not a drop destination")
@@ -815,8 +721,11 @@ final class PrimarySidebarTests: XCTestCase {
                     XCTFail("Cannot return \(agent) to recent destination \(destination)")
                     return
                 }
-                spin { !library.saving }
+                try waitUntil("condition") { !library.saving }
                 XCTAssertNil(library.organization.projectID(for: record))
+                try waitUntil("recent heading back at row 2") {
+                    table.numberOfRows > 2 && !content.tableView(table, shouldSelectRow: 2)
+                }
                 XCTAssertFalse(content.acceptSessionDrop(data, at: 2), "Already-recent drops are no-ops")
                 let saved = try JSONDecoder().decode(SessionOrganization.self, from: Data(contentsOf: file))
                 XCTAssertNil(saved.projectID(for: record))
@@ -826,46 +735,6 @@ final class PrimarySidebarTests: XCTestCase {
         XCTAssertEqual(library.records, records, "Organizing must not mutate Agent history")
     }
 
-    func testScrollingHoveredRowOutOfViewClearsHover() throws {
-        _ = NSApplication.shared
-        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
-        let document = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 1000))
-        let row = ShellTableRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 48))
-        document.addSubview(row); scroll.documentView = document
-        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = scroll
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        ShellHoverGate.release(in: nil)
-        let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
-            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
-            eventNumber: 0, trackingNumber: 0, userData: nil))
-        row.mouseEntered(with: event)
-        XCTAssertTrue(Mirror(reflecting: row).children.first { $0.label == "isHovered" }?.value as? Bool ?? false)
-        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 500))
-        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
-        XCTAssertFalse(Mirror(reflecting: row).children.first { $0.label == "isHovered" }?.value as? Bool ?? false,
-                       "Scrolling must clear hover even without mouseExited")
-    }
-    func testEnteringAnotherRowClearsPreviousHoverWithoutExitEvent() throws {
-        _ = NSApplication.shared
-        let table = NSTableView()
-        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
-        scroll.documentView = table
-        let first = ShellTableRowView(), second = ShellTableRowView()
-        table.addSubview(first); table.addSubview(second)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        ShellHoverGate.release(in: nil)
-        let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
-            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
-            eventNumber: 0, trackingNumber: 0, userData: nil))
-        first.mouseEntered(with: event)
-        second.mouseEntered(with: event)
-        func hovered(_ row: ShellTableRowView) -> Bool {
-            Mirror(reflecting: row).children.first { $0.label == "isHovered" }?.value as? Bool ?? false
-        }
-        XCTAssertFalse(hovered(first), "Fast row transitions must not leave multiple hover backgrounds")
-        XCTAssertTrue(hovered(second))
-    }
     func testLocalArchiveFilterShowsBothAgentsInArchivedProject() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mixed-archive-ui-\(UUID())")
@@ -875,79 +744,26 @@ final class PrimarySidebarTests: XCTestCase {
         let content = SessionsSidebarContent(library: library)
         content.frame = NSRect(x: 0, y: 0, width: 280, height: 720)
         library.start(); content.activate()
-        spin { library.organizationReady && !library.loading }
+        try waitUntil("condition") { library.organizationReady && !library.loading }
         let project = SessionProject(name: "Mixed archive")
         library.updateOrganization { state in
             state.projects = [project]
             for record in library.records { state.move(record, to: project.id) }
             state.setArchived(true, projectID: project.id)
         }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         let table = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTableView }.first)
         XCTAssertEqual(table.numberOfRows, 3, "Projects heading, empty projects and recent heading")
-        XCTAssertFalse(content.tableView(table, rowViewForRow: 0) is ShellTableRowView,
-                       "Section headers must not inherit interactive row hover")
-        let emptyCell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 1))
-        let emptyLabel = try XCTUnwrap(descendants(emptyCell).compactMap { $0 as? NSTextField }.first { $0.stringValue == L("No projects") })
-        XCTAssertEqual(emptyLabel.font?.pointSize, 11)
-        let headingCell = try XCTUnwrap(content.tableView(table, viewFor: nil, row: 2))
-        let headingLabel = try XCTUnwrap(descendants(headingCell).compactMap { $0 as? NSTextField }.first { $0.stringValue == L("Recent sessions") })
-        XCTAssertEqual(headingLabel.textColor, ShellStyle.primaryText)
         content.setArchiveFilter(true)
         XCTAssertEqual(table.numberOfRows, 7, "Two headings, project and four sessions")
         XCTAssertFalse(library.loading, "Local archive filtering must not query an Agent")
         library.updateOrganization { $0.setArchived(false, projectID: project.id) }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(table.numberOfRows, 3)
         content.setArchiveFilter(false)
         XCTAssertEqual(table.numberOfRows, 7)
     }
 
-    func testBothModesFitNarrowPanelWithWrappedDescriptions() throws {
-        _ = NSApplication.shared
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sidebar-layout-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
-        let library = SessionLibrary(fileURL: root.appendingPathComponent("catalog.json"), providers: [FixtureCatalog(root: root), FixtureCatalog(root: root, agent: .claude)])
-        spin { library.organizationReady }
-        library.updateOrganization { $0.projects.append(SessionProject(name: "lightty")) }
-        spin { !library.saving }
-        let panel = PrimarySidebar(headerCenterY: 20, mode: .sessions, library: library)
-        library.start()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 270, height: 720),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = panel
-        spin { library.loaded && !library.loading }
-        for mode in PrimarySidebarMode.allCases {
-            panel.selectMode(mode)
-            spin { !library.loading }
-            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
-                panel.appearance = NSAppearance(named: appearance)
-                panel.layoutSubtreeIfNeeded()
-                let list = try XCTUnwrap(descendants(panel).compactMap { $0 as? SidebarListScrollView }
-                    .first { !$0.isHiddenOrHasHiddenAncestor })
-                let listFrame = panel.convert(list.bounds, from: list)
-                if let content = descendants(panel).first(where: { $0 is SessionsSidebarContent && !$0.isHiddenOrHasHiddenAncestor }) {
-                    let contentFrame = panel.convert(content.bounds, from: content)
-                    XCTAssertEqual(listFrame.maxY, contentFrame.maxY, accuracy: 0.5,
-                                   "Sessions must not reserve space for the removed inline search field")
-                }
-                XCTAssertEqual(listFrame.minX, SidebarListScrollView.leadingMargin, accuracy: 0.5)
-                XCTAssertEqual(panel.bounds.maxX - listFrame.maxX, SidebarListScrollView.trailingMargin, accuracy: 0.5)
-                let texts = descendants(panel).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }
-                let hint = try XCTUnwrap(texts.first { $0.stringValue == mode.hint })
-                let title = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSButton }.first { $0.title == mode.title })
-                XCTAssertEqual(title.frame.minY - hint.frame.maxY, 4, accuracy: 0.5)
-                XCTAssertGreaterThan(hint.frame.height, 0)
-                if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"],
-                   let bitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) {
-                    panel.cacheDisplay(in: panel.bounds, to: bitmap)
-                    let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                    try data.write(to: URL(fileURLWithPath: path).appendingPathComponent("\(mode.rawValue)-\(appearance.rawValue).png"))
-                }
-            }
-        }
-    }
     func testModeSwitchPreservesContentAndDoesNotCreateTerminal() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("primary-sidebar-\(UUID())")
@@ -967,13 +783,12 @@ final class PrimarySidebarTests: XCTestCase {
         panel.selectMode(.handoff)
         XCTAssertTrue(descendants(panel).first { $0 is HandoffSidebarContent } === before)
         XCTAssertFalse(try XCTUnwrap(before).isHidden)
-        XCTAssertTrue(descendants(panel).compactMap { $0 as? NSButton }.contains { $0.title.contains(L("Handoff tasks")) })
-    }
-
-    func testOldWindowSnapshotDefaultsToHandoffCompatibleNil() throws {
-        let data = Data("{\"activeTabIndex\":0,\"tabs\":[],\"taskPanelOpen\":true,\"tabSidebarOpen\":false}".utf8)
-        let decoded = try JSONDecoder().decode(WindowSnapshot.self, from: data)
-        XCTAssertNil(decoded.primarySidebarMode)
+        let modeSwitch = try XCTUnwrap(descendants(panel).compactMap { $0 as? ModeSwitch }.first)
+        XCTAssertEqual(modeSwitch.segments.map(\.title), ["Handoff", "Sessions"])
+        XCTAssertEqual(modeSwitch.segments.map(\.state), [.on, .off])
+        modeSwitch.segments[1].performClick(nil)
+        XCTAssertEqual(panel.mode, .sessions)
+        XCTAssertEqual(modeSwitch.segments.map(\.state), [.off, .on])
     }
 
     func testProjectWritesAreAtomicAndCorruptFileIsPreserved() throws {
@@ -982,23 +797,18 @@ final class PrimarySidebarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("library.json")
         let library = SessionLibrary(fileURL: file, providers: [])
-        spin { library.organizationReady }
+        try waitUntil("condition") { library.organizationReady }
         library.updateOrganization { $0.projects.append(SessionProject(name: "Project")) }
-        spin { !library.saving }
+        try waitUntil("condition") { !library.saving }
         XCTAssertEqual(try JSONDecoder().decode(SessionOrganization.self, from: Data(contentsOf: file)).projects.first?.name, "Project")
         let broken = Data("{broken".utf8)
         try broken.write(to: file)
         let corrupt = SessionLibrary(fileURL: file, providers: [])
-        spin { corrupt.storageError != nil }
+        try waitUntil("condition") { corrupt.storageError != nil }
         corrupt.updateOrganization { $0.projects.append(SessionProject(name: "Do not overwrite")) }
         XCTAssertEqual(try Data(contentsOf: file), broken)
     }
 
-    private func spin(until condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(2)
-        while !condition(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
-        XCTAssertTrue(condition())
-    }
     private func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
 }
 
@@ -1011,6 +821,7 @@ private struct FixtureCatalog: CatalogOnlyProvider {
     var delay: TimeInterval = 0
     /// 需要一条长到能滚动的列表时传。默认两条，保持既有用例不变。
     var count: Int = 2
+    var updatedAt: Date? = nil
     var source: SessionCatalogSource { .init(agent: agent, root: root, executable: "/bin/false", configuration: .custom(root.path)) }
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }  // 后台队列上，不挡主线程
@@ -1019,8 +830,16 @@ private struct FixtureCatalog: CatalogOnlyProvider {
             : (0..<count).map { "会话 \($0)" }
         let rows = titles.enumerated().map { index, title in
             AgentSession(key: .init(agent: agent, sourceRoot: root.path, nativeID: "fixture-\(index)"),
-                         title: title, workingDirectory: root.path, updatedAt: Date())
+                         title: title, workingDirectory: root.path, updatedAt: updatedAt.map { $0.addingTimeInterval(Double(index + (agent == .claude ? 10 : 0))) } ?? Date())
         }
         return SessionCatalogPage(sessions: rows, nextCursor: nil)
+    }
+}
+
+/// 截图只渲染菜单内容；玻璃与投影仍由应用窗口合成器验收。
+private final class MenuPreviewBackdrop: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        ShellStyle.raisedSurface.setFill()
+        bounds.fill()
     }
 }

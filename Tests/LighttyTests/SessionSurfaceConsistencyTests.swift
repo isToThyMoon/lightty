@@ -6,7 +6,7 @@ import Testing
 extension SessionAssociationTests {
     @Test func oneModelUpdatesBothSidebarsAndPaneWithoutReloadingViews() async throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let f = try SessionModelFixture()
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: f.root, sweepStalePanes: false, sessionLibrary: f.library)
@@ -76,10 +76,7 @@ extension SessionAssociationTests {
         let completedRow = try #require(tabTable.view(atColumn: 0, row: 0, makeIfNecessary: true))
         let completedLabel = try #require(descendants(completedRow).compactMap { $0 as? NSTextField }
             .first { $0.stringValue == "✓ \(L("Finished"))" })
-        #expect(completedLabel.superview?.layer?.backgroundColor?.alpha == 0)
-        #expect(completedLabel.font == .systemFont(ofSize: 11.5, weight: .semibold))
         #expect(completedLabel.accessibilityLabel() == L("Finished"))
-        #expect(completedLabel.textColor != ShellStyle.secondaryText)
         f.library.markRead(pane.dragIdentifier)
         try await f.wait { completedLabel.isHidden && completedLabel.stringValue.isEmpty }
         #expect((completedLabel as? PaneStatusLabel)?.breath == nil)

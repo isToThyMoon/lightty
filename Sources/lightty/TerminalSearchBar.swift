@@ -78,6 +78,7 @@ final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
         button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.contentTintColor = ShellStyle.secondaryText
+        HoverCursor.installPointingHand(on: button)
         return button
     }
 

@@ -334,7 +334,7 @@ final class TaskBindingsTests: XCTestCase {
     }
 
     /// 真实 adapter：Agent 按交接协议「写点开头的临时文件，再 mv 到任务文件」，
-    /// 经 `TaskFolderWatcher` 防抖后到达一次。
+    /// 经 `PathWatcher` 防抖后到达一次。
     func testTheRealWatcherTurnsATempFileAndMoveIntoOneTaskListChange() throws {
         let watched = TaskBindings(store: store, pointers: pointers, notificationCenter: center)
         var arrivals = 0

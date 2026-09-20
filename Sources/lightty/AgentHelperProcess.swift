@@ -68,6 +68,36 @@ struct AgentHelperProcess: Equatable {
     }
 }
 
+/// 强杀一个子进程连同它的后代。
+///
+/// npm 装的 codex 是 node 包装脚本，真正干活的原生二进制是它的子进程；包装脚本会把
+/// SIGTERM 转发下去，但要是它没按时退出、我们只 SIGKILL 它，原生进程就成了孤儿（PPID 1）
+/// 一直挂着。后代必须趁根进程还活着时收集：根一死，子进程被 launchd 收养，再也顺不出来。
+enum ProcessTree {
+    static func kill(_ root: pid_t) {
+        let tree = descendants(of: root)
+        Darwin.kill(root, SIGKILL)
+        for pid in tree { Darwin.kill(pid, SIGKILL) }
+    }
+
+    static func descendants(of root: pid_t) -> [pid_t] {
+        var result: [pid_t] = []
+        var pending = [root]
+        // 上限防御进程表在遍历中途变化成环；正常的包装链只有一两层。
+        while let parent = pending.popLast(), result.count < 256 {
+            var buffer = [pid_t](repeating: 0, count: 64)
+            let count = buffer.withUnsafeMutableBytes {
+                proc_listchildpids(parent, $0.baseAddress, Int32($0.count))
+            }
+            guard count > 0 else { continue }
+            let children = buffer.prefix(min(Int(count), buffer.count)).filter { $0 > 0 }
+            result += children
+            pending += children
+        }
+        return result
+    }
+}
+
 /// One-shot child lifecycle, bounded output and deadline. No credentials or hook routing inherited.
 enum SessionHelperProcess {
     static func readPage(executable: URL, arguments: [String], directory: URL,
@@ -89,7 +119,7 @@ enum SessionHelperProcess {
             if process.isRunning { process.terminate() }
             let deadline = Date().addingTimeInterval(0.2)
             while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            if process.isRunning { ProcessTree.kill(process.processIdentifier) }
             process.waitUntilExit()
             try? pipe.fileHandleForReading.close()
         }

@@ -6,7 +6,7 @@ import Testing
 extension SessionAssociationTests {
     @Test func readingAttentionKeepsItsTextUntilTheAgentResumes() async throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let f = try SessionModelFixture()
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: f.root, sweepStalePanes: false, sessionLibrary: f.library)
@@ -62,7 +62,7 @@ extension SessionAssociationTests {
     @Test(arguments: ["focus", "click", "key"])
     func interactingWithTheCurrentTerminalAcknowledgesCompletion(interaction: String) async throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let f = try SessionModelFixture()
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: f.root, sweepStalePanes: false, sessionLibrary: f.library)

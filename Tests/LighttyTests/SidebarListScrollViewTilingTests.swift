@@ -13,7 +13,7 @@ import XCTest
 /// **这里没能复现那个环。** 试过合成条件（文档高于视口、宽度顶在滚动条显隐的
 /// 临界点、legacy 与 overlay 两种样式）都不递归——环是从真实显示事务里起的
 /// （样本里是 `stepTransactionFlush` → `viewWillDraw`），单元测试构不出那个上下文。
-/// 所以下面三条守的是**环的燃料**（不收敛、重入），不是环本身；重入闸有没有真的
+/// 所以下面两条守的是**环的燃料**（不收敛、重入），不是环本身；重入闸有没有真的
 /// 治住那个卡死，只能靠跑起来看。
 final class SidebarListScrollViewTilingTests: XCTestCase {
     /// 数递归深度。带保险丝，免得没有闸的时候测试真的挂死在这里。
@@ -66,24 +66,38 @@ final class SidebarListScrollViewTilingTests: XCTestCase {
     }
 
     /// 环的燃料是「不收敛」：`super.tile()` 把宽度算回满宽、我们再减掉导轨，
-    /// 两个值来回翻。所以连做两次必须落在同一个结果上。
+    /// 两个值来回翻。所以连做几次必须落在同一个结果上；而闸也不能把本职工作
+    /// 一起挡掉——导轨那一段仍然要留出来、内容区不能压到滚动条底下。
+    /// overlay 与 legacy 两种样式（两个侧栏各用一种）都要成立，切换滚动条自动隐藏也不缩。
     @MainActor
-    func testTilingIsIdempotent() {
-        let scroll = makeScrollView()
-        scroll.tile()
-        let first = scroll.contentView.frame
-        scroll.tile()
-        XCTAssertEqual(scroll.contentView.frame, first, "同样的输入连做两次要落在同一个结果上")
-    }
-
-    /// 闸不能把本职工作一起挡掉：导轨那一段仍然要留出来。
-    @MainActor
-    func testTheRailIsStillReserved() {
-        let scroll = makeScrollView()
-        scroll.tile()
+    func testTilingReservesRailAndIsIdempotentInBothScrollerStyles() throws {
+        // 顶在滚动条显隐临界点的 legacy 夹具（上面那条同款）：连做两次落在同一结果、导轨仍留出
+        let critical = makeScrollView()
+        critical.tile()
+        let first = critical.contentView.frame
+        critical.tile()
+        XCTAssertEqual(critical.contentView.frame, first, "同样的输入连做两次要落在同一个结果上")
         XCTAssertLessThanOrEqual(
-            scroll.contentView.frame.maxX,
-            scroll.bounds.width - SidebarListScrollView.railWidth + 0.5,
+            first.maxX, critical.bounds.width - SidebarListScrollView.railWidth + 0.5,
             "内容区右边要给滚动条留出导轨")
+
+        // 两种滚动条样式：内容区不压到滚动条底下，反复 tile 与切换自动隐藏都不缩
+        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 266, height: 400))
+        scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 2000))
+        scroll.autohidesScrollers = false
+        for style in [NSScroller.Style.overlay, .legacy] {
+            scroll.scrollerStyle = style
+            scroll.autohidesScrollers = false
+            scroll.tile()
+            let scroller = try XCTUnwrap(scroll.verticalScroller)
+            XCTAssertTrue(scroller is SidebarScroller, "\(style): Both sidebar modes use the quiet native scroller")
+            XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX, "\(style): rail overlaps content")
+            let width = scroll.contentView.frame.width
+            for _ in 0..<5 { scroll.tile() }
+            XCTAssertEqual(scroll.contentView.frame.width, width, "\(style): Layout must not shrink on repeated tiling")
+            scroll.autohidesScrollers = true
+            scroll.tile()
+            XCTAssertEqual(scroll.contentView.frame.width, width, "\(style): autohide must not change the width")
+        }
     }
 }

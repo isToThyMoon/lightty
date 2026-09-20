@@ -1,0 +1,141 @@
+import AppKit
+import Testing
+@testable import lightty
+
+@MainActor
+struct MCPSettingsViewTests {
+    @Test func agentCategoriesNarrowTheListAndTheDetailFollows() throws {
+        let (view, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(view.servers.map(\.name) == ["notion", "computer-use", "node_repl"])
+        #expect(view.selectedServer?.name == "notion")
+        view.selectAgent(.codex)
+        #expect(view.servers.map(\.name) == ["computer-use", "node_repl"])
+        #expect(view.selectedServer?.name == "computer-use")
+        let text = try #require(descendants(view).compactMap { $0 as? NSTextView }
+            .first { $0.identifier?.rawValue == "mcp-document" })
+        // The declaration is shown as written, sub-table and all.
+        #expect(text.string.contains("[mcp_servers.computer-use]"))
+        view.selectList(id: "codex:node_repl")
+        #expect(text.string.contains("NODE_PATH"))
+        let locations = try #require(descendants(view).compactMap { $0 as? BrowserFileLocationsView }.first)
+        let disclosure = try #require(descendants(locations).compactMap { $0 as? NSButton }.first)
+        let filePath = try #require(view.selectedServer?.sourceURL.path)
+        disclosure.performClick(nil)
+        view.layoutSubtreeIfNeeded()
+        #expect(locations.textView.string == filePath)
+        #expect(!locations.textView.isHiddenOrHasHiddenAncestor)
+        disclosure.performClick(nil)
+        view.layoutSubtreeIfNeeded()
+        #expect(locations.textView.isHiddenOrHasHiddenAncestor)
+        #expect(text.string.contains("NODE_PATH"), "收起文件位置不应改变配置正文")
+        view.search("notion")
+        #expect(view.servers.isEmpty, "搜索只在当前分类里找")
+        view.selectAgent(nil)
+        #expect(view.servers.map(\.name) == ["notion"])
+        if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"], let window = view.window {
+            defer { window.close() }
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                view.appearance = NSAppearance(named: appearance)
+                for width in [CGFloat(1100), 660] {
+                    window.setContentSize(NSSize(width: width, height: 720))
+                    view.needsLayout = true
+                    try captureSettingsWindow(window, to: URL(fileURLWithPath: path)
+                        .appendingPathComponent("settings-mcp-\(appearance.rawValue)-\(Int(width)).png"))
+                }
+                disclosure.performClick(nil)
+                view.layoutSubtreeIfNeeded()
+                try captureSettingsWindow(window, to: URL(fileURLWithPath: path)
+                    .appendingPathComponent("settings-mcp-\(appearance.rawValue)-expanded.png"))
+                disclosure.performClick(nil)
+            }
+        }
+    }
+
+    @Test func aDisabledServerReadsAsDisabledAndTheToggleWritesTheConfig() throws {
+        let (view, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        view.selectAgent(.codex)
+        view.selectList(id: "codex:computer-use")
+        let disabled = try #require(view.selectedServer)
+        #expect(!disabled.enabled)
+        // 列表行尾用文字说停用，不用一个没有图例的符号；启用的行尾留空。
+        func rowTexts(_ id: String) throws -> [String] {
+            try #require(view.listCell(for: id)).subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+        }
+        #expect(try rowTexts("codex:computer-use").contains("Disabled"))
+        #expect(try !rowTexts("codex:node_repl").contains("Disabled"))
+        #expect(try !rowTexts("codex:computer-use").contains("○"))
+        let toggle = try #require(descendants(view).compactMap { $0 as? ShellToggle }.first)
+        #expect(!toggle.isOn)
+        toggle.isOn = true
+        toggle.onChange?(true)
+        let config = try String(contentsOf: root.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
+        #expect(config.contains("enabled = true"))
+        #expect(config.contains("[projects.\"/tmp/a\"]"), "配置里其余内容原样保留")
+        #expect(view.selectedServer?.enabled == true)
+        #expect(try !rowTexts("codex:computer-use").contains("Disabled"), "启用后行尾不再标停用")
+    }
+
+    @Test func aClaudeServerSaysWhyItHasNoSwitch() throws {
+        let (view, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        view.selectAgent(.claudeCode)
+        let server = try #require(view.selectedServer)
+        #expect(server.name == "notion")
+        #expect(!server.canToggle)
+        let toggle = try #require(descendants(view).compactMap { $0 as? ShellToggle }.first)
+        let original = try String(contentsOf: server.sourceURL, encoding: .utf8)
+        #expect(!toggle.accessibilityPerformPress())
+        #expect(toggle.isOn)
+        #expect(try String(contentsOf: server.sourceURL, encoding: .utf8) == original)
+        let labels = descendants(view).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        #expect(labels.contains { $0.contains("no enabled switch") })
+        #expect(labels.contains("Claude Code · http"))
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
+    }
+
+    private func fixture() throws -> (MCPSettingsView, URL) {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcp-view-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        func write(_ path: String, _ text: String) throws {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        try write(".codex/config.toml", """
+        [mcp_servers.node_repl]
+        command = "/opt/node_repl"
+
+        [mcp_servers.node_repl.env]
+        NODE_PATH = "/opt/node"
+
+        [mcp_servers.computer-use]
+        command = "/opt/client"
+        enabled = false
+
+        [projects."/tmp/a"]
+        trust_level = "trusted"
+        """)
+        try write(".claude.json", """
+        {"mcpServers": {"notion": {"type": "http", "url": "https://mcp.notion.com/mcp"}}}
+        """)
+        let catalog = MCPCatalog(home: root, environment: [:])
+        let view = MCPSettingsView(
+            catalog: catalog, snapshot: catalog.scan(),
+            preferences: FilePreferences(fileURL: root.appendingPathComponent("prefs.json")),
+            localize: { $0 })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        return (view, root)
+    }
+}

@@ -8,11 +8,9 @@ import LighttyCore
 /// 行值决定要不要重配，选中跟着那一行走。
 @MainActor
 final class HandoffSidebarReloadTests: XCTestCase {
-    private func pump(_ seconds: TimeInterval = 0.05) {
-        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
-    }
+    // `HandoffSidebarContent.reload()` 是同步重算，目录变更到列表也不合流：不需要转事件循环。
 
-    /// 手动触发的任务目录变更：代替 `TaskFolderWatcher` 防抖后的一次目录事件。
+    /// 手动触发的任务目录变更：代替 `PathWatcher` 防抖后的一次目录事件。
     private var fireFolderChange: (() -> Void)?
 
     /// 先把 AppState 立起来（任务要经它的 store 建），再造视图。
@@ -46,6 +44,41 @@ final class HandoffSidebarReloadTests: XCTestCase {
         return (content, table)
     }
 
+    /// 第一侧栏行尾同样不为隐藏的 ⋯ 留白：长名字平时越过按钮位；行 hover 时 ⋯ 浮上来、
+    /// 名字只被渐隐遮住不重排；移开后遮罩撤掉。Sessions 行走同一套 `onRevealChange` + 遮罩。
+    func testRowTextReachesTheRowEndAndFadesUnderTheRevealedAction() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = makeStore(directory)
+        let name = String(repeating: "搜索结果页商卡 title 对齐", count: 4)
+        _ = try store.create(name: name, workdir: directory.path)
+        let (_, table) = try makeContent(directory)
+        let rowView = try XCTUnwrap(table.rowView(atRow: 0, makeIfNecessary: true) as? ShellTableRowView)
+        let cell = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true))
+        let button = try XCTUnwrap((cell as? SidebarRowActionContent)?.rowActionButton)
+        let title = try XCTUnwrap(cell.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == name })
+        cell.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(button.isRevealed)
+        let resting = title.frame
+        XCTAssertGreaterThan(resting.maxX, button.frame.minX, "名字越过隐藏的 ⋯ 位、铺到行尾")
+        XCTAssertNotNil(title.layer)
+        XCTAssertNil(title.layer?.mask)
+
+        rowView.setSidebarHovered(true)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertTrue(button.isRevealed)
+        XCTAssertEqual(title.frame, resting, "hover 不重排文字")
+        let mask = try XCTUnwrap(title.layer?.mask as? CAGradientLayer, "⋯ 下的文字要遮住")
+        let clearFrom = try XCTUnwrap(mask.locations?[2]).doubleValue * cell.bounds.width
+        XCTAssertEqual(clearFrom, button.frame.minX, accuracy: 0.5, "⋯ 左缘起文字完全透明")
+
+        rowView.setSidebarHovered(false)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertNil(title.layer?.mask, "移开后撤掉遮罩")
+    }
+
     func testSelectionSurvivesATaskChangeInsteadOfSnappingBackToTheFirstRow() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -64,7 +97,6 @@ final class HandoffSidebarReloadTests: XCTestCase {
 
         // 任务发生变更（另一个任务改名），列表重算。
         content.reload()
-        pump()
         XCTAssertEqual(table.selectedRow, 2, "选中不该被打回第一行")
 
         // 选中那一行整行被删掉：不干预，表格自己落到相邻行——
@@ -72,7 +104,6 @@ final class HandoffSidebarReloadTests: XCTestCase {
         let third = try XCTUnwrap(store.list().tasks.first { $0.task.name == "第三个任务" })
         try FileManager.default.removeItem(at: third.fileURL)
         content.reload()
-        pump()
         XCTAssertEqual(table.numberOfRows, 2)
         XCTAssertNotEqual(table.selectedRow, 0, "删掉选中行不该把选中打回第一行")
     }
@@ -91,7 +122,6 @@ final class HandoffSidebarReloadTests: XCTestCase {
         table.layoutSubtreeIfNeeded()
         let first = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true))
         content.reload()
-        pump()
         table.layoutSubtreeIfNeeded()
         XCTAssertTrue(table.view(atColumn: 0, row: 0, makeIfNecessary: false) === first,
                       "内容没变的行不该被重建")
@@ -113,15 +143,13 @@ final class HandoffSidebarReloadTests: XCTestCase {
         try store.update(at: first.fileURL, task: edited)
         _ = try store.create(name: "Agent 新建", workdir: directory.path)
         NotificationCenter.default.post(name: .lighttyWindowArrangementDidChange, object: nil)
-        pump()
         XCTAssertEqual(names(in: table), ["Agent 之前"], "窗口结构变化不再顺带重读任务目录")
 
         try XCTUnwrap(fireFolderChange)()
-        pump()
         XCTAssertEqual(Set(names(in: table)), ["Agent 改过", "Agent 新建"])
     }
 
-    /// 设置里恢复归档任务：设置页自己立刻重读，Handoff 列表经目录变更跟上。
+    /// 设置里恢复归档任务：Handoff 设置页自己立刻重读，侧栏的 Handoff 列表经目录变更跟上。
     func testRestoringAnArchivedTaskReachesTheListThroughTheFolderChange() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -142,17 +170,20 @@ final class HandoffSidebarReloadTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
-        let archive = ArchivedTasksView(store: store)
+        let settings = HandoffSettingsView(
+            bindings: AppState.shared.taskBindings,
+            preferences: FilePreferences(fileURL: directory.appendingPathComponent("settings.json")))
+        settings.select(.archived)
+        XCTAssertEqual(settings.listIDs.count, 1)
+        settings.selectList(id: settings.listIDs.first)
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
-        let restore = try XCTUnwrap(descendants(archive).compactMap { $0 as? NSButton }
+        let restore = try XCTUnwrap(descendants(settings).compactMap { $0 as? NSButton }
             .first { $0.title == L("Restore") })
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(restore.action), to: restore.target, from: restore))
-        XCTAssertTrue(descendants(archive).contains { ($0 as? NSTextField)?.stringValue == L("No archived tasks") },
-                      "设置页自己同步重读，不等目录事件")
+        XCTAssertTrue(settings.listIDs.isEmpty, "设置页自己同步重读，不等目录事件")
         XCTAssertEqual(posted, 0, "任务列表变化只由 TaskBindings 发出")
 
         try XCTUnwrap(fireFolderChange)()
-        pump()
         XCTAssertEqual(posted, 1)
         XCTAssertEqual(names(in: table), ["归档过的"])
     }

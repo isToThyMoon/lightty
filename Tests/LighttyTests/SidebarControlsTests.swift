@@ -9,17 +9,16 @@ final class SidebarControlsTests: XCTestCase {
             .appendingPathComponent("sidebar-detached-titlebar-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
         _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        let library = SessionLibrary(fileURL: taskDirectory.appendingPathComponent("sessions.json"),
+            providers: [SidebarSnapshotCatalog(source: .init(agent: .codex, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path))),
+                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))])
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false, sessionLibrary: library)
+        ensureTerminalRuntime()
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
         let host = try XCTUnwrap(window.contentView?.superview)
-        let deadline = Date(timeIntervalSinceNow: 2)
-        while !host.subviews.contains(where: { $0 is PrimarySidebar }), Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
-        }
-        // 收敛初始任务侧栏动画；仅任务侧栏打开是实际复现的前置状态。
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        // 仅任务侧栏打开、且已滑到位，是实际复现的前置状态。
+        try controller.waitForInitialLayout()
         host.layoutSubtreeIfNeeded()
         let pane = try XCTUnwrap(controller.panes().first)
         let terminalBefore = pane.terminal.convert(pane.terminal.bounds, to: host)
@@ -59,10 +58,11 @@ final class SidebarControlsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
 
         _ = NSApplication.shared
-        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil {
-            GhosttyRuntime.shared = GhosttyRuntime()
-        }
+        let library = SessionLibrary(fileURL: taskDirectory.appendingPathComponent("sessions.json"),
+            providers: [SidebarSnapshotCatalog(source: .init(agent: .codex, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path))),
+                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))])
+        AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false, sessionLibrary: library)
+        ensureTerminalRuntime()
 
         let controller = TerminalWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -75,10 +75,7 @@ final class SidebarControlsTests: XCTestCase {
         // TerminalWindowController finishes installing its initial chrome on the
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
         // 轮询而不是固定睡 50ms：整套测试跑起来主队列可能排着别的事，固定时长会偶发。
-        let deadline = Date(timeIntervalSinceNow: 2)
-        while themeFrame.subviews.first(where: { $0 is PrimarySidebar }) == nil, Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
-        }
+        try waitUntil("primary sidebar installed") { themeFrame.subviews.contains(where: { $0 is PrimarySidebar }) }
         themeFrame.layoutSubtreeIfNeeded()
 
         // 默认打开 task 侧栏。
@@ -105,10 +102,52 @@ final class SidebarControlsTests: XCTestCase {
         let expandControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
         XCTAssertEqual(expandControls.count, 1, "应只有一枚标签页展开钮")
         let expand = try XCTUnwrap(expandControls.first)
+        XCTAssertEqual(taskPanel.frame.width, PrimarySidebarSizing.range.maximum, accuracy: 0.5,
+                       "没存过宽度时卡片铺到最大宽")
         XCTAssertEqual(
             expand.frame.minX, ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2,
             accuracy: 0.5)
         XCTAssertEqual(expand.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
+
+        // 拖卡片右边线：卡片、展开钮与终端主区一起收窄，头部三钮和模式切换带跟着卡片走；
+        // 松手后宽度落入偏好，越过最小宽再拖则关闭。
+        let pane = try XCTUnwrap(controller.panes().first)
+        taskPanel.onResizeBegan?()
+        taskPanel.onWidthChange?(PrimarySidebarSizing.range.minimum - 100)
+        themeFrame.layoutSubtreeIfNeeded()
+        XCTAssertEqual(taskPanel.frame.width, PrimarySidebarSizing.range.minimum, accuracy: 0.5, "钳到最小宽")
+        XCTAssertEqual(
+            expand.frame.minX, PrimarySidebarSizing.range.minimum + ShellStyle.panelInset * 2, accuracy: 0.5)
+        let terminalAfter = pane.terminal.convert(pane.terminal.bounds, to: themeFrame)
+        XCTAssertEqual(terminalAfter.minX, expand.frame.minX, accuracy: 0.5, "终端主区从展开钮所在让位线起")
+        taskPanel.onWidthChange?(PrimarySidebarSizing.range.maximum + 100)
+        themeFrame.layoutSubtreeIfNeeded()
+        XCTAssertEqual(taskPanel.frame.width, PrimarySidebarSizing.range.maximum, accuracy: 0.5, "钳到最大宽")
+        XCTAssertEqual(pane.terminal.convert(pane.terminal.bounds, to: themeFrame).minX,
+                       PrimarySidebarSizing.range.maximum + ShellStyle.panelInset * 2, accuracy: 0.5)
+        taskPanel.onWidthChange?(PrimarySidebarSizing.range.minimum)
+        themeFrame.layoutSubtreeIfNeeded()
+        let modeSwitch = try XCTUnwrap(taskPanel.subviews.compactMap { $0 as? ModeSwitch }.first)
+        XCTAssertLessThanOrEqual(modeSwitch.frame.maxX, taskPanel.bounds.width)
+        for segment in modeSwitch.segments {
+            XCTAssertLessThanOrEqual(segment.frame.maxX, modeSwitch.bounds.width + 0.5)
+        }
+        for button in descendantIconButtons(of: taskPanel) {
+            XCTAssertLessThanOrEqual(button.convert(button.bounds, to: taskPanel).maxX, taskPanel.bounds.width + 0.5)
+        }
+        taskPanel.onResizeEnded?()
+        XCTAssertEqual(PrimarySidebarWidthPreference.width(), PrimarySidebarSizing.range.minimum)
+        FilePreferences.shared.removeObject(forKey: PrimarySidebarWidthPreference.defaultsKey)
+
+        controller.showSettings()
+        XCTAssertFalse(expand.isHidden)
+        let settings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
+        let settingsIndex = try XCTUnwrap(themeFrame.subviews.firstIndex(of: settings))
+        for control in themeFrame.subviews where control is EdgeToggleControl || control is EdgeRevealStrip {
+            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)), settingsIndex)
+        }
+        controller.hideSettings()
+        XCTAssertFalse(expand.isHidden)
 
         // 标签页侧栏打开后：分屏 / 新建标签页按钮齐备，关闭钮吸在侧栏右边线。
         controller.openTabSidebar(animated: false)
@@ -121,8 +160,28 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertTrue(sidebarToolTips.contains(L("New tab")))
         let closeControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
         XCTAssertEqual(closeControls.count, 1, "侧栏开着时应只剩一枚关闭钮")
+        controller.showSettings()
+        let openSettings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
+        for control in closeControls {
+            XCTAssertFalse(control.isHidden)
+            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)),
+                              try XCTUnwrap(themeFrame.subviews.firstIndex(of: openSettings)))
+        }
+        controller.hideSettings()
+        XCTAssertTrue(closeControls.allSatisfy { !$0.isHidden })
         XCTAssertEqual(
             try XCTUnwrap(closeControls.first).frame.maxX, sidebar.frame.maxX, accuracy: 0.5)
+        let tabIDs = controller.tabOverview().map(\.id)
+        let paneIDs = controller.panes().map(\.dragIdentifier)
+        let activePane = controller.activePane
+        taskPanel.selectMode(.sessions, animated: false)
+        taskPanel.selectMode(.handoff, animated: false)
+        XCTAssertEqual(controller.tabOverview().map(\.id), tabIDs)
+        XCTAssertEqual(controller.panes().map(\.dragIdentifier), paneIDs)
+        XCTAssertTrue(controller.activePane === activePane, "切换资料模式不改变终端现场")
+        if let directory = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            try captureSidebarVariants(controller, panel: taskPanel, directory: URL(fileURLWithPath: directory))
+        }
     }
 
     private func descendantIconButtons(of view: NSView) -> [ShellIconButton] {

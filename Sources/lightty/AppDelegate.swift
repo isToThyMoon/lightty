@@ -26,7 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         AppearancePreference.apply()
         // 用户登录 shell 的 PATH：agent 探测、会话目录、子进程 PATH 都靠它找到
-        // nvm/volta 等目录下 npm 装的 claude/codex。必须在任何 locateExecutable 之前。
+        // nvm/volta 等目录下 npm 装的 claude/codex。写死的目录清单已经删掉，它是
+        // 系统目录之外的唯一来源，所以必须在任何 locateExecutable 之前。
         LoginShellPath.prime()
         NotificationCenter.default.addObserver(
             self, selector: #selector(loginShellPathDidChange),

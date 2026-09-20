@@ -6,15 +6,18 @@ import LighttyCore
 /// 标题栏容器之下）。Esc 或「返回应用」关闭。
 final class SettingsView: NSView, NSTextFieldDelegate {
     enum Page: String, CaseIterable {
-        // archive 是数据清理性质的页面，留在最后；handoff 与 appearance 同属功能域。
-        case general, appearance, handoff, archive
+        // 后三页都是三栏浏览器，排在开关类页面之后。归档不再单独成页：
+        // 归档的交接文档连同恢复与永久删除，都归 Handoff 页管。
+        case general, appearance, skills, plugins, mcp, handoff
 
         var title: String {
             switch self {
             case .general: return L("General")
             case .appearance: return L("Appearance")
             case .handoff: return L("Handoff")
-            case .archive: return L("Archive")
+            case .skills: return L("Skills")
+            case .plugins: return L("Plugins")
+            case .mcp: return L("MCP servers")
             }
         }
 
@@ -23,12 +26,22 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             case .general: return "gearshape"
             case .appearance: return "sun.max"
             case .handoff: return "doc.text"
-            case .archive: return "archivebox"
+            case .skills: return "square.stack.3d.up"
+            case .plugins: return "puzzlepiece.extension"
+            case .mcp: return "server.rack"
             }
         }
+
+        /// 三栏浏览器自己铺满内容区，不走居中的内容列，也不重复页面标题。
+        var isBrowser: Bool { self != .general && self != .appearance }
     }
 
-    static let sidebarWidth: CGFloat = 240
+    static let sidebarWidth: CGFloat = 200
+    static let minimumSidebarWidth: CGFloat = 160
+    let sidebarDivider = SkillsColumnDivider()
+    private var adjustableSidebarWidth: NSLayoutConstraint?
+    private let preferences: PreferenceStorage
+    static let sidebarWidthKey = "settings.sidebarWidth"
 
     var onDismiss: (() -> Void)?
     var onShowHookSetup: (() -> Void)?
@@ -44,9 +57,15 @@ final class SettingsView: NSView, NSTextFieldDelegate {
     private let emptyLabel = NSTextField(labelWithString: L("No matching settings"))
     private var agentCommandFields: [LaunchAgent: NSTextField] = [:]
     private var agentCommandPreview: NSTextField?
+    private var skillsView: SkillsSettingsView?
+    private var pluginsView: PluginsSettingsView?
+    private var mcpView: MCPSettingsView?
+    private var handoffView: HandoffSettingsView?
 
-    init(page: Page = .appearance) {
+    init(page: Page = .appearance, skillsView: SkillsSettingsView? = nil, preferences: PreferenceStorage = FilePreferences.shared) {
+        self.preferences = preferences
         currentPage = page
+        self.skillsView = skillsView
         super.init(frame: .zero)
         wantsLayer = true
         build()
@@ -83,6 +102,14 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         sidebar.addSubview(navStack)
         sidebar.addSubview(emptyLabel)
         contentArea.addSubview(pageHost)
+        sidebarDivider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sidebarDivider)
+        sidebarDivider.onDrag = { [weak self] position in
+            guard let self else { return }
+            self.adjustableSidebarWidth?.constant = min(320, max(Self.minimumSidebarWidth, position))
+            self.preferences.set(self.adjustableSidebarWidth?.constant, forKey: Self.sidebarWidthKey)
+            self.layoutSubtreeIfNeeded()
+        }
 
         backRow.onClick = { [weak self] in self?.onDismiss?() }
 
@@ -103,11 +130,20 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         emptyLabel.textColor = ShellStyle.tertiaryText
         emptyLabel.isHidden = true
 
+        let storedWidth = preferences.double(forKey: Self.sidebarWidthKey)
+        let initialWidth = storedWidth.isFinite && storedWidth > 0
+            ? min(320, max(Self.minimumSidebarWidth, storedWidth)) : Self.sidebarWidth
+        let widthConstraint = sidebar.widthAnchor.constraint(equalToConstant: initialWidth)
+        adjustableSidebarWidth = widthConstraint
         NSLayoutConstraint.activate([
+            widthConstraint,
+            sidebarDivider.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -3),
+            sidebarDivider.widthAnchor.constraint(equalToConstant: 7),
+            sidebarDivider.topAnchor.constraint(equalTo: topAnchor),
+            sidebarDivider.bottomAnchor.constraint(equalTo: bottomAnchor),
             sidebar.leadingAnchor.constraint(equalTo: leadingAnchor),
             sidebar.topAnchor.constraint(equalTo: topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: Self.sidebarWidth),
 
             contentArea.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             contentArea.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -147,7 +183,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             showPage(currentPage)
             return
         case .language:
-            break
+            skillsView?.refreshLocalization()
         default:
             return
         }
@@ -210,6 +246,17 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         pageHost.subviews.forEach { $0.removeFromSuperview() }
         agentCommandFields.removeAll()
         agentCommandPreview = nil
+        if page.isBrowser, let browser = browser(for: page) {
+            browser.translatesAutoresizingMaskIntoConstraints = false
+            pageHost.addSubview(browser)
+            NSLayoutConstraint.activate([
+                browser.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor),
+                browser.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor),
+                browser.topAnchor.constraint(equalTo: pageHost.topAnchor),
+                browser.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor),
+            ])
+            return
+        }
 
         let column = NSStackView()
         column.orientation = .vertical
@@ -260,13 +307,35 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         switch page {
         case .general: buildGeneral(into: column)
         case .appearance: buildAppearance(into: column)
-        case .handoff: buildHandoff(into: column)
-        case .archive:
-            if let store = AppState.shared?.taskBindings.store {
-                let archive = ArchivedTasksView(store: store)
-                column.addArrangedSubview(archive)
-                archive.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-            }
+        // 三栏浏览器在上面已经铺满内容区；走到这里说明它没能构造出来（Handoff 要
+        // AppState 才有任务目录），那就只留标题，不画一个假的空页面。
+        case .skills, .plugins, .mcp, .handoff: break
+        }
+    }
+
+    /// 浏览器页各自只建一次：切页回来要保留列宽、选中与阅读位置。
+    private func browser(for page: Page) -> ColumnBrowserView? {
+        switch page {
+        case .skills:
+            let skills = skillsView ?? SkillsSettingsView(preferences: preferences)
+            skillsView = skills
+            skills.refreshLocalization()
+            return skills
+        case .plugins:
+            let plugins = pluginsView ?? PluginsSettingsView(preferences: preferences)
+            pluginsView = plugins
+            return plugins
+        case .mcp:
+            let mcp = mcpView ?? MCPSettingsView(preferences: preferences)
+            mcpView = mcp
+            return mcp
+        case .handoff:
+            guard let bindings = AppState.shared?.taskBindings else { return nil }
+            let handoff = handoffView ?? HandoffSettingsView(bindings: bindings, preferences: preferences)
+            handoffView = handoff
+            return handoff
+        case .general, .appearance:
+            return nil
         }
     }
 
@@ -308,6 +377,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
                                    action: #selector(showHookSetup))
         hooksButton.bezelStyle = .rounded
         hooksButton.font = .systemFont(ofSize: 12)
+        HoverCursor.installPointingHand(on: hooksButton)
         hooksGroup.addRow(title: L("Agent status hooks"), control: hooksButton)
         column.addArrangedSubview(hooksGroup)
         hooksGroup.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
@@ -352,6 +422,7 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         let reset = NSButton(title: L("Reset Agent options"), target: self,
                              action: #selector(resetAgentCommands))
         reset.bezelStyle = .rounded
+        HoverCursor.installPointingHand(on: reset)
         column.addArrangedSubview(reset)
         // 参数框只说「加什么」，拼出来的整行在这里给出——开关翻译成哪个参数一看就知道。
         column.setCustomSpacing(18, after: reset)
@@ -454,106 +525,6 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         showPage(.appearance)
     }
 
-    // —— Handoff ——
-
-    /// 交接协议展示页：**只读**。
-    ///
-    /// 这一栏回答的是「lightty 到底替我对 Agent 说了什么、什么时候说」——在此之前
-    /// 这是用户唯一碰不到也看不到的东西。这一版不放开自定义，所以页面上没有任何
-    /// 可编辑控件；等真要开放时，改的是这里的控件，文本来源不变。
-    ///
-    /// 全部文本取自 `HandoffProtocol`，不另存副本：副本迟早跟真正注入的对不上，
-    /// 而「用户照着设置页读、Agent 收到的却是别的」是最难被发现的一种不一致。
-    private func buildHandoff(into column: NSStackView) {
-        addWide(hintLabel(L("This is what lightty says to the Agent when a terminal has a task bound. It is fixed in this version.")), to: column)
-        column.setCustomSpacing(28, after: column.arrangedSubviews.last!)
-
-        let path = Self.sampleTaskPath
-        addSection(L("Injected at session start"),
-                   hint: L("Sent once when a session starts in a terminal that already has a task bound."),
-                   body: HandoffProtocol.injection(path: path, body: Self.sampleTaskFile, lateBinding: false),
-                   to: column)
-
-        // 中途绑定那版与开场版只有开头不同，后面逐字相同。整段再贴一次，这一页就要
-        // 多滚一屏读同样的字，用户会以为自己滚回去了——只展示不同的那一段。
-        addSection(L("Injected when a task is bound later"),
-                   hint: L("Sent with the next message after a task is bound, rebound, or renamed."),
-                   body: HandoffProtocol.injection(path: path, body: Self.sampleTaskFile,
-                                                   lateBinding: true),
-                   to: column)
-
-        buildHandoffSkill(path: path, into: column)
-
-        addSection(L("Typed in when the plugin is not installed"),
-                   hint: L("The button falls back to this. It carries the whole contract on its own, so it works without the plugin and without the session-start text."),
-                   body: HandoffProtocol.directInstruction(path: path),
-                   to: column)
-
-        column.addArrangedSubview(sectionLabel(L("When lightty injects")))
-        column.setCustomSpacing(10, after: column.arrangedSubviews.last!)
-        for line in [
-            L("Session start: injected whenever the terminal has a task bound."),
-            L("Later binding or rename: injected again only when the session or the file path changed."),
-            L("Unbinding: nothing is injected, and the next binding starts fresh."),
-        ] {
-            addWide(hintLabel(line), to: column)
-            column.setCustomSpacing(6, after: column.arrangedSubviews.last!)
-        }
-    }
-
-    /// 技能一节。调用写法两家不一样，且都按插件名加前缀——这是页面上唯一「照着敲」
-    /// 的内容，所以单独成行、可选中，不埋在正文里。
-    ///
-    /// 装没装是**查出来的**，不是断言。这一栏的自陈目的就是「告诉用户 lightty 到底
-    /// 做了什么」，而技能没装时敲下去是静默失败（两家都不报错），在这点上写一句
-    /// 「已随插件安装」等于骗人。
-    private func buildHandoffSkill(path: String, into column: NSStackView) {
-        column.addArrangedSubview(sectionLabel(L("Skill")))
-        column.setCustomSpacing(12, after: column.arrangedSubviews.last!)
-        let invocations = SettingsGroup()
-        // 名字取自 LaunchAgent.title，不在这里重打一遍："Claude Code" 这类产品名
-        // 已经有主了，抄一份迟早两处对不上。
-        // 展示的是**裸写法**，不带路径：用户手敲不需要背一长串路径，技能自己会去
-        // `~/.lightty/panes/$LIGHTTY_PANE_ID/task` 找回来。按钮发的那一份是带路径的
-        // （见 `AgentCommand.handoff`），那是内部形式，不该摆在"你该输入什么"这里。
-        let agents = SessionAgent.allCases.map { ($0, LaunchAgent($0)) }
-        var unavailable: [String] = []
-        for (agent, launch) in agents {
-            let value = NSTextField(labelWithString:
-                HandoffProtocol.skillInvocation(agent: agent, plugin: HookMarketplace.pluginName,
-                                                path: nil))
-            value.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            value.textColor = ShellStyle.secondaryText
-            value.isSelectable = true
-            invocations.addRow(title: launch.title, control: value)
-            if !HookInstaller.handoffSkillAvailable(for: agent) { unavailable.append(launch.title) }
-        }
-        addWide(invocations, to: column)
-        column.setCustomSpacing(12, after: invocations)
-        addWide(hintLabel(L("Typing the invocation runs it; the Agent can also reach it when you ask in your own words. Append what the next session should focus on to tailor the document to it.")), to: column)
-        column.setCustomSpacing(6, after: column.arrangedSubviews.last!)
-        // 一家一行，不拼成一句：拼接要一个分隔符，而中英的分隔符不一样，
-        // 为两家 agent 引进一个"顿号 / 逗号"的本地化键不划算。
-        for name in unavailable {
-            addWide(hintLabel(L("%@ cannot run it yet. Install or update the lightty plugin under General, Agent status hooks, Manage….", name)), to: column)
-            column.setCustomSpacing(6, after: column.arrangedSubviews.last!)
-        }
-        column.setCustomSpacing(12, after: column.arrangedSubviews.last!)
-        addWide(protocolBlock(HandoffProtocol.skillDocument), to: column)
-        column.setCustomSpacing(32, after: column.arrangedSubviews.last!)
-    }
-
-    /// 一节 = 标题 + 说明 + 协议原文（+ 可选的收尾说明）。几处结构一样，抽出来
-    /// 免得间距各写各的。
-    private func addSection(_ title: String, hint: String, body: String, to column: NSStackView) {
-        column.addArrangedSubview(sectionLabel(title))
-        column.setCustomSpacing(8, after: column.arrangedSubviews.last!)
-        addWide(hintLabel(hint), to: column)
-        column.setCustomSpacing(12, after: column.arrangedSubviews.last!)
-        addWide(protocolBlock(body), to: column)
-        column.setCustomSpacing(32, after: column.arrangedSubviews.last!)
-    }
-
     /// 列里的每个子视图都要显式占满列宽：列是 `.leading` 对齐且贴合内容，
     /// 不给约束的话长文本会把列撑到窗口外。
     private func addWide(_ view: NSView, to column: NSStackView) {
@@ -568,78 +539,6 @@ final class SettingsView: NSView, NSTextFieldDelegate {
         return label
     }
 
-    /// 协议原文：等宽、可选中、**不走本地化**——它是跨会话的数据格式协议，
-    /// 固定英文（同 `Localization.swift` 的边界说明）。
-    ///
-    /// 套一层与 `SettingsGroup` 同源的容器：这一页的等宽正文有几十行，裸铺在页面
-    /// 背景上分不清哪儿是一块的起止。本页确有裸等宽的先例（启动命令预览），但那是
-    /// 两行。
-    private func protocolBlock(_ text: String) -> NSView {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        label.textColor = ShellStyle.secondaryText
-        return ProtocolBlockView(label)
-    }
-
-    /// 路径用**占位符**而不是一条像模像样的假路径。这一处是 lightty 运行时替换的
-    /// 槽位，写成 `/Users/me/.lightty/tasks/Rewrite the launch composer.md` 会让人
-    /// 分不清那是示例还是真会出现的字面量——尖括号一眼就是占位。
-    ///
-    /// 与下面的 `sampleTaskFile` 是两回事，两者刻意不同口径：那份是**用户文件的
-    /// 内容**，拿真实感的样例数据演示格式才有用；这一处是我们要填的槽。
-    private static let sampleTaskPath = "<task file path>"
-
-    /// 注入的是任务文件**全文**（含 frontmatter）——「只重写结束 `---` 之后」那条
-    /// 指令得让 Agent 对着实物看，所以示意值也带上 frontmatter，键与 lightty 实际
-    /// 写出的一致。
-    private static let sampleTaskFile = """
-        ---
-        name: Rewrite the launch composer
-        workdir: /Users/me/project/app
-        tool: claude
-        created: 2026-09-01T09:00:00Z
-        updated: 2026-09-08T17:20:00Z
-        ---
-        ## Next steps
-        - …
-        """
-
-}
-
-/// 协议原文的容器：与 `SettingsGroup` 同一套外观（圆角 12、1pt 描边、抬升底色），
-/// 内边距对齐它的 16。
-///
-/// 单独一个类型而不是复用 `SettingsGroup`：那个的 `addRow` 是「左标题右控件、
-/// 行高至少 48」的布局，几十行等宽正文塞进去会被挤进右侧窄条。这里要的只是它
-/// 的外壳。
-private final class ProtocolBlockView: NSView {
-    init(_ content: NSView) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.borderWidth = 1
-        content.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(content)
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-        ])
-        applyColors()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyColors()
-    }
-
-    private func applyColors() {
-        layer?.backgroundColor = ShellStyle.raisedSurface.shellResolvedCGColor(for: effectiveAppearance)
-        layer?.borderColor = ShellStyle.divider.shellResolvedCGColor(for: effectiveAppearance)
-    }
 }
 
 private final class SettingsDocumentView: NSView {
@@ -916,11 +815,6 @@ final class ThemePreview: NSView {
             ring.lineWidth = 2
             ShellStyle.primaryText.setStroke()
             ring.stroke()
-        } else {
-            let edge = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
-            edge.lineWidth = 1
-            ShellStyle.divider.setStroke()
-            edge.stroke()
         }
     }
 }

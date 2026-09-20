@@ -2,47 +2,56 @@
 
 ## 发布入口与版本
 
-正式发布由 [release.yml](../.github/workflows/release.yml) 执行，打包实现见 [package-app.sh](../scripts/package-app.sh)。推送 `v*` tag 会创建 GitHub Release，并上传三种口味的 DMG、各自的增量包和对应的 Sparkle feed。
+正式发布由 [release.yml](../.github/workflows/release.yml) 执行，打包实现见 [package-app.sh](../scripts/package-app.sh)。推送 `v*` tag 会创建 GitHub Release，并上传两种架构的 DMG、各自的增量包、两条单架构 Sparkle feed，以及冻结的 `appcast.xml`。
 
-## 三种口味与三条更新源
+## 两种架构与更新源
 
 应用解包 317MB，其中 264MB 是 Claude 会话助手（两份 Node 运行时 218MB + node_modules 46MB），
 用户只用得上其中一份运行时。所以按机器分包：
 
-| 口味 | DMG | 更新源 | 给谁 |
+| 架构 | DMG | 更新源 | 给谁 |
 | --- | --- | --- | --- |
-| `arm64` | `lightty-<版本>-arm64.dmg`（约 77MB） | `appcast-arm64.xml` | Apple Silicon 新安装 |
-| `x64` | `lightty-<版本>-x64.dmg` | `appcast-x64.xml` | Intel 新安装 |
-| `universal` | `lightty-<版本>-universal.dmg`（约 150MB） | `appcast.xml` | 分架构之前装好的那些 app |
+| `arm64` | `lightty-<版本>-arm64.dmg`（约 77MB） | `appcast-arm64.xml` | Apple Silicon |
+| `x64` | `lightty-<版本>-x64.dmg` | `appcast-x64.xml` | Intel |
 
-universal 必须一直出：那些 app 的 `SUFeedURL` 写死在 Info.plist 里指向 `appcast.xml`，
-这条源只能提供两种机器都能跑的包。换成单架构包，Intel 用户会因为
-`sparkle:hardwareRequirements` 被过滤掉而静默停在旧版本。
 Sparkle 的一条 feed 里一个版本只能有一条记录（generate_appcast 直接拒绝重复版本），
-所以三种口味必须是三条 feed，不能合并。
+所以两种架构是两条 feed，不能合并。`universal` 通用包只留作本地打包，不再发布。
+
+### 冻结的 appcast.xml（不能删）
+
+分架构之前装好的 app，`SUFeedURL` 写死为 `releases/latest/download/appcast.xml`。`latest`
+永远指向最新 Release，所以**每次发版都要把 `appcast.xml` 原样再传一份**，否则那些老安装
+检查更新拿到 404，静默停在旧版本。
+
+这份文件取自 `LEGACY_FEED_TAG`（v0.14.0，最后一个发布通用包的版本），只列那一版的
+通用包，下载地址指向那个 Release，签名不变。流水线下载后核对它带签名、地址指向该 tag，
+再随新 Release 上传；不重新生成、不改内容。
 
 ### 通用包如何迁到单架构包
 
-[UpdateFeed](../Sources/lightty/UpdateFeed.swift) 在每次检查更新时按正在运行的那一片
-把 `appcast.xml` 改指到 `appcast-<架构>.xml`。老用户因此走两跳：先经通用源拿到带这段
-逻辑的版本（增量包，很小），下一次检查就走单架构源，换成单架构包，多出来的那份 Node
-运行时随之消失。跨口味没有增量，所以迁移那一次是整包。
+[UpdateFeed](../Sources/lightty/UpdateFeed.swift)（v0.13.13 起）在每次检查更新时按正在运行的
+那一片把 `appcast.xml` 改指到 `appcast-<架构>.xml`：
 
+- 已装 v0.13.13 及之后的通用包：下一次检查就走单架构源，直接换成最新的单架构整包。
+- 更早的安装：没有这段逻辑，先经冻结的 `appcast.xml` 升到 v0.14.0 通用包，再下一次检查
+  换成单架构包（两跳）。
+
+跨架构没有增量，所以换成单架构包那一次是整包，多出来的那份 Node 运行时随之消失。
 单架构包自己的 `SUFeedURL` 已经指向单架构源，改写算出来是同一个地址，等于没动。
 
 ## 增量更新
 
 版本之间变的只有主程序，Node 运行时和 node_modules 一个字节都不动。
-[build-appcast.sh](../scripts/build-appcast.sh) 把最近两个同口味的历史包拉下来交给
+[build-appcast.sh](../scripts/build-appcast.sh) 把最近两个同架构的历史包拉下来交给
 Sparkle 的 `generate_appcast`，生成 `.delta` 并写进 feed。实测 v0.13.11 → v0.13.12
 的增量包 1.2MB，全量 150MB。用户装的版本对不上任何一条增量时，Sparkle 自动退回整包。
 
-增量包文件名只带版本号，三种口味会撞名，而 GitHub 的资产名是平的一层，
+增量包文件名只带版本号，两种架构的增量包会撞名，而 GitHub 的资产名是平的一层，
 所以脚本改名后同步改 feed 里的 URL——签名签的是内容不是文件名，改名不影响验签。
 
 - 修复使用补丁版本，新功能使用次版本；发布前核对远端 tag 和 Releases，不能覆盖已发布 tag。
 - `main` 推送也构建打包、填充内核缓存，但不创建 Release；其构建版本为 `0.0.0-ci`。
-- 应用版本取 tag 去掉 `v`，build number 取 `git rev-list --count HEAD`。正式发布沿 main 前进，保持 build number 递增。
+- 应用版本取 tag 去掉 `v`，build number 取 `git rev-list --count HEAD` 加 235（`BUILD_NUMBER_OFFSET`）。历史改写后提交数从 236 降到 63，而 v0.14.1 的 build number 是 236；2026-09-17 再次 squash 后提交数从 83 降到 77，而已装的 v0.19.1 是 283，偏移从 200 提到 210；2026-09-20 把 v0.14.0 之后的 26 个提交压成 1 个，已发布 v0.20.0 的 build number 是 295，偏移提到 235，让下一版继续为 296。Sparkle 按 build number 判断新旧，偏移只能加不能减。正式发布沿 main 前进，保持 build number 递增。
 - 手动运行 workflow 不等于正式发布；只有 tag ref 执行 Release 和 appcast 步骤。
 
 ## 发布前检查
@@ -78,11 +87,11 @@ git push --atomic origin main refs/tags/v0.6.1
 流水线依次完成：
 
 1. 拉取应用和 `isToThyMoon/ghostty` 的 `lightty-patches` 内核分支，按内核 commit 读取缓存；未命中时构建内核。
-2. 同步 GhosttyKit，准备锁定版本的 Claude 元数据 SDK helper 和两种架构 Node runtime，构建 universal Release 应用。
-3. 按三种口味各打一次 `.app`：单架构口味 `lipo -thin` 主程序并只带对应的 Node 运行时；签名嵌入组件及应用、生成 DMG。
+2. 同步 GhosttyKit，准备锁定版本的 Claude 元数据 SDK helper 和两种架构 Node runtime，构建双架构 Release 产物。
+3. 按 arm64 / x64 各打一次 `.app`：`lipo -thin` 主程序并只带对应的 Node 运行时；签名嵌入组件及应用、生成 DMG；分别校验对应架构的 SDK 与部署目标。
 4. 按凭据配置执行公证和 staple。
-5. 拉取历史包，用 Sparkle 私钥生成三条带增量的 feed。
-6. 创建 GitHub Release 并上传三份整包、增量包和三条 feed。
+5. 拉取历史包，用 Sparkle 私钥生成两条带增量的单架构 feed；从 `LEGACY_FEED_TAG` 取回冻结的 `appcast.xml` 并核对。
+6. 创建 GitHub Release 并上传两份整包、增量包、两条单架构 feed 和冻结的 `appcast.xml`。
 
 所需 GitHub Actions secrets（只写名称，禁止在文档或日志中记录值）：
 
@@ -108,9 +117,10 @@ git status --short --branch
 选择 **tag 对应的 run**，不要把 main 构建成功当成发布成功。确认：
 
 - tag run 成功，Release 不是 draft / prerelease（除非本次明确要求预发布）。
-- 三份整包（`-arm64` / `-x64` / `-universal`）和三条 feed（`appcast.xml`、`appcast-arm64.xml`、`appcast-x64.xml`）都在且非空。
-- 每条 feed 的版本、下载地址、长度与对应的包一致，且 enclosure 带 `sparkle:edSignature`（脚本会在缺签名时直接失败）。
-- 有历史包可比对时，feed 里应出现 `<sparkle:deltas>`，且增量包资产名带口味前缀。
+- 两份整包（`-arm64` / `-x64`）、两条单架构 feed（`appcast-arm64.xml`、`appcast-x64.xml`）和 `appcast.xml` 都在且非空。
+- 单架构 feed 的版本、下载地址、长度与对应的包一致，且 enclosure 带 `sparkle:edSignature`（脚本会在缺签名时直接失败）。
+- `appcast.xml` 与 `LEGACY_FEED_TAG` 那一版的原文件逐字节相同，下载地址仍指向那个 Release。
+- 有历史包可比对时，feed 里应出现 `<sparkle:deltas>`，且增量包资产名带架构前缀。
 - 签名步骤成功，公证状态如实说明；不能将 skipped 当作成功。
 - 本地 main 与远端一致，工作区无意外残留。
 

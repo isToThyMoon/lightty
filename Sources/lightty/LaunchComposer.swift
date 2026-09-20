@@ -17,8 +17,14 @@ enum LaunchSubject {
 
 /// 启动浮层：把上面四件事摆在一屏里，点启动才创建终端。
 enum LaunchComposer {
-    private static var popover: NSPopover?
-    static func dismiss() { popover?.close(); popover = nil }
+    private static var current: Presentation?
+
+    static var isPresented: Bool { current?.popover.isShown ?? false }
+
+    static func dismiss() {
+        current?.close()
+        current = nil
+    }
 
     static func begin(
         _ subject: LaunchSubject,
@@ -26,18 +32,61 @@ enum LaunchComposer {
         in controller: TerminalWindowController,
         preferredEdge: NSRectEdge = .maxX
     ) {
-        popover?.close()
+        dismiss()
         let content = LaunchComposerController(subject: resolved(subject), controller: controller)
-        let pop = NSPopover()
-        pop.contentViewController = content
-        pop.delegate = content
-        pop.behavior = .transient
-        content.onDone = { [weak pop] in pop?.close() }
-        content.directory.onPickerVisibilityChange = { [weak pop] choosing in
-            pop?.behavior = choosing ? .applicationDefined : .transient
+        content.onDone = { dismiss() }
+        current = Presentation(content: content)
+        current?.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: preferredEdge)
+    }
+
+    /// 一次展示：气泡加上让它「点外面就关」的两只耳朵，一起生灭。
+    ///
+    /// 不用 `.transient`：那一档由 AppKit 关，关掉浮层的那一下点击不会再送给底下
+    /// 的控件——浮层开着时点任务行的「⋯」，第一下只关浮层，第二下才出菜单。
+    /// 这里自己关，再把事件原样放行，一下就到。
+    private final class Presentation {
+        let popover = NSPopover()
+        private var outsideClick: Any?
+        private var deactivation: NSObjectProtocol?
+        /// 目录选择面板开着时，落在它上面的点击不算「点在浮层外面」。
+        private var choosingDirectory = false
+
+        init(content: LaunchComposerController) {
+            popover.contentViewController = content
+            popover.delegate = content
+            popover.behavior = .applicationDefined
+            content.directory.onPickerVisibilityChange = { [weak self] in self?.choosingDirectory = $0 }
+            outsideClick = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                guard let self, !choosingDirectory, !isInside(event.window) else { return event }
+                LaunchComposer.dismiss()
+                return event
+            }
+            // 切到别的应用也收起，与 `.transient` 一致。
+            deactivation = NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+            ) { _ in LaunchComposer.dismiss() }
         }
-        popover = pop
-        pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: preferredEdge)
+
+        func close() {
+            if let outsideClick { NSEvent.removeMonitor(outsideClick) }
+            outsideClick = nil
+            if let deactivation { NotificationCenter.default.removeObserver(deactivation) }
+            deactivation = nil
+            popover.close()
+        }
+
+        /// 浮层自己的窗口，以及挂在它下面的子窗口（Agent 下拉菜单是它的子窗口）都算里面。
+        private func isInside(_ window: NSWindow?) -> Bool {
+            guard let host = popover.contentViewController?.view.window else { return false }
+            var current = window
+            while let window = current {
+                if window === host { return true }
+                current = window.parent
+            }
+            return false
+        }
     }
 
     /// 打开时重读磁盘：调用方传来的 task 是列表缓存的快照，agent 直接写文件不触发
@@ -383,6 +432,12 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
             bodyEditor.widthAnchor.constraint(equalTo: group.widthAnchor),
         ])
         return group
+    }
+
+    /// Esc 关浮层。`.transient` 时是 AppKit 代劳的，现在关闭归我们管，得自己接。
+    override func cancelOperation(_ sender: Any?) {
+        guard !embedded else { return }
+        onDone?()
     }
 
     func popoverDidShow(_ notification: Notification) {

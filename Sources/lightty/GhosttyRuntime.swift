@@ -1,6 +1,5 @@
 import AppKit
 import GhosttyKit
-import UserNotifications
 
 /// 启动时从 ghostty 配置读出的 terminal host 所需值。
 /// 仅用于 surface、pane chrome、分隔线和透明窗口底座；应用标题栏/任务侧栏有独立
@@ -623,19 +622,9 @@ final class GhosttyRuntime {
                 return false
             }
             let body = copiedString(notification.body, length: UInt(strlen(notification.body))) ?? ""
-            DispatchQueue.main.async {
-                // 裸可执行（swift build）没有 bundle，UNUserNotificationCenter.current()
-                // 会抛 NSInternalInconsistencyException 直接崩。守卫在 PaneNotifier 里。
-                guard let center = PaneNotifier.center else { return }
-                let content = UNMutableNotificationContent()
-                content.title = title
-                content.body = body
-                content.sound = .default
-                let request = UNNotificationRequest(
-                    identifier: UUID().uuidString,
-                    content: content,
-                    trigger: nil)
-                center.add(request)
+            guard let view = targetView() else { return false }
+            DispatchQueue.main.async { [weak view] in
+                PaneNotifier.shared.enqueueDesktopNotification(title: title, body: body, from: view)
             }
             return true
 

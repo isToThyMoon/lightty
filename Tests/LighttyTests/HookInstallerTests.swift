@@ -127,14 +127,6 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertNil(HookInstaller.locateExecutable("definitely-not-a-real-binary-xyz"))
     }
 
-    func testSearchPathHasNoDuplicatesAndCoversFinderLaunch() throws {
-        let path = HookInstaller.searchPath()
-        XCTAssertEqual(path.count, Set(path).count, "PATH 里有重复目录")
-        // 子进程 PATH 直接由它拼出来，缺了 node 的常见安装位置 claude 会自己失败
-        XCTAssertTrue(path.contains("/opt/homebrew/bin"))
-        XCTAssertTrue(path.contains("/usr/local/bin"))
-    }
-
     func testMissingCLIIsReportedNotThrown() throws {
         let report = HookInstaller.report(for: .claudeCode, in: context(cliPresent: false))
 
@@ -151,118 +143,112 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertTrue(invocations.isEmpty)
     }
 
-    // MARK: - 只读探测：Claude Code
+    // MARK: - 只读探测
 
-    func testClaudeInstalledIsRecognised() throws {
-        try write(.claudeCode, claudeInstalled)
-        XCTAssertEqual(state(.claudeCode), .installed)
+    /// 配置文本 → State 的一行。`config` 为 nil 表示配置文件不存在。
+    private struct StateCase {
+        let name: String
+        let config: String?
+        let expected: HookInstaller.State
     }
 
-    func testClaudeMissingConfigIsNotInstalled() throws {
-        XCTAssertEqual(state(.claudeCode), .notInstalled)
-    }
-
-    func testClaudeUnrelatedConfigIsNotInstalled() throws {
-        try write(.claudeCode, #"{"model":"opus","hooks":{"Stop":[]}}"#)
-        XCTAssertEqual(state(.claudeCode), .notInstalled)
-    }
-
-    func testClaudeDisabledPluginIsNotInstalled() throws {
-        // 用户手工关掉过插件——这不是"装好了"
-        try write(.claudeCode, #"{"enabledPlugins":{"lightty@lightty":false}}"#)
-        XCTAssertEqual(state(.claudeCode), .notInstalled)
-    }
-
-    func testClaudeMarketplaceWithoutPluginIsPartial() throws {
-        // `claude plugin uninstall` 之后的真实形状：marketplace 条目会留下
-        try write(.claudeCode, """
-            {"extraKnownMarketplaces":{"lightty":{"source":{}}},"enabledPlugins":{}}
-            """)
-        XCTAssertEqual(state(.claudeCode), .partial(missing: ["lightty@lightty"]))
-    }
-
-    func testClaudePluginWithoutMarketplaceIsPartial() throws {
-        try write(.claudeCode, #"{"enabledPlugins":{"lightty@lightty":true}}"#)
-        XCTAssertEqual(state(.claudeCode), .partial(missing: ["lightty"]))
-    }
-
-    func testClaudeUnparseableConfigIsReportedNotGuessed() throws {
-        try write(.claudeCode, "// 用户手写的带注释配置\n{}")
-
-        guard case .unreadable(let reason) = state(.claudeCode) else {
-            return XCTFail("读不懂的配置应报 unreadable")
+    /// 逐行写入配置、只读探测，比对 State。`unreadable` 只比 case，另查 reason 带路径。
+    private func checkStates(_ agent: HookAgent, _ cases: [StateCase]) throws {
+        for c in cases {
+            try? FileManager.default.removeItem(at: configs[agent]!)
+            if let config = c.config { try write(agent, config) }
+            let actual = state(agent)
+            if case .unreadable(let reason) = c.expected {
+                guard case .unreadable(let actualReason) = actual else {
+                    XCTFail("\(c.name)：读不懂的配置应报 unreadable，实际 \(actual)")
+                    continue
+                }
+                XCTAssertTrue(actualReason.contains(reason), "\(c.name)：unreadable 的理由里没带配置路径")
+            } else {
+                XCTAssertEqual(actual, c.expected, c.name)
+            }
         }
-        XCTAssertTrue(reason.contains(configs[.claudeCode]!.path))
     }
 
-    func testClaudeEmptyConfigIsNotInstalled() throws {
-        // 空文件不是合法 JSON，但语义上就是"还没配过"
-        try write(.claudeCode, "   \n")
-        XCTAssertEqual(state(.claudeCode), .notInstalled)
+    /// 同一 `state(.claudeCode)`，只差 settings.json 的内容。
+    func testClaudeConfigStateIsDetectedReadOnly() throws {
+        try checkStates(.claudeCode, [
+            // 装好后的真实形状
+            StateCase(name: "installed is recognised", config: claudeInstalled, expected: .installed),
+            StateCase(name: "missing config is not installed", config: nil, expected: .notInstalled),
+            StateCase(name: "unrelated config is not installed",
+                      config: #"{"model":"opus","hooks":{"Stop":[]}}"#, expected: .notInstalled),
+            // 用户手工关掉过插件——这不是"装好了"
+            StateCase(name: "disabled plugin is not installed",
+                      config: #"{"enabledPlugins":{"lightty@lightty":false}}"#, expected: .notInstalled),
+            // `claude plugin uninstall` 之后的真实形状：marketplace 条目会留下
+            StateCase(name: "marketplace without plugin is partial",
+                      config: #"{"extraKnownMarketplaces":{"lightty":{"source":{}}},"enabledPlugins":{}}"#,
+                      expected: .partial(missing: ["lightty@lightty"])),
+            StateCase(name: "plugin without marketplace is partial",
+                      config: #"{"enabledPlugins":{"lightty@lightty":true}}"#,
+                      expected: .partial(missing: ["lightty"])),
+            // 读不懂的配置报 unreadable（理由带路径），不瞎猜
+            StateCase(name: "unparseable config is reported not guessed",
+                      config: "// 用户手写的带注释配置\n{}",
+                      expected: .unreadable(reason: configs[.claudeCode]!.path)),
+            // 空文件不是合法 JSON，但语义上就是"还没配过"
+            StateCase(name: "empty config is not installed", config: "   \n", expected: .notInstalled),
+        ])
     }
 
-    // MARK: - 只读探测：Codex
+    /// 同一 `state(.codex)`，只差 config.toml 的内容。
+    func testCodexConfigStateIsDetectedReadOnly() throws {
+        try checkStates(.codex, [
+            // 装好后的真实形状
+            StateCase(name: "installed is recognised", config: codexInstalled, expected: .installed),
+            StateCase(name: "missing config is not installed", config: nil, expected: .notInstalled),
+            // `codex plugin remove` 之后的真实形状：marketplace 表留下
+            StateCase(name: "plugin removed leaves marketplace behind",
+                      config: """
+                          [marketplaces.lightty]
+                          source_type = "local"
+                          source = "/Users/tester/.lightty/marketplace"
+                          """,
+                      expected: .partial(missing: ["lightty@lightty"])),
+            StateCase(name: "disabled plugin is not enabled",
+                      config: """
+                          [marketplaces.lightty]
+                          source_type = "local"
 
-    func testCodexInstalledIsRecognised() throws {
-        try write(.codex, codexInstalled)
-        XCTAssertEqual(state(.codex), .installed)
-    }
+                          [plugins."lightty@lightty"]
+                          enabled = false
+                          """,
+                      expected: .partial(missing: ["lightty@lightty"])),
+            // 别人的插件开着，不代表我们的开着——扫描必须认表头边界
+            StateCase(name: "does not confuse neighbouring tables",
+                      config: """
+                          [plugins."someone-else@theirs"]
+                          enabled = true
 
-    func testCodexMissingConfigIsNotInstalled() throws {
-        XCTAssertEqual(state(.codex), .notInstalled)
-    }
+                          [model]
+                          name = "gpt-5"
+                          """,
+                      expected: .notInstalled),
+            // 用户自己的一大堆配置里夹着我们的两张表，照样认得出来
+            StateCase(name: "keeps user content irrelevant",
+                      config: """
+                          model = "gpt-5"
 
-    func testCodexPluginRemovedLeavesMarketplaceBehind() throws {
-        // `codex plugin remove` 之后的真实形状
-        try write(.codex, """
-            [marketplaces.lightty]
-            source_type = "local"
-            source = "/Users/tester/.lightty/marketplace"
-            """)
-        XCTAssertEqual(state(.codex), .partial(missing: ["lightty@lightty"]))
-    }
+                          [tools]
+                          web_search = true
 
-    func testCodexDisabledPluginIsNotEnabled() throws {
-        try write(.codex, """
-            [marketplaces.lightty]
-            source_type = "local"
+                          [marketplaces.lightty]
+                          source_type = "local"
 
-            [plugins."lightty@lightty"]
-            enabled = false
-            """)
-        XCTAssertEqual(state(.codex), .partial(missing: ["lightty@lightty"]))
-    }
+                          [plugins."lightty@lightty"]
+                          enabled = true
 
-    func testCodexDoesNotConfuseNeighbouringTables() throws {
-        // 别人的插件开着，不代表我们的开着——扫描必须认表头边界
-        try write(.codex, """
-            [plugins."someone-else@theirs"]
-            enabled = true
-
-            [model]
-            name = "gpt-5"
-            """)
-        XCTAssertEqual(state(.codex), .notInstalled)
-    }
-
-    func testCodexKeepsUserContentIrrelevant() throws {
-        // 用户自己的一大堆配置里夹着我们的两张表，照样认得出来
-        try write(.codex, """
-            model = "gpt-5"
-
-            [tools]
-            web_search = true
-
-            [marketplaces.lightty]
-            source_type = "local"
-
-            [plugins."lightty@lightty"]
-            enabled = true
-
-            [history]
-            persistence = "save-all"
-            """)
-        XCTAssertEqual(state(.codex), .installed)
+                          [history]
+                          persistence = "save-all"
+                          """,
+                      expected: .installed),
+        ])
     }
 
     // MARK: - 版本台账
@@ -274,37 +260,39 @@ final class HookInstallerTests: XCTestCase {
             to: HookInstaller.versionFile(for: agent, in: context()))
     }
 
-    func testInstalledCurrentVersionDoesNotNeedUpdate() throws {
-        try write(.claudeCode, claudeInstalled)
-        try writeLedger(.claudeCode, HookMarketplace.version(for: .claudeCode, command: shim.path))
-
-        XCTAssertFalse(HookInstaller.report(for: .claudeCode, in: context()).needsUpdate)
-    }
-
-    func testInstalledStaleVersionNeedsUpdate() throws {
-        try write(.claudeCode, claudeInstalled)
-        try writeLedger(.claudeCode, "0.1.0+deadbeef")
-
-        // 两家都在安装时**拷贝**插件，marketplace 变了不会自动生效
-        XCTAssertTrue(HookInstaller.report(for: .claudeCode, in: context()).needsUpdate)
-    }
-
-    func testOtherAgentsLedgerIsNotConsulted() throws {
-        try write(.claudeCode, claudeInstalled)
-        // Codex 那条记录写得再新，也不该让 Claude Code 显示成"已是最新"
-        try writeLedger(.codex, HookMarketplace.version(for: .codex, command: shim.path))
-
-        XCTAssertTrue(HookInstaller.report(for: .claudeCode, in: context()).needsUpdate)
-    }
-
-    func testNoLedgerMeansNeedsUpdate() throws {
-        try write(.claudeCode, claudeInstalled)
-        // 宁可让 CLI 空跑一次幂等命令，也不要让 agent 悄悄跑着旧事件表
-        XCTAssertTrue(HookInstaller.report(for: .claudeCode, in: context()).needsUpdate)
-    }
-
-    func testNotInstalledNeverNeedsUpdate() throws {
-        XCTAssertFalse(HookInstaller.report(for: .codex, in: context()).needsUpdate)
+    /// 同一 `report().needsUpdate`，只差台账状态：装没装 × 台账里记的是谁的什么版本。
+    func testNeedsUpdateFollowsThisAgentsLedger() throws {
+        struct Case {
+            let name: String
+            let installed: Bool
+            /// 台账里写哪一家、写什么版本；nil 表示没有台账。
+            let ledger: (agent: HookAgent, version: String)?
+            let expected: Bool
+        }
+        let current = HookMarketplace.version(for: .claudeCode, command: shim.path)
+        let cases: [Case] = [
+            // 装好且台账就是当前版本——不需要更新
+            Case(name: "installed current version does not need update",
+                 installed: true, ledger: (.claudeCode, current), expected: false),
+            // 两家都在安装时**拷贝**插件，marketplace 变了不会自动生效
+            Case(name: "installed stale version needs update",
+                 installed: true, ledger: (.claudeCode, "0.1.0+deadbeef"), expected: true),
+            // Codex 那条记录写得再新，也不该让 Claude Code 显示成"已是最新"
+            Case(name: "other agent's ledger is not consulted",
+                 installed: true, ledger: (.codex, HookMarketplace.version(for: .codex, command: shim.path)),
+                 expected: true),
+            // 宁可让 CLI 空跑一次幂等命令，也不要让 agent 悄悄跑着旧事件表
+            Case(name: "no ledger means needs update", installed: true, ledger: nil, expected: true),
+            // 没装就谈不上更新
+            Case(name: "not installed never needs update", installed: false, ledger: nil, expected: false),
+        ]
+        for c in cases {
+            try? FileManager.default.removeItem(at: ledger)
+            try? FileManager.default.removeItem(at: configs[.claudeCode]!)
+            if c.installed { try write(.claudeCode, claudeInstalled) }
+            if let entry = c.ledger { try writeLedger(entry.agent, entry.version) }
+            XCTAssertEqual(HookInstaller.report(for: .claudeCode, in: context()).needsUpdate, c.expected, c.name)
+        }
     }
 
     // MARK: - 安装：交给 CLI 的命令
@@ -351,6 +339,7 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertTrue(text.contains(shim.path), "hooks.json 没指向 shim")
     }
 
+    /// 安装把落地的版本记进这一家自己的台账；装第二家不能把第一家的记录顶掉。
     func testInstallRecordsTheVersionItLandedOn() throws {
         try HookInstaller.install(.claudeCode, in: context())
 
@@ -358,14 +347,8 @@ final class HookInstallerTests: XCTestCase {
             HookInstaller.installedVersion(of: .claudeCode, in: context()),
             HookMarketplace.version(for: .claudeCode, command: shim.path))
         XCTAssertNil(HookInstaller.installedVersion(of: .codex, in: context()))
-    }
 
-    func testEachAgentGetsItsOwnLedgerEntry() throws {
-        for agent in HookAgent.allCases {
-            try HookInstaller.install(agent, in: context())
-        }
-
-        // 装第二家不能把第一家的记录顶掉
+        try HookInstaller.install(.codex, in: context())
         for agent in HookAgent.allCases {
             XCTAssertEqual(
                 HookInstaller.installedVersion(of: agent, in: context()),
@@ -408,44 +391,44 @@ final class HookInstallerTests: XCTestCase {
 
     // MARK: - 卸载
 
-    func testUninstallRemovesPluginThenMarketplace() throws {
-        try write(.claudeCode, claudeInstalled)
+    /// 同一 `uninstall` + `arguments` 断言：agent × 配置里声明了什么 → 交给 CLI 的命令序列。
+    func testUninstallRunsOnlyWhatIsDeclared() throws {
+        struct Case {
+            let name: String
+            let agent: HookAgent
+            let config: String?
+            let expected: [[String]]
+        }
+        let cases: [Case] = [
+            // 先卸插件再撤 marketplace 声明，否则用户配置里留下一条孤儿条目
+            Case(name: "claude uninstall removes plugin then marketplace", agent: .claudeCode, config: claudeInstalled,
+                 expected: [["plugin", "uninstall", "lightty@lightty"],
+                            ["plugin", "marketplace", "remove", "lightty"]]),
+            // Codex 的子命令叫 remove
+            Case(name: "codex uninstall uses remove", agent: .codex, config: codexInstalled,
+                 expected: [["plugin", "remove", "lightty@lightty"],
+                            ["plugin", "marketplace", "remove", "lightty"]]),
+            // 只声明了 marketplace：对着不存在的插件跑 remove 会非零退出，那种噪音不该变成"卸载失败"
+            Case(name: "uninstall only runs what is actually declared", agent: .codex,
+                 config: """
+                     [marketplaces.lightty]
+                     source_type = "local"
+                     """,
+                 expected: [["plugin", "marketplace", "remove", "lightty"]]),
+            // 没碰过的配置：无事可做就不跑 CLI
+            Case(name: "uninstall on untouched config runs nothing", agent: .claudeCode, config: nil, expected: []),
+        ]
+        for c in cases {
+            recordLock.lock(); recorded = []; recordLock.unlock()
+            try? FileManager.default.removeItem(at: configs[c.agent]!)
+            if let config = c.config { try write(c.agent, config) }
 
-        let outcome = try HookInstaller.uninstall(.claudeCode, in: context())
+            let outcome = try HookInstaller.uninstall(c.agent, in: context())
 
-        XCTAssertEqual(arguments, [
-            ["plugin", "uninstall", "lightty@lightty"],
-            // marketplace 声明也要撤掉，否则用户配置里留下一条孤儿条目
-            ["plugin", "marketplace", "remove", "lightty"],
-        ])
-        XCTAssertTrue(outcome.removed)
-    }
-
-    func testCodexUninstallUsesRemove() throws {
-        try write(.codex, codexInstalled)
-
-        try HookInstaller.uninstall(.codex, in: context())
-
-        XCTAssertEqual(arguments.first, ["plugin", "remove", "lightty@lightty"])
-    }
-
-    func testUninstallOnlyRunsWhatIsActuallyDeclared() throws {
-        try write(.codex, """
-            [marketplaces.lightty]
-            source_type = "local"
-            """)
-
-        try HookInstaller.uninstall(.codex, in: context())
-
-        // 对着不存在的插件跑 remove 会非零退出，那种噪音不该变成"卸载失败"
-        XCTAssertEqual(arguments, [["plugin", "marketplace", "remove", "lightty"]])
-    }
-
-    func testUninstallOnUntouchedConfigRunsNothing() throws {
-        let outcome = try HookInstaller.uninstall(.claudeCode, in: context())
-
-        XCTAssertTrue(invocations.isEmpty, "无事可做却跑了 CLI")
-        XCTAssertTrue(outcome.commands.isEmpty)
+            XCTAssertEqual(arguments, c.expected, c.name)
+            XCTAssertTrue(outcome.removed, c.name)
+            XCTAssertEqual(outcome.commands.isEmpty, c.expected.isEmpty, c.name)
+        }
     }
 
     func testUninstallClearsTheLedger() throws {
@@ -459,6 +442,7 @@ final class HookInstallerTests: XCTestCase {
 
     // MARK: - 铁律：安装器从不写 agent 配置
 
+    /// 装 / 探测 / 卸载全程，以及 CLI 失败那一侧，agent 配置目录前后快照必须一模一样。
     func testNothingWritesToAgentConfigPaths() throws {
         try write(.claudeCode, claudeInstalled)
         try write(.codex, codexInstalled)
@@ -473,16 +457,12 @@ final class HookInstallerTests: XCTestCase {
         // 写用户配置的是它们自己的 CLI（这里是个假实现，什么都不写）。
         // 我们这一侧一个字节都不该动——包括不新建任何文件。
         XCTAssertEqual(try configSnapshot(), before, "安装器改动了 agent 配置目录")
-    }
 
-    func testFailedCLIDoesNotTouchAgentConfig() throws {
-        try write(.claudeCode, claudeInstalled)
-        let before = try configSnapshot()
+        // CLI 失败时同样一个字节都不动。
         failure = HookCLIError.failed(
             command: "claude plugin install", status: 1, output: "boom")
-
         XCTAssertThrowsError(try HookInstaller.install(.claudeCode, in: context()))
-        XCTAssertEqual(try configSnapshot(), before)
+        XCTAssertEqual(try configSnapshot(), before, "CLI 失败后安装器改动了 agent 配置目录")
     }
 
     // MARK: - 错误

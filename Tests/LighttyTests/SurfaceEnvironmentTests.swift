@@ -24,32 +24,34 @@ final class SurfaceEnvironmentTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         previousAppState = AppState.shared
         AppState.shared = AppState(taskDirectory: directory, sweepStalePanes: false)
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
+        // 要读 shell 里的环境变量，得真建 surface、跑真 zsh。
+        TerminalTestShell.spawnsSurfaces = true
+        TerminalTestShell.usesRealShell = true
     }
 
     override func tearDown() {
+        TerminalTestShell.usesRealShell = false
+        TerminalTestShell.spawnsSurfaces = false
         GhosttyRuntime.shared.setColorScheme(GHOSTTY_COLOR_SCHEME_LIGHT)
         AppState.shared = previousAppState ?? AppState.shared
         try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
 
-    func testPaneEnvReachesShellUnderLightScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_LIGHT)
-        XCTAssertTrue(env.hasPaneID, "light: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "light: env=\(env.summary)")
-    }
-
-    func testPaneEnvReachesShellUnderDarkScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_DARK)
-        XCTAssertTrue(env.hasPaneID, "dark: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "dark: env=\(env.summary)")
-    }
-
-    func testPaneEnvReachesShellWhenSpawnedRightAfterDarkScheme() throws {
-        let env = try spawnAndDumpEnvironment(scheme: GHOSTTY_COLOR_SCHEME_DARK, settle: false)
-        XCTAssertTrue(env.hasPaneID, "dark/no-settle: env=\(env.summary)")
-        XCTAssertTrue(env.hasSocket, "dark/no-settle: env=\(env.summary)")
+    /// 三种时序只差 (scheme, settle)：明、暗、以及「上报暗色后立刻 spawn」那个空窗。
+    func testPaneEnvReachesShell() throws {
+        let cases: [(name: String, scheme: ghostty_color_scheme_e, settle: Bool)] = [
+            ("light", GHOSTTY_COLOR_SCHEME_LIGHT, true),
+            ("dark", GHOSTTY_COLOR_SCHEME_DARK, true),
+            // 盯 config replay 丢 env 的空窗：不等 soft reload 跑完就 spawn
+            ("dark/no-settle", GHOSTTY_COLOR_SCHEME_DARK, false),
+        ]
+        for c in cases {
+            let env = try spawnAndDumpEnvironment(scheme: c.scheme, settle: c.settle)
+            XCTAssertTrue(env.hasPaneID, "\(c.name): env=\(env.summary)")
+            XCTAssertTrue(env.hasSocket, "\(c.name): env=\(env.summary)")
+        }
     }
 
     private struct DumpedEnvironment {
@@ -74,22 +76,22 @@ final class SurfaceEnvironmentTests: XCTestCase {
         let pane = PaneView()
         pane.frame = window.contentView!.bounds
         window.contentView?.addSubview(pane)
-        window.orderFront(nil)
+        // surface 在 pane 进入窗口时就创建；shell 集成的 OSC 7 走 core，不依赖窗口上屏，
+        // 所以不 order 窗口。
         defer {
-            window.orderOut(nil)
             pane.removeFromSuperview()
             PaneRuntimeDirectory.destroy(paneID: pane.dragIdentifier.uuidString)
         }
         XCTAssertNotNil(pane.terminal.surface, "surface should spawn once the pane is in a window")
 
         // shell 就绪 = shell 集成报了首个 OSC 7（与恢复会话敲 --resume 的时机一致）。
-        try wait(15, "shell ready") { pane.terminal.currentWorkingDirectory != nil }
+        try waitUntil("shell ready", timeout: 15) { pane.terminal.currentWorkingDirectory != nil }
 
         let output = directory.appendingPathComponent("env-\(pane.dragIdentifier.uuidString).txt")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         pane.terminal.sendText("env > '\(output.path)'; touch '\(output.path).done'")
         _ = pane.terminal.sendReturn()
-        try wait(10, "env dump") { FileManager.default.fileExists(atPath: output.path + ".done") }
+        try waitUntil("env dump", timeout: 10) { FileManager.default.fileExists(atPath: output.path + ".done") }
 
         let lines = try String(contentsOf: output, encoding: .utf8)
             .split(separator: "\n").map(String.init)
@@ -98,13 +100,5 @@ final class SurfaceEnvironmentTests: XCTestCase {
 
     private func pump(_ seconds: TimeInterval) {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
-    }
-
-    private func wait(_ timeout: TimeInterval, _ what: String, until condition: () -> Bool) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            if Date() > deadline { XCTFail("timed out waiting for \(what)"); throw CancellationError() }
-            pump(0.05)
-        }
     }
 }

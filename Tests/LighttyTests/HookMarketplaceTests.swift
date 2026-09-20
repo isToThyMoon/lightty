@@ -131,6 +131,9 @@ final class HookMarketplaceTests: XCTestCase {
         // 而症状同样是静默的——用户敲 `/lightty:handoff` 什么都不会发生
         XCTAssertEqual(claude["skills"] as? String, "./skills/")
         XCTAssertEqual(codex["skills"] as? String, "./skills/")
+
+        // 两家事件表不同，版本就该不同；相同说明版本又被混在一起算了
+        XCTAssertNotEqual(claude["version"] as? String, codex["version"] as? String)
     }
 
     /// 这一层只管一件事：树上那份就是协议里那份，中间没有被重新拼过。
@@ -146,17 +149,9 @@ final class HookMarketplaceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), HandoffProtocol.skillDocument)
     }
 
-    func testEachManifestCarriesItsOwnVersion() throws {
-        try generate()
-
-        let claude = try json("plugins/lightty/.claude-plugin/plugin.json")["version"] as? String
-        let codex = try json("plugins/lightty/.codex-plugin/plugin.json")["version"] as? String
-        // 两家事件表不同，版本就该不同；相同说明版本又被混在一起算了
-        XCTAssertNotEqual(claude, codex)
-    }
-
     // MARK: - hook 定义
 
+    /// 两份 hooks 文件的事件表完整且每个事件都指向 shim；Interrupt 是 Codex 专有的键。
     func testBothHookFilesCarryEveryEventWithTheShimPath() throws {
         try generate()
 
@@ -165,19 +160,36 @@ final class HookMarketplaceTests: XCTestCase {
             ("plugins/lightty/hooks.json", HookAgent.codex),
         ] {
             let hooks = try self.hooks(path)
+            let command = HookMarketplace.hookCommand(for: agent, shim: shim)
             XCTAssertEqual(
                 hooks.keys.sorted(), agent.events.sorted(), "\(path) 的事件表不完整")
             for event in agent.events {
-                XCTAssertEqual(hooks[event], [shim], "\(path) 的 \(event) 没指向 shim")
+                XCTAssertEqual(hooks[event], [command], "\(path) 的 \(event) 没指向 shim")
             }
         }
+        XCTAssertNil(try hooks("plugins/lightty/hooks/hooks.json")["Interrupt"])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Interrupt"],
+                       [HookMarketplace.hookCommand(for: .codex, shim: shim)])
     }
 
-    func testInterruptIsCodexOnly() throws {
+    /// 每条命令都把自家名字带给 helper，两家带的名字不同——helper 靠它认是谁调的，
+    /// 两家写成一样就等于没说，而认错家是静默失败（快照里会生成另一家的 resume 命令）。
+    func testEveryHookCommandNamesItsOwnAgent() throws {
         try generate()
 
-        XCTAssertNil(try hooks("plugins/lightty/hooks/hooks.json")["Interrupt"])
-        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Interrupt"], [shim])
+        for (path, agent) in [
+            ("plugins/lightty/hooks/hooks.json", HookAgent.claudeCode),
+            ("plugins/lightty/hooks.json", HookAgent.codex),
+        ] {
+            let suffix = " --agent \(agent.sessionAgent.rawValue)"
+            for (event, commands) in try hooks(path) {
+                for command in commands {
+                    XCTAssertTrue(command.hasSuffix(suffix), "\(path) 的 \(event): \(command)")
+                }
+            }
+        }
+        XCTAssertNotEqual(HookAgent.claudeCode.sessionAgent.rawValue,
+                          HookAgent.codex.sessionAgent.rawValue)
     }
 
     func testEventKeysArePascalCase() throws {
@@ -230,9 +242,10 @@ final class HookMarketplaceTests: XCTestCase {
 
         let generation = try generate(other)
 
-        XCTAssertEqual(
-            try hooks("plugins/lightty/hooks/hooks.json")["Stop"], [other])
-        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Stop"], [other])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks/hooks.json")["Stop"],
+                       [HookMarketplace.hookCommand(for: .claudeCode, shim: other)])
+        XCTAssertEqual(try hooks("plugins/lightty/hooks.json")["Stop"],
+                       [HookMarketplace.hookCommand(for: .codex, shim: other)])
         // 只有两份 hooks 与带版本的两份插件清单需要重写，marketplace 清单不含路径
         XCTAssertEqual(generation.rewritten.sorted(), [
             "plugins/lightty/.claude-plugin/plugin.json",
@@ -243,17 +256,6 @@ final class HookMarketplaceTests: XCTestCase {
     }
 
     // MARK: - 版本 = 内容哈希
-
-    func testVersionTracksHookContent() throws {
-        for agent in HookAgent.allCases {
-            let a = HookMarketplace.version(for: agent, command: shim)
-            let b = HookMarketplace.version(for: agent, command: "/somewhere/else/lightty-hook")
-
-            XCTAssertEqual(
-                a, HookMarketplace.version(for: agent, command: shim), "同样的内容算出了不同版本")
-            XCTAssertNotEqual(a, b, "内容变了版本却没变——两家 CLI 不会重新拷贝插件")
-        }
-    }
 
     func testVersionIsSemverWithBuildMetadata() throws {
         // `0.1.0+3f2a1c9d`：`claude plugin validate` 零警告接受这个形状，
@@ -267,109 +269,83 @@ final class HookMarketplaceTests: XCTestCase {
             parts[1].allSatisfy { $0.isHexDigit && !$0.isUppercase }, "哈希段含非法字符")
     }
 
-    func testSharedHookChangeMovesBothVersions() throws {
-        // 用户期望的流程：lightty 升级改了 hooks 逻辑 → **两边**都提示 Update，
-        // 各点各的。事件表的事实来源是单一的（HookAgent.events 里那个 shared 数组
-        // 加一个各家专有的尾巴），所以改共享部分必须让两家版本一起动。
-        //
-        // 上面那条用例守的是反面（只改一家不波及另一家）；这条守正面。
-        // 两条都在，才说明版本粒度既不过粗也不过细。
-        let sharedTail = "PreCompact"   // 假装新增一个两家都支持的事件
-        for agent in HookAgent.allCases {
-            let before = HookMarketplace.version(for: agent, command: shim)
-            let after = HookMarketplace.version(
-                hooks: HookMarketplace.hooksDocument(
-                    events: agent.events + [sharedTail], command: shim),
-                manifests: HookMarketplace.manifestBytes(for: agent))
-            XCTAssertNotEqual(
-                before, after,
-                "共享事件表变了，\(agent.rawValue) 的版本却没动——那一行不会提示 Update")
+    /// 版本 = 内容哈希的敏感性：改哪一样输入 → 哪家版本动。表里每行只改一样；
+    /// 正面（该动的动）与反面（不该动的不动）都在这一张表里，两面都在才说明版本粒度
+    /// 既不过粗也不过细。
+    ///
+    /// 各行的回归背景：
+    /// - 事件表：用户期望的流程是 lightty 升级改了 hooks 逻辑 → **两边**都提示 Update，
+    ///   各点各的。事件表的事实来源是单一的（HookAgent.events 里那个 shared 数组加一个
+    ///   各家专有的尾巴），所以改共享部分必须让两家版本一起动；而 hooks 那一半必须
+    ///   **只由这一家自己的文档**决定——混着算的话，改 Claude Code 的事件表会把 Codex
+    ///   的版本也顶掉，用户那一行凭空冒出"有更新"，点下去装的还是同样的东西。
+    /// - shim 路径：它写进两份 hooks 文档，动它两家都得重装。
+    /// - SKILL.md：技能不进版本哈希是个**没有症状**的 bug——改了文字版本纹丝不动，两家
+    ///   CLI 都不会重新拷贝，新文案永远到不了用户手上。技能两家共用一份，它一变两家都动。
+    /// - 清单：理由和技能一模一样，`skills` / `hooks` 指向哪儿、description、Codex 那份的
+    ///   `interface` 与 `policy`——改任何一个都改变了"装进去的是什么"。2026-09-09 之前
+    ///   清单不进哈希，当时没出事只是因为 SKILL.md 同时进了哈希把版本顶起来了。
+    ///   清单按家分开喂，改一家不该顶掉另一家。
+    func testVersionMovesWithEachOfItsInputsAndOnlyThose() throws {
+        enum Input { case events, shimPath, skill, manifest }
+        struct Case {
+            let name: String
+            let input: Input
         }
-
-        // shim 路径同理：它写进两份 hooks 文档，动它两家都得重装
-        for agent in HookAgent.allCases {
-            XCTAssertNotEqual(
-                HookMarketplace.version(for: agent, command: shim),
-                HookMarketplace.version(for: agent, command: "/elsewhere/lightty-hook"),
-                "\(agent.rawValue) 对 shim 路径变化不敏感")
+        /// 给某一家算「只改了 `input` 之后」的版本。
+        func version(_ agent: HookAgent, editing input: Input) -> String {
+            switch input {
+            case .events:
+                // 假装新增一个两家都支持的事件
+                return HookMarketplace.version(
+                    hooks: HookMarketplace.hooksDocument(
+                        events: agent.events + ["PreCompact"],
+                        command: HookMarketplace.hookCommand(for: agent, shim: shim)),
+                    manifests: HookMarketplace.manifestBytes(for: agent))
+            case .shimPath:
+                return HookMarketplace.version(for: agent, command: "/elsewhere/lightty-hook")
+            case .skill:
+                let edited = Data((HandoffProtocol.skillDocument + "\nOne more line.\n").utf8)
+                return HookMarketplace.version(
+                    hooks: HookMarketplace.hooksDocument(for: agent, command: shim), skill: edited,
+                    manifests: HookMarketplace.manifestBytes(for: agent))
+            case .manifest:
+                var edited = HookMarketplace.manifestBytes(for: agent)
+                edited.append(contentsOf: Data(#"{"interface":{"category":"新加的键"}}"#.utf8))
+                return HookMarketplace.version(
+                    hooks: HookMarketplace.hooksDocument(for: agent, command: shim),
+                    manifests: edited)
+            }
         }
-    }
-
-    func testSkillChangeMovesBothVersions() throws {
-        // 技能不进版本哈希是个**没有症状**的 bug：改了 SKILL.md 的文字，版本
-        // 纹丝不动，两家 CLI 都不会重新拷贝，新文案永远到不了用户手上——而开发
-        // 者这边文件明明是新的。所以这条必须守住。
-        //
-        // 技能两家共用一份，所以它一变，两家的版本都得跟着动。
-        let edited = Data((HandoffProtocol.skillDocument + "\nOne more line.\n").utf8)
+        let cases: [Case] = [
+            Case(name: "a shared event moves both versions", input: .events),
+            Case(name: "the shim path moves both versions", input: .shimPath),
+            Case(name: "SKILL.md moves both versions", input: .skill),
+            Case(name: "an agent's manifest moves that agent's version", input: .manifest),
+        ]
         for agent in HookAgent.allCases {
-            let before = HookMarketplace.version(for: agent, command: shim)
-            let after = HookMarketplace.version(
-                hooks: HookMarketplace.hooksDocument(for: agent, command: shim), skill: edited,
-                manifests: HookMarketplace.manifestBytes(for: agent))
-            XCTAssertNotEqual(
-                before, after,
-                "SKILL.md 变了，\(agent.rawValue) 的版本却没动——新技能装不下去")
-        }
-    }
-
-    func testOneAgentsEventChangeDoesNotMoveTheOthersVersion() throws {
-        // hooks 那一半必须**只由这一家自己的文档**决定。混着算的话，改 Claude
-        // Code 的事件表会把 Codex 的版本也顶掉，用户那一行凭空冒出"有更新"，
-        // 点下去装的还是同样的东西。
-        //
-        // （另一半是两家共用的 SKILL.md，它一变两家一起动——那是对的，
-        // 见 testSkillChangeMovesBothVersions。）
-        for agent in HookAgent.allCases {
+            let baseline = HookMarketplace.version(for: agent, command: shim)
+            // 同样的内容算出同样的版本；版本只掺自己的 hooks、那份技能、自己的清单。
+            XCTAssertEqual(baseline, HookMarketplace.version(for: agent, command: shim),
+                           "\(agent.rawValue)：同样的内容算出了不同版本")
             XCTAssertEqual(
-                HookMarketplace.version(for: agent, command: shim),
+                baseline,
                 HookMarketplace.version(
-                    hooks: HookMarketplace.hooksDocument(events: agent.events, command: shim),
+                    hooks: HookMarketplace.hooksDocument(
+                        events: agent.events,
+                        command: HookMarketplace.hookCommand(for: agent, shim: shim)),
                     manifests: HookMarketplace.manifestBytes(for: agent)),
                 "\(agent.rawValue) 的版本掺进了自己 hooks、那份技能、自己两份清单之外的东西")
+            for c in cases {
+                XCTAssertNotEqual(baseline, version(agent, editing: c.input),
+                                  "\(c.name)：\(agent.rawValue) 的版本却没动——那一行不会提示 Update")
+            }
         }
 
-        // 给 Claude Code 加一个事件（模拟升级改了事件表）：它自己的版本必须变，
-        // 而 Codex 的输入压根没被碰过，版本自然纹丝不动。
-        let claudeNow = HookMarketplace.version(for: .claudeCode, command: shim)
-        let claudeAfter = HookMarketplace.version(
-            hooks: HookMarketplace.hooksDocument(
-                events: HookAgent.claudeCode.events + ["PreCompact"], command: shim),
-            manifests: HookMarketplace.manifestBytes(for: .claudeCode))
-        XCTAssertNotEqual(claudeNow, claudeAfter, "改了事件表版本却没动")
-        XCTAssertNotEqual(
-            claudeAfter, HookMarketplace.version(for: .codex, command: shim))
-    }
-
-    /// 清单也必须进版本哈希，理由和技能一模一样：`skills` / `hooks` 指向哪儿、
-    /// description、Codex 那份的 `interface` 与 `policy`——改任何一个都改变了
-    /// "装进去的是什么"，而两家 CLI 只按版本串决定要不要重新拷贝。清单不进哈希，
-    /// 就是"只改清单 → 版本纹丝不动 → 用户 cache 里还是旧的"，**没有任何症状**。
-    ///
-    /// 2026-09-09 之前正是如此：那天改了两份清单的 description、加了 `skills` 键，
-    /// 全都没进哈希；当时没出事只是因为 SKILL.md 同时进了哈希，把版本顶起来了。
-    func testManifestChangeMovesThatAgentsVersionOnly() throws {
-        for agent in HookAgent.allCases {
-            let before = HookMarketplace.version(for: agent, command: shim)
-            var edited = HookMarketplace.manifestBytes(for: agent)
-            edited.append(contentsOf: Data(#"{"interface":{"category":"新加的键"}}"#.utf8))
-            let after = HookMarketplace.version(
-                hooks: HookMarketplace.hooksDocument(for: agent, command: shim),
-                manifests: edited)
-            XCTAssertNotEqual(
-                before, after,
-                "\(agent.rawValue) 的清单变了版本却没动——CLI 不会重新拷贝，用户 cache 里还是旧清单")
-        }
-
-        // 跨家独立：清单按家分开喂，改一家不该顶掉另一家
-        var claudeEdited = HookMarketplace.manifestBytes(for: .claudeCode)
-        claudeEdited.append(contentsOf: Data("x".utf8))
-        XCTAssertNotEqual(
-            HookMarketplace.version(for: .codex, command: shim),
-            HookMarketplace.version(
-                hooks: HookMarketplace.hooksDocument(for: .claudeCode, command: shim),
-                manifests: claudeEdited),
-            "改 Claude Code 的清单不该动 Codex 的版本")
+        // 跨家独立：只改 Claude Code 的事件表或清单，Codex 的输入压根没被碰过，版本自然纹丝不动。
+        let codex = HookMarketplace.version(for: .codex, command: shim)
+        XCTAssertNotEqual(version(.claudeCode, editing: .events), codex, "改 Claude Code 的事件表不该动 Codex 的版本")
+        XCTAssertNotEqual(version(.claudeCode, editing: .manifest), codex, "改 Claude Code 的清单不该动 Codex 的版本")
     }
 
     /// 版本串**只能**由那三样算出来。这条是上面几条的合围：任何人把生产路径改成
@@ -399,11 +375,6 @@ final class HookMarketplaceTests: XCTestCase {
             "plugins/lightty/hooks.json",
             "plugins/lightty/skills/handoff/SKILL.md",
         ])
-    }
-
-    func testPluginIDMatchesTheFormBothCLIsRequire() throws {
-        // Codex 的 `plugin add` **强制**要求 plugin@marketplace 形式
-        XCTAssertEqual(HookMarketplace.pluginID, "lightty@lightty")
     }
 
     // MARK: - 真实位置不能被测试碰到

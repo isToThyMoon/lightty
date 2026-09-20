@@ -8,6 +8,10 @@
 
 当前目录每个来源分区先取 100 条；“加载更多”按需读取后续页，搜索明确只覆盖已加载记录。刷新按钮在加载期间变为取消。刷新与取消递增 generation，旧请求无法覆盖新状态；分页去重、循环游标检查、失败保留已有记录，完整来源读取成功后才清理失效记录。
 
+会话时间取自官方目录的 `updatedAt`；“几分钟前”另由视图每 30 秒为可见行更新一次，
+不触发 CLI 查询、不重建行。手动刷新、显示侧栏和目录变化也更新相对时间，
+即使目录返回的数据没有变化。hook 触发的元数据重读仍由 `SessionLibrary` 合流。
+
 ### Sessions 项目与本地归档契约
 
 - Project 是 lightty 的组织能力，可混合 Claude Code 与 Codex CLI 会话。「移到项目」只改变归属，不合并上下文，不移动 Agent 文件。
@@ -46,15 +50,13 @@
 
 ### 2.1 模式标题
 
-- 将现有 11.5pt、浅色的“任务”小节标签改为可点击标题按钮：中文 **Handoff 任务** / **Sessions 会话**；英文 **Handoff tasks** / **Sessions**。
-- 建议 18pt semibold，主文字色，末尾向下 chevron；以实际 pt 设计，不照抄不同缩放截图的像素尺寸。
-- 标题按钮高 34–36pt，长英文允许截断并提供完整辅助标签；红黄绿所在顶部工具行不改动。
-- 标题下方常驻模式说明，不只在下拉菜单里解释。Handoff 模式显示“管理你的 Handoff 任务”，下一行引导“试试在 Agent 中说：‘总结当前 handoff task’”；Sessions 模式显示“继续你的 Claude Code / Codex CLI 会话”，下一行说明“按项目整理，点击继续上次对话”。
+- 模式标题是两段式切换（`ModeSwitch`）：灰底圆角轨道，左右两段 **Handoff** / **Sessions**（中英文相同，不本地化），当前模式一段铺白色滑块（深色下比轨道亮一档），点击另一段直接切换，滑块平移过去。
+- 高 32pt，左右距卡片 16pt，两段按卡片实际宽度等分（卡片可拖右边线调宽，见[双侧栏布局约定](double-sidebar.md)），13pt 字，激活段 semibold 主文字色，其余 medium 次级色；长英文截断，辅助功能为单选组；红黄绿所在顶部工具行不改动。
+- 标题下方常驻模式说明，不只在下拉菜单里解释。Handoff 模式只用一句话说明功能：“启动 Agent 自动注入、写回 Handoff”；Sessions 模式显示“继续你的 Claude Code / Codex CLI 会话”，下一行说明“按项目整理，点击继续上次对话”。
 - 说明用 11–12pt secondaryText，提示可用 tertiaryText；按可用宽度自然换行、参与布局，不固定高度覆盖列表。保持标题、说明、列表三级视觉层次；说明文本不触发命令、不自动发送 prompt。
 - Handoff 提示是自然语言引导，不是 CLI 内建命令；需在已绑定任务且 hooks 可用的现场验证写回流程，缺少配置时提供“配置 Agent hooks”入口，不保证未配置的 Agent 会自动写入任务。
-- 点击弹出两行模式菜单，当前模式打勾，每项有简短副说明：“管理 Handoff 任务” / “继续本机 CLI 会话”。菜单不重复整段操作提示。
-- 英文常驻说明：Handoff — “Manage your handoff tasks.” / “Try asking your agent: ‘Summarize the current handoff task.’”；Sessions — “Continue your Claude Code / Codex CLI sessions.” / “Organize by project. Click to pick up where you left off.”
-- 优先复用 ShellMenuPopover 的视觉与键盘模式；若其不支持副标题，在共享菜单能力内做最小扩展，不为这个标题造另一套菜单系统。
+- 每段的 tooltip 是简短副说明：“管理 Handoff 任务” / “继续本机 CLI 会话”，不重复整段操作提示。
+- 英文常驻说明：Handoff — “Injected when an agent starts, written back as it works.”；Sessions — “Continue your Claude Code / Codex CLI sessions.” / “Organize by project. Click to pick up where you left off.”
 - 搜索随模式变化：Handoff 搜索现有任务；Sessions 搜索会话标题、来源、项目、路径，不首期检索完整对话。建档按钮仅在 Handoff 模式显示；Sessions 不保留会误建任务的按钮。
 - 每窗口独立保存模式、各模式查询、选择与滚动位置；新窗口继承最近选用模式，其他已开窗口不被同步切换。
 - 模式切换仅替换内容区：保持面板尺寸、第一侧栏开合、第二侧栏开合、终端焦点策略不变，关闭旧模式的临时弹窗。
@@ -71,10 +73,10 @@ Sessions 顶部的新建会话按钮提供 Codex / Claude Code 选择，使用�
 
 最近会话行分为标题、Agent 与本地化时间、目录末级名三行；项目内使用紧凑两行，不重复父项目名；搜索结果补充归属信息。完整目录放在 tooltip，避免路径挤掉时间。第一、第二侧栏统一由滚动容器管理行 hover：只保留当前 hover 行的弱引用，滚动开始清除它，滚动期间只更新时间戳并忽略进入事件，停稳后命中测试一次。行不单独监听滚动通知；状态没变时不重绘。该等待仅控制 hover 恢复，不节流系统滚动事件。
 
-两种模式共用 SidebarListScrollView：列表左缘距卡片 12pt、滚动容器右缘距卡片 2pt；内部右侧独立保留 16pt 滚动条区域，即使 overlay 隐藏也不改变行宽。正文和操作按钮始终在该区域左侧；Handoff 与 Sessions 使用一致的行首内边距、更多按钮和次级文字颜色。
+两种模式共用 SidebarListScrollView：列表左缘距卡片 12pt、滚动容器右缘距卡片 2pt；内部右侧独立保留 16pt 滚动条区域，即使 overlay 隐藏也不改变行宽。正文和操作按钮始终在该区域左侧；行内文字铺到行尾、不为隐藏的 ⋯ 留白，⋯ 显示（hover、选中、键盘聚焦、菜单打开）时浮在文字上、文字在它左缘前渐隐，与第二侧栏同一规则（见[双侧栏布局约定](double-sidebar.md)）；Handoff 与 Sessions 使用一致的行首内边距、更多按钮和次级文字颜色。
 
 ```text
-Sessions 会话 ▾
+[ Handoff | Sessions ]
 继续你的 Claude Code / Codex CLI 会话
 按项目整理，点击继续上次对话
 来源：全部 ▾                         搜索

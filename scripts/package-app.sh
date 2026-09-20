@@ -4,16 +4,15 @@
 # 用法：
 #   scripts/package-app.sh [version]            # 默认版本取 git describe（无 tag 则 0.0.0-dev）
 #   SIGN_IDENTITY="Developer ID Application: …" scripts/package-app.sh 1.0.0
-#   MAKE_DMG=1 scripts/package-app.sh 1.0.0     # 附带产出 dist/lightty-<version>-<口味>.dmg
+#   MAKE_DMG=1 scripts/package-app.sh 1.0.0     # 附带产出 dist/lightty-<version>-<架构>.dmg
 #   FLAVOR=arm64 MAKE_DMG=1 scripts/package-app.sh 1.0.0   # 单架构包
 #
-# 口味（FLAVOR）：universal（默认）/ arm64 / x64。
+# 架构（FLAVOR）：universal（默认）/ arm64 / x64。
 # 通用包里两份 Node 运行时就占 218MB，用户只用得上一份；单架构包砍掉另一份，
 # 顺带把主程序也瘦成单架构，下载量从 150MB 降到 93MB（实测）。
-# 通用包仍然要出：本次改动之前装好的那些 app 指向 appcast.xml，那条源必须继续
-# 提供一个两种机器都能跑的包，否则 Intel 用户会卡在旧版本上收不到更新。
-# 每种口味有自己的更新源（SUFeedURL），Sparkle 的 appcast 一个版本只能有一条记录，
-# 三种口味塞不进同一个源。
+# 正式发布只出 arm64 / x64（见 release.yml）；universal 只留作本地打包，一个包两种机器都能跑。
+# 每种架构的包有自己的更新源（SUFeedURL），Sparkle 的 appcast 一个版本只能有一条记录，
+# 不同架构的包塞不进同一个源。
 #
 # 签名策略：SIGN_IDENTITY 显式指定 > 钥匙串里的 Developer ID Application >
 # ad-hoc（"-"，仅本机可跑，分发会被 Gatekeeper 拦）。
@@ -22,7 +21,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-$(git -C "$ROOT" describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.0.0-dev)}"
-BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+# 2026-09 历史改写把 236 个提交并成 63 个，而已发布的 v0.14.1 构建号是 236。
+# Sparkle 按构建号判断新旧，所以提交数加固定偏移，保证构建号继续递增。
+# 2026-09-17 又把 v0.17.0 之后的 7 个提交压成 1 个，已装的 v0.19.1 构建号是 283，偏移提到 210。
+# 2026-09-20 把 v0.14.0 之后的 26 个提交压成 1 个；已发布 v0.20.0 的构建号是 295，
+# 偏移提到 235，让压缩后的首个构建号继续为 296。
+BUILD_NUMBER_OFFSET=235
+BUILD_NUMBER="$(( $(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1) + BUILD_NUMBER_OFFSET ))"
 BUNDLE_ID="${BUNDLE_ID:-com.istothymoon.lightty}"
 FLAVOR="${FLAVOR:-universal}"
 case "$FLAVOR" in
@@ -32,8 +37,8 @@ case "$FLAVOR" in
     *) echo "unknown FLAVOR: $FLAVOR (universal|arm64|x64)"; exit 1 ;;
 esac
 DIST="$ROOT/dist"
-# 通用包留在 dist/lightty.app（发布流水线的 SDK 校验等步骤按这个路径找），
-# 单架构包各自进子目录，三种口味互不覆盖。
+# 通用包（本地打包）留在 dist/lightty.app，单架构包各自进 dist/<架构>/，互不覆盖；
+# 发布流水线的 SDK 校验按单架构包的路径找。
 [ "$FLAVOR" = universal ] && APP="$DIST/lightty.app" || APP="$DIST/$FLAVOR/lightty.app"
 GHOSTTY_SHARE="$ROOT/vendor/ghostty/zig-out/share/ghostty"
 
@@ -68,7 +73,7 @@ cp -R "$(dirname "$BIN")/lightty_lightty.bundle" "$APP/Contents/Resources/"
 # The SDK only lists local metadata. Do not bundle its optional Claude CLI binary.
 CLAUDE_HELPER="$APP/Contents/Resources/claude-session-helper"
 mkdir -p "$CLAUDE_HELPER"
-# 运行时按口味只带用得上的那一份（各约 110MB）。
+# 运行时按架构只带用得上的那一份（各约 110MB）。
 case "$FLAVOR" in
     universal) RUNTIMES="runtime-arm64 runtime-x64" ;;
     arm64)     RUNTIMES="runtime-arm64" ;;

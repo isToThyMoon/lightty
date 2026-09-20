@@ -14,7 +14,7 @@ import Sparkle
 /// 单架构包自己的 `SUFeedURL` 已经指向单架构源，算出来是同一个地址，等于没动。
 /// 地址不在这里拼，只替换文件名：主机与路径只有打包脚本一处来源。
 final class UpdateFeed: NSObject, SPUUpdaterDelegate {
-    /// 本机架构对应的口味，与打包脚本的 FLAVOR 同名。
+    /// 本机架构对应的包，与打包脚本的 FLAVOR 同名。
     static var flavor: String {
         #if arch(arm64)
         return "arm64"

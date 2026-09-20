@@ -9,6 +9,7 @@ final class FilePreferencesTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root.appendingPathComponent("preferences.json")
     }
+    /// set 后 flush 前就能读到；连写多次落盘的是最后一个值；删掉的键 flush 后不会回来。
     func testFreshPreferencesAndRemovedValuesStayRemoved() throws {
         let file = try temporaryFile()
         let store = FilePreferences(fileURL: file)
@@ -16,10 +17,14 @@ final class FilePreferencesTests: XCTestCase {
         store.set("blue", forKey: "lightty.accent")
         XCTAssertEqual(store.string(forKey: "lightty.accent"), "blue")
         XCTAssertNil(store.object(forKey: "AppleLanguages"))
+        for value in 0..<100 { store.set(value, forKey: "counter") }
+        XCTAssertEqual(store.double(forKey: "counter"), 99)
         store.removeObject(forKey: "lightty.accent")
         store.flush()
         let reopened = FilePreferences(fileURL: file)
         XCTAssertNil(reopened.object(forKey: "lightty.accent"))
+        XCTAssertEqual(reopened.double(forKey: "counter"), 99)
+        XCTAssertNil(store.lastError)
         let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o600)
     }

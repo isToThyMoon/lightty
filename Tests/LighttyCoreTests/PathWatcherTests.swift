@@ -1,7 +1,7 @@
 import XCTest
 @testable import LighttyCore
 
-final class TaskFolderWatcherTests: XCTestCase {
+final class PathWatcherTests: XCTestCase {
 
     var dir: URL!
 
@@ -26,7 +26,7 @@ final class TaskFolderWatcherTests: XCTestCase {
 
     func testDebouncedSingleCallbackForBurst() throws {
         let counter = Counter()
-        let watcher = try TaskFolderWatcher(directory: dir, debounce: 0.15) { counter.increment() }
+        let watcher = try PathWatcher(path: dir, debounce: 0.15) { counter.increment() }
         defer { watcher.cancel() }
         // 短时间内多次变更 → 防抖合并为一次回调
         for i in 0..<5 {
@@ -40,7 +40,7 @@ final class TaskFolderWatcherTests: XCTestCase {
 
     func testFiresAgainForLaterChange() throws {
         let counter = Counter()
-        let watcher = try TaskFolderWatcher(directory: dir, debounce: 0.05) { counter.increment() }
+        let watcher = try PathWatcher(path: dir, debounce: 0.05) { counter.increment() }
         defer { watcher.cancel() }
         try Data("x".utf8).write(to: dir.appendingPathComponent("a.md"))
         wait(upTo: 2) { counter.value >= 1 }
@@ -50,9 +50,24 @@ final class TaskFolderWatcherTests: XCTestCase {
         XCTAssertEqual(counter.value, 2)
     }
 
+    /// 会话标题信号监听的是单个文件：agent 往记录里追加一行也要触发。
+    func testWatchingAFileFiresOnAppend() throws {
+        let file = dir.appendingPathComponent("transcript.jsonl")
+        try Data("{}\n".utf8).write(to: file)
+        let counter = Counter()
+        let watcher = try PathWatcher(path: file, debounce: 0.05) { counter.increment() }
+        defer { watcher.cancel() }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"custom-title\"}\n".utf8))
+        try handle.close()
+        wait(upTo: 2) { counter.value >= 1 }
+        XCTAssertEqual(counter.value, 1)
+    }
+
     func testInitFailsOnMissingDirectory() {
         let missing = dir.appendingPathComponent("不存在")
-        XCTAssertThrowsError(try TaskFolderWatcher(directory: missing, debounce: 0.05) {})
+        XCTAssertThrowsError(try PathWatcher(path: missing, debounce: 0.05) {})
     }
 }
 

@@ -14,7 +14,7 @@ private func presenceLabels(in view: NSView) -> Set<String> {
 extension SessionAssociationTests {
     @Test func closingLocalTabDoesNotTurnCachedRunningMetadataIntoAnExternalSession() async throws {
         _ = NSApplication.shared
-        if GhosttyRuntime.shared == nil { GhosttyRuntime.shared = GhosttyRuntime() }
+        ensureTerminalRuntime()
         let f = try SessionModelFixture()
         let previous = AppState.shared
         AppState.shared = AppState(taskDirectory: f.root, sweepStalePanes: false, sessionLibrary: f.library)
@@ -50,7 +50,7 @@ extension SessionAssociationTests {
         controller.closeTab(at: 0)
         #expect(controller.tabCount == 1)
         #expect(f.library.openPaneIDs(for: record.key).isEmpty)
-        try await Task.sleep(for: .milliseconds(30))
+        await awaitMainQueue(hops: 2)  // 会话库通知一拍，列表重算再一拍
         let detail = list.detailTextForTesting(record)
         #expect(!detail.contains(L("Open in lightty")))
         #expect(!detail.contains(L("Open in another terminal")),
@@ -129,7 +129,7 @@ struct SessionPresenceModelTests {
         #expect(f.library.presence(for: record.key) == .inLightty)
         f.library.removeWindow(b)
         #expect(f.library.presence(for: record.key) == .elsewhere, "A real external process must not be hidden by a local close")
-        try await Task.sleep(for: .milliseconds(20)) // Drain the window-change notification before observing exit.
+        await awaitMainQueue() // Drain the coalesced window-change notification before observing exit.
         var affected = Set<AgentSessionKey>()
         let observer = NotificationCenter.default.addObserver(forName: .lighttySessionLibraryDidChange,
             object: f.library, queue: nil) { notification in

@@ -51,11 +51,35 @@ codex plugin add lightty@lightty
 ### 注册的事件
 
 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`SessionEnd`，
-外加 Claude Code 的 `Notification`，以及 Codex 的 `PermissionRequest` / `Interrupt`。
+外加 Claude Code 的 `PostToolUseFailure` / `Notification`，以及 Codex 的 `PermissionRequest` / `Interrupt`。
+
+`Notification` 里已知只是告知的类型不改变状态，其余都算「待处理」。其中最常见的是回合结束
+60 秒没人输入时 Claude Code 发的 `idle_prompt`：它被忽略，pane 保持「已完成」。
+
+hook 不是忙/闲的唯一来源：两家都把状态和会话标题写进终端标题（OSC 0，Claude 是 ◐ ◑ ✳ 前缀，
+Codex 是 braille 旋转字符和 `Action Required`），lightty 从那里拿到按 Esc 中断的即时信号和改名，
+详见 `docs/specs/pane-status.md` §4.3。
+Claude Code 的 `Stop` 在用户中断时不触发，hook 侧只有带 `is_interrupt` 的 `PostToolUseFailure`。
+
+每条注册的命令都带上这一家的名字：
+
+```
+~/.lightty/bin/lightty-hook --agent claude
+~/.lightty/bin/lightty-hook --agent codex
+```
+
+两家的 hooks 文件是 lightty 自己生成的，哪一家读哪份是确定的，直接写进命令行即可；
+helper 不必再从父进程链的可执行路径反推是谁调的它——那条路的形状随安装方式变。
+没带 `--agent` 的旧版插件退回看载荷里 `transcript_path` 的形状，再退回环境变量。
+
+pane 只跟踪主会话。主会话在工具里拉起的子会话（比如 Bash 里跑 `claude -p`）会继承 pane 的
+环境变量，hook 从自己的父进程往上走，走到终端的前台作业组长之前若经过了**脱离终端**的进程，
+就认定这是子会话，静默退出，不发状态也不注入交接文档。判据全是内核里的终端结构，
+不认任何进程名，见 `docs/specs/pane-status.md` §2.1。
 
 这些事件缺一条都会让状态机少一条进出边：只登记 `Stop` 的话圆点永远不会变成"思考中"；
 漏掉 `PostToolUse`，工具跑完后状态会卡在 `tool` 上不回落；Codex 漏掉 `Interrupt`，
-用户主动停止后会一直停在 `thinking` / `tool`。
+用户主动停止后会一直停在 `thinking` / `tool`（Claude 这条边由终端标题兜着）。
 
 ### 为什么命令指向 `~/.lightty/bin/`
 
@@ -114,7 +138,7 @@ ls -l ~/.lightty/bin/lightty-hook
 echo $LIGHTTY_SOCK && ls -l $LIGHTTY_SOCK
 
 # 5. 手动喂一个事件，pane 头圆点应立刻变化
-echo '{"hook_event_name":"Stop"}' | LIGHTTY_PANE_ID=$LIGHTTY_PANE_ID LIGHTTY_SOCK=$LIGHTTY_SOCK ~/.lightty/bin/lightty-hook
+echo '{"hook_event_name":"Stop"}' | LIGHTTY_PANE_ID=$LIGHTTY_PANE_ID LIGHTTY_SOCK=$LIGHTTY_SOCK ~/.lightty/bin/lightty-hook --agent claude
 ```
 
 **`echo $LIGHTTY_PANE_ID` 或 `$LIGHTTY_SOCK` 是空的** —— 这个 pane 是升级前开的。新开一个 pane。
@@ -127,7 +151,9 @@ echo '{"hook_event_name":"Stop"}' | LIGHTTY_PANE_ID=$LIGHTTY_PANE_ID LIGHTTY_SOC
 
 **agent 会话是配置前起的** —— hook 配置在会话启动时读取，重开 claude/codex。
 
-**手动喂事件后 UI 不动** —— lightty 侧的接收问题，请提 issue。
+**手动喂事件后 UI 不动** —— 先确认这条命令是在 pane 的 shell 里**直接**敲的：
+在某个 agent 的工具里（或在别的会话的 Bash 工具跑的脚本里）喂事件，hook 会把它判成
+子会话而静默退出，这是对的。直接敲还是不动，就是 lightty 侧的接收问题，请提 issue。
 
 ## 卸载
 

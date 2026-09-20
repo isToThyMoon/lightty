@@ -17,7 +17,7 @@ enum PaneIdentityMetrics {
     static let iconGap: CGFloat = 4
 }
 
-/// 每 pane 一条 24pt 细 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
+/// 每 pane 一条 chromeRowHeight 高的 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
 /// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
 /// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
 /// 并入胶囊，窄时只剩点 + pane 名，信息由展开面板承载。
@@ -171,13 +171,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         wantsLayer = true
 
         capsule.wantsLayer = true
-        capsule.layer?.cornerRadius = 6
+        capsule.layer?.cornerRadius = ShellStyle.capsuleCornerRadius
 
         dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 3.5
+        dotView.layer?.cornerRadius = PaneIdentityMetrics.dotSize / 2
         applyDotColor()
 
-        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        nameLabel.font = ShellStyle.Font.compactTitle
         nameLabel.lineBreakMode = .byTruncatingTail
         // 标题由 agent 写，长度不可信。抗压缩优先级必须**低于** NSSplitView 的
         // holding priority（默认就是 250），否则"标题宽度 + 内边距"会变成整个 pane
@@ -188,14 +188,14 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .init(rawValue: NSLayoutConstraint.Priority.defaultLow.rawValue - 1),
             for: .horizontal)
 
-        taskHintLabel.font = .systemFont(ofSize: 10.5)
+        taskHintLabel.font = ShellStyle.Font.caption
         taskHintLabel.lineBreakMode = .byTruncatingTail
         taskHintLabel.setContentCompressionResistancePriority(
             .defaultLow, for: .horizontal)
 
         closeButton.image = NSImage(
-            systemSymbolName: "xmark", accessibilityDescription: L("Close pane"))?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+            systemSymbolName: ShellSymbol.close, accessibilityDescription: L("Close pane"))?
+            .withSymbolConfiguration(.init(pointSize: ShellStyle.closeIconSize, weight: .bold))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
         closeButton.focusRingType = .none
@@ -205,6 +205,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         closeButton.toolTip = L("Close pane")
 
         applyTerminalColors()
+
+        let capsuleArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self)
+        capsule.addTrackingArea(capsuleArea)
+        capsuleTracking = capsuleArea
 
         addSubview(capsule)
         for v in [dotView, closeButton, agentIcon, nameLabel, taskHintLabel] {
@@ -222,16 +229,24 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             // 身份胶囊会被红黄绿与侧栏开关盖住。按各 pane 自身居中后不再依赖
             // 窗口左侧安全区，多分屏也各自保持一致的视觉轴。
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
-            capsule.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        // 胶囊最多占 pane 的 capsuleWidthRatio、两侧各留 4pt：居中摆放两侧各留一段
+        // 气口，长标题下它仍然读作一枚 chip 而不是横幅。优先级 999 而不是必需：
+        // 仍远高于标题的抗压缩（249），正常宽度下照样截标题；但 pane 刚创建时宽度
+        // 是 0，胶囊里点、图标、边距加起来的最小宽度塞不进去，必需约束就无解，
+        // 布局引擎会挑一条断掉且之后不再恢复——实测断的是图标宽度，图标撑回 SVG
+        // 的 24pt 固有宽度，点和名字之间多出 14pt 空隙（展开的岛体没有这条上限，不受影响）。
+        let widthLimits = [
+            capsule.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
             capsule.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -4),
-            // 胶囊最多占 pane 的 capsuleWidthRatio：居中摆放两侧各留一段气口，
-            // 长标题下它仍然读作一枚 chip 而不是横幅。必需优先级，压过标题的
-            // 固有宽度，超出部分由 byTruncatingTail 收尾。
             capsule.widthAnchor.constraint(
                 lessThanOrEqualTo: widthAnchor, multiplier: Self.capsuleWidthRatio),
+        ]
+        for limit in widthLimits { limit.priority = .init(999) }
+        NSLayoutConstraint.activate(widthLimits + [
 
             dotView.leadingAnchor.constraint(
                 equalTo: capsule.leadingAnchor, constant: PaneIdentityMetrics.dotLeading),
@@ -254,7 +269,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
             taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
-            taskHintLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
+            taskHintLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
             taskHintLabel.trailingAnchor.constraint(
                 equalTo: capsule.trailingAnchor, constant: -7),
         ])
@@ -306,7 +321,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         let text = boundTaskName.map { " · \($0)" } ?? ""
         fullHintWidth = text.isEmpty ? 0 : ceil(
             (text as NSString).size(withAttributes: [
-                .font: taskHintLabel.font ?? NSFont.systemFont(ofSize: 10.5),
+                .font: taskHintLabel.font ?? ShellStyle.Font.caption,
             ]).width)
         needsLayout = true
     }
@@ -352,13 +367,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let capsuleTracking { removeTrackingArea(capsuleTracking) }
-        let area = NSTrackingArea(
-            rect: convert(capsule.frame, from: capsule.superview),
-            options: [.mouseEnteredAndExited, .activeInKeyWindow],
-            owner: self)
-        addTrackingArea(area)
-        capsuleTracking = area
+        // 胶囊的 hover 区挂在胶囊自己身上（init 里装一次，.inVisibleRect 跟随胶囊）。
+        // 以前在这里按 capsule.frame 算死矩形：这个回调只在 header 自身尺寸变时才来，
+        // 胶囊随标题变宽却不会触发——短标题「Terminal」时记下的中间一小块一直不更新，
+        // 换成长标题后移到左侧圆点就算离开胶囊，关闭键随之消失，pane 关不掉。
 
         if let headerTracking { removeTrackingArea(headerTracking) }
         // .activeAlways：app 未激活时第一下点击也可能直接是拖 pane
@@ -706,7 +718,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         NSAttributedString(
             string: title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .font: ShellStyle.Font.compactTitle,
                 .foregroundColor: GhosttyRuntime.shared.configValues.foregroundColor,
             ]
         ).draw(in: rect.insetBy(dx: 12, dy: 10))
