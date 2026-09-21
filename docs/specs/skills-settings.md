@@ -69,6 +69,10 @@ Esc 与设置左上角的「返回应用」沿用设置页行为。侧栏已标�
 ## 数据依据
 
 - 全局共享目录、各 Agent 专属目录扫描 SKILL.md；按解析后的真实路径合并软链接。
+- 列的标准是「本机 Agent 认得、能调用的技能」。`~/.claude/skills/synced` 是 claude.ai
+  同步下来的那批技能的容器，技能上面还有一层按组织和账号分的桶
+  （`synced/<org>_<account>/<技能>/SKILL.md`）：桶里的技能要列，来源记作 claude.ai；
+  容器本身不是技能，不列，也不能顶着「SKILL.md 缺失」冒充一条。
 - `npx skills` 的全局 `.skill-lock.json` 提供来源信息；只关联对应共享安装，
   不能把同名的独立副本或插件技能归到这个来源。兼容 XDG_STATE_HOME 指定的记录位置。
 - 插件目录（Claude 的 installed_plugins.json、Codex 的 plugins/cache）不在本页扫描范围内，
@@ -95,7 +99,11 @@ Esc 与设置左上角的「返回应用」沿用设置页行为。侧栏已标�
   （布局与 Markdown 阅读排版），入口为 Settings → Skills。
 - 收藏与「我的」标记跨窗口共享；语言切换刷新缓存页面；收藏、筛选及外观切换
   不重置当前文档的滚动位置和文字选择。
-- 本版扫描全局共享／Claude／Codex／Cursor 技能目录与内置目录。
+- 本版扫描全局共享／Claude／Codex 技能目录与内置目录；`~/.cursor/skills` 不扫，那两家读不到。
+  `~/.agents/skills` 是 Codex 现行的用户级目录（`codex-rs/ext/skills/src/host_roots.rs`），
+  Claude Code 不读它，要靠软链进 `~/.claude/skills`；`<CODEX_HOME>/skills` 是 Codex 标为已废弃、
+  仍兼容的旧位置。仓库级目录（`<repo>/.agents/skills`、`.claude/skills`）与 Codex 的 Admin 级
+  目录本页不扫：前者随项目走，后者属受管部署。
   项目级技能、任意标签、安装更新移除未接入；插件技能移到 Plugins 页。
 - 缺失文件、断链和坏元数据进入提示。
 - 2026-09-15 全量 `swift test`：505 项 XCTest（1 项跳过）和 140 项 Swift Testing，

@@ -52,14 +52,25 @@ struct SkillCatalog {
         let lock = environmentURL("XDG_STATE_HOME")?.appendingPathComponent("skills/.skill-lock.json")
             ?? home.appendingPathComponent(".agents/.skill-lock.json")
         let sources = reader.lockSources(at: lock)
+        let claude = home.appendingPathComponent(".claude/skills")
         reader.scanSkills(at: shared, label: "Shared", source: .local, lockSources: sources)
+        // 只扫 lightty 支持的两家读得到的目录：列出来的技能必须是本机 agent 真能调用的。
+        // 各目录归谁读（Codex 侧见 `codex-rs/ext/skills/src/host_roots.rs`）：
+        // - `~/.agents/skills`：Codex 现行的用户级目录，全 agent 通用约定；Claude Code 不读，
+        //   通常靠软链到 `~/.claude/skills` 才对它生效。
+        // - `<CODEX_HOME>/skills`：Codex 的旧位置，源码标为已废弃、仍兼容。
+        // - `~/.claude/skills`：Claude Code，含 claude.ai 同步下来的那批（见 scanSynced）。
+        // `~/.cursor/skills` 不在其中——这两家都不读它。
         for (label, root) in [
-            ("Claude", home.appendingPathComponent(".claude/skills")),
+            ("Claude", claude),
             ("Codex", codex.appendingPathComponent("skills")),
-            ("Cursor", home.appendingPathComponent(".cursor/skills")),
         ] {
-            reader.scanSkills(at: root, label: label, source: .local)
+            // `synced` 不是技能，是 claude.ai 同步下来的那批技能的容器，下面见 scanSynced。
+            reader.scanSkills(at: root, label: label, source: .local, excluding: ["synced"])
         }
+        reader.scanSynced(at: claude.appendingPathComponent("synced"), label: "Claude",
+                          source: Source(id: "installed:claude.ai", title: "claude.ai",
+                                         url: URL(string: "https://claude.ai/settings/skills"), origin: .installed))
         reader.scanSkills(at: codex.appendingPathComponent("skills/.system"), label: "Codex built-in",
                           source: Source(id: "builtin:codex", title: "Codex", url: nil, origin: .builtIn))
         let usage = ClaudeUsage.read(home: home).skills
@@ -116,9 +127,18 @@ struct SkillCatalog {
         }
 
         mutating func scanSkills(at root: URL, label: String, source: Source,
-                                 lockSources: [String: Source] = [:]) {
-            for child in directories(at: root) {
+                                 lockSources: [String: Source] = [:], excluding: Set<String> = []) {
+            for child in directories(at: root) where !excluding.contains(child.lastPathComponent) {
                 addSkill(at: child, label: label, source: lockSources[child.lastPathComponent] ?? source)
+            }
+        }
+
+        /// 你在 claude.ai 上启用、由 Claude Code 同步下来的技能：技能上面多一层
+        /// 按组织和账号分的桶（`synced/<org>_<account>/<技能>/SKILL.md`），
+        /// 桶本身和 `manifest.json` 都不是技能。Claude Code 照样能调用它们，所以要列。
+        mutating func scanSynced(at root: URL, label: String, source: Source) {
+            for bucket in directories(at: root) {
+                scanSkills(at: bucket, label: label, source: source)
             }
         }
 

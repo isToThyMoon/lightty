@@ -11,10 +11,14 @@ struct SkillCatalogTests {
             "review": ["source": "example/skills", "sourceType": "github"],
         ]])
         try fixture.link(".claude/skills/review", target: "../../.agents/skills/review")
+        // 同名但各自独立的副本不能蹭到共享安装的来源上。
+        try fixture.skill(".codex/skills/review", name: "code-review")
+        // Cursor 目录不在范围内：Claude Code 与 Codex 都读不到它。
         try fixture.skill(".cursor/skills/review", name: "code-review")
         let snapshot = fixture.scan()
         #expect(snapshot.warnings.isEmpty)
         #expect(snapshot.skills.count == 2)
+        #expect(snapshot.skills.allSatisfy { $0.locations.allSatisfy { $0.label != "Cursor" } })
         let shared = try #require(snapshot.skills.first { $0.origin == .installed })
         #expect(shared.sourceTitle == "example/skills")
         #expect(shared.sourceURL?.absoluteString == "https://github.com/example/skills")
@@ -120,6 +124,26 @@ struct SkillCatalogTests {
         #expect(snapshot.skills.first { $0.name == "Quoted tool" }?.summary == "First line\nsecond line.")
         #expect(snapshot.skills.first { $0.name == "plain" }?.summary == "A description: with continuation.")
         #expect(snapshot.skills.first { $0.name == "reader's tool" }?.content.contains("# Body") == true)
+    }
+
+    /// claude.ai 同步下来的技能藏在按账号分的桶里；Claude Code 照样能调用它们，
+    /// 所以要列出来，而容器 `synced` 本身不是技能，不能顶着「SKILL.md 缺失」冒充一条。
+    @Test func syncedSkillsAreListedAndTheirContainerIsNot() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let bucket = ".claude/skills/synced/8f81e6_24527d"
+        try fixture.write(".claude/skills/synced/.bucket-8f81e6_24527d", "")
+        try fixture.json("\(bucket)/manifest.json", ["skills": ["docx"]])
+        try fixture.skill("\(bucket)/docx", name: "docx")
+        try fixture.skill(".claude/skills/local-one", name: "local-one")
+        let snapshot = fixture.scan()
+        #expect(snapshot.warnings.isEmpty)
+        #expect(Set(snapshot.skills.map(\.name)) == ["docx", "local-one"])
+        let synced = try #require(snapshot.skills.first { $0.name == "docx" })
+        #expect(synced.origin == .installed)
+        #expect(synced.sourceTitle == "claude.ai")
+        #expect(synced.locations.map(\.label) == ["Claude"])
+        #expect(synced.issue == nil)
     }
 
     @Test func emptyHomeDoesNotInventInstallations() throws {
