@@ -247,6 +247,11 @@
 "Primary sidebar" = "Primary sidebar";
 "The CLI session interface is not supported by this version." = "The CLI session interface is not supported by this version.";
 "Reading CLI sessions timed out. Try refreshing." = "Reading CLI sessions timed out. Try refreshing.";
+"Codex app-server exited. Try refreshing." = "Codex app-server exited. Try refreshing.";
+"Codex app-server did not answer in time. Try refreshing." = "Codex app-server did not answer in time. Try refreshing.";
+"Codex app-server returned more data than lightty loads." = "Codex app-server returned more data than lightty loads.";
+"Codex app-server answered in a format lightty does not recognize." = "Codex app-server answered in a format lightty does not recognize.";
+"Codex app-server rejected the request: %@" = "Codex app-server rejected the request: %@";
 "The session catalog exceeded the loading limit." = "The session catalog exceeded the loading limit.";
 "Project data could not be read. The original file has been preserved." = "Project data could not be read. The original file has been preserved.";
 "CLI was not found on this Mac." = "CLI was not found on this Mac.";

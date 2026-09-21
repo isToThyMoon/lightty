@@ -83,9 +83,9 @@ struct PluginCatalogSnapshot: Sendable {
     var plugins: [PluginRecord] = []
     var warnings: [String] = []
     var codexQueryFailed = false
-    /// 最近一次成功拿到的 Codex 安装清单。CLI 一问要两秒多，本地文件几十毫秒就读完；
-    /// 留着它，下次可以先照这份清单把本地内容摆出来，再等 CLI 校正。nil 表示从没成功过。
-    var codexInventory: [CodexPluginInventory.Entry]? = nil
+    /// 最近一次成功拿到的 Codex 安装清单。app-server 冷启动第一问要两秒多，本地文件几十毫秒就读完；
+    /// 留着它，下次可以先照这份清单把本地内容摆出来，再等 Codex 校正。nil 表示从没成功过。
+    var codexInventory: CodexPluginInventory.Inventory? = nil
 }
 
 enum PluginWriteError: LocalizedError {
@@ -113,11 +113,11 @@ enum PluginWriteError: LocalizedError {
 struct PluginCatalog {
     private let home: URL
     private let environment: [String: String]
-    private let inventory: (URL, [String: String]) throws -> [CodexPluginInventory.Entry]
+    private let inventory: (URL, [String: String]) throws -> CodexPluginInventory.Inventory
 
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
          environment: [String: String] = ProcessInfo.processInfo.environment,
-         inventory: @escaping (URL, [String: String]) throws -> [CodexPluginInventory.Entry] = CodexPluginInventory.load) {
+         inventory: @escaping (URL, [String: String]) throws -> CodexPluginInventory.Inventory = CodexPluginInventory.load) {
         self.home = home
         self.environment = environment
         self.inventory = inventory
@@ -138,7 +138,7 @@ struct PluginCatalog {
     /// 同一份配置根只该有一份缓存：设置页每次打开都是新视图，测试各用各的临时目录。
     var cacheKey: String { "\(home.path)|\(codexHome.path)" }
 
-    /// `queryCodex` 为 false 时不问 CLI，沿用 `previous` 里的清单重读本地文件。
+    /// `queryCodex` 为 false 时不问 Codex，沿用 `previous` 里的清单重读本地文件。
     func scan(previous: PluginCatalogSnapshot? = nil, queryCodex: Bool = true) -> PluginCatalogSnapshot {
         var reader = Reader()
         var plugins = reader.scanClaude(manifest: claudeManifestURL, settings: claudeSettingsURL)
@@ -155,7 +155,10 @@ struct PluginCatalog {
             }
         }
         // 从没拿到过清单就不列 Codex：缓存目录冒充不了安装清单。
-        if let installed { plugins += reader.scanCodex(cache: codexCacheURL, installed: installed) }
+        if let installed {
+            reader.warnings += installed.loadErrors
+            plugins += reader.scanCodex(cache: codexCacheURL, installed: installed.entries)
+        }
         let order = PluginAgent.allCases.enumerated().reduce(into: [PluginAgent: Int]()) { $0[$1.element] = $1.offset }
         return PluginCatalogSnapshot(plugins: plugins.sorted { lhs, rhs in
             if lhs.agent != rhs.agent { return order[lhs.agent]! < order[rhs.agent]! }
@@ -239,7 +242,7 @@ struct PluginCatalog {
         mutating func scanCodex(cache: URL, installed: [CodexPluginInventory.Entry]) -> [PluginRecord] {
             var records: [PluginRecord] = []
             var seen = Set<String>()
-            for entry in installed where entry.installed && seen.insert(entry.pluginId).inserted {
+            for entry in installed where seen.insert(entry.pluginId).inserted {
                 let key = entry.pluginId
                 let base = cache.appendingPathComponent(marketplace(key)).appendingPathComponent(shortName(key))
                 let cached = entry.version.map { base.appendingPathComponent($0) }

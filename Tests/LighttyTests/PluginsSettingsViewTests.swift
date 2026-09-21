@@ -168,11 +168,11 @@ struct PluginsSettingsViewTests {
         view.setEnabled(true)
         #expect(view.selectedPlugin?.state == .enabled)
         // A rescan of the same files must agree with what the toggle just reported.
-        view.replaceSnapshot(PluginCatalog(home: root, environment: [:], inventory: { _, _ in [
-            .init(pluginId: "visualize@openai-bundled", version: "1.0.37", installed: true, enabled: true),
-            .init(pluginId: "sites@openai-bundled", version: "0.1.70", installed: true, enabled: true),
-            .init(pluginId: "sites@openai-curated-remote", version: "0.1.70", installed: true, enabled: false)
-        ] }).scan())
+        view.replaceSnapshot(PluginCatalog(home: root, environment: [:], inventory: { _, _ in .init(entries: [
+            .init(pluginId: "visualize@openai-bundled", version: "1.0.37", enabled: true),
+            .init(pluginId: "sites@openai-bundled", version: "0.1.70", enabled: true),
+            .init(pluginId: "sites@openai-curated-remote", version: "0.1.70", enabled: false)
+        ]) }).scan())
         #expect(view.selectedPlugin?.state == .enabled)
     }
 
@@ -317,11 +317,11 @@ struct PluginsSettingsViewTests {
         [plugins."sites@openai-curated-remote"]
         enabled = false
         """)
-        let catalog = PluginCatalog(home: root, environment: [:], inventory: { _, _ in [
-            .init(pluginId: "visualize@openai-bundled", version: "1.0.37", installed: true, enabled: true),
-            .init(pluginId: "sites@openai-bundled", version: "0.1.70", installed: true, enabled: true),
-            .init(pluginId: "sites@openai-curated-remote", version: "0.1.70", installed: true, enabled: false)
-        ] })
+        let catalog = PluginCatalog(home: root, environment: [:], inventory: { _, _ in .init(entries: [
+            .init(pluginId: "visualize@openai-bundled", version: "1.0.37", enabled: true),
+            .init(pluginId: "sites@openai-bundled", version: "0.1.70", enabled: true),
+            .init(pluginId: "sites@openai-curated-remote", version: "0.1.70", enabled: false)
+        ]) })
         let preferences = FilePreferences(fileURL: root.appendingPathComponent("layout.json"))
         let view = PluginsSettingsView(catalog: catalog, snapshot: catalog.scan(),
                                        preferences: preferences, localize: localize)

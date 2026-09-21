@@ -36,7 +36,7 @@ mkdir -p "$FEED_DIR"
 cp "$NEW_DMG" "$FEED_DIR/"
 
 # ── 取历史包 ────────────────────────────────────────────────────────────────
-# 同架构的资产名带架构后缀。只发 arm64 / x64；通用包已停发（appcast.xml 冻结，见 release.yml）。
+# 同架构的资产名带架构后缀。只发 arm64 / x64；通用包已停发，它的 appcast.xml 已退役（见 docs/releasing.md）。
 case "$FLAVOR" in
     arm64|x64) ;;
     *) echo "✗ 未知架构：$FLAVOR（arm64|x64）"; exit 1 ;;

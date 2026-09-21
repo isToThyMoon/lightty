@@ -310,8 +310,8 @@ final class PluginsSettingsView: ColumnBrowserView {
         let previous = snapshot
         // 目录树可能在慢盘上；扫描绝不占住 AppKit 主线程。
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // 本地文件几十毫秒读完，`codex plugin list` 要两秒多：先照上次的清单摆出来，
-            // 再等 CLI 校正，不让整页陪着 Codex 空等。
+            // 本地文件几十毫秒读完，app-server 冷启动第一问要两秒多：先照上次的清单摆出来，
+            // 再等 Codex 校正，不让整页陪着空等。
             let quick = catalog.scan(previous: previous, queryCodex: false)
             DispatchQueue.main.async { [weak self] in self?.replaceSnapshot(quick) }
             let result = catalog.scan(previous: quick)
@@ -464,8 +464,8 @@ final class PluginsSettingsView: ColumnBrowserView {
                 snapshot.plugins[index] = updated
             }
             // 缓存的清单也跟着改，下次先摆出来的开关才不是写入前的旧状态。
-            if let index = snapshot.codexInventory?.firstIndex(where: { $0.pluginId == plugin.identifier }) {
-                snapshot.codexInventory?[index].enabled = value
+            if let index = snapshot.codexInventory?.entries.firstIndex(where: { $0.pluginId == plugin.identifier }) {
+                snapshot.codexInventory?.entries[index].enabled = value
             }
             Self.lastSnapshots[catalog.cacheKey] = snapshot
             reloadNavigation()

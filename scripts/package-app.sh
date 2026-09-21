@@ -27,7 +27,7 @@ VERSION="${1:-$(git -C "$ROOT" describe --tags --always 2>/dev/null | sed 's/^v/
 # 2026-09-17 又把 v0.17.0 之后的 7 个提交压成 1 个，已装的 v0.19.1 构建号是 283，偏移提到 210。
 # 2026-09-20 把 v0.14.0 之后的 26 个提交压成 1 个；已发布 v0.20.0 的构建号是 295，
 # 偏移提到 235，让压缩后的首个构建号继续为 296。
-BUILD_NUMBER_OFFSET=235
+BUILD_NUMBER_OFFSET=241
 BUILD_NUMBER="$(( $(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1) + BUILD_NUMBER_OFFSET ))"
 BUNDLE_ID="${BUNDLE_ID:-com.istothymoon.lightty}"
 FLAVOR="${FLAVOR:-universal}"

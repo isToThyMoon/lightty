@@ -50,7 +50,7 @@ lightty 与两家 CLI 的每一处接触点，按功能列出，每项写清两�
 
 | 功能 | Claude Code | Codex | 出问题时 |
 |---|---|---|---|
-| 列会话 | **不调 claude**。打包的 Node 运行时跑 `@anthropic-ai/claude-agent-sdk 0.3.263` 的 `list-sessions.mjs`（`listSessions`，每页 100，按 offset 翻页） | `codex app-server --listen stdio://`，JSON-RPC `initialize` → `initialized` → `thread/list`（含 `archived`） | SDK 缺失：报「helper 丢失」；app-server 超时（单次 12 秒、整体 45 秒）或格式不认识：这一家显示错误，另一家照常 |
+| 列会话 | **不调 claude**。打包的 Node 运行时跑 `@anthropic-ai/claude-agent-sdk 0.3.263` 的 `list-sessions.mjs`（`listSessions`，每页 100，按 offset 翻页） | 常驻的 `codex app-server --listen stdio://`（`CodexAppServer`，同一可执行文件 + 配置根一个，首次请求时启动并 `initialize` → `initialized`），再发 `thread/list`（含 `archived`） | SDK 缺失：报「helper 丢失」；app-server 单次请求 12 秒超时或格式不认识：这一家显示错误，另一家照常；超时、进程退出、可执行文件换过时下一次请求换新进程 |
 | 补工作目录 | SDK 只在转录头 64KB 找 `cwd`，找不到时 helper 往后多读转录文件 | app-server 直接给 | |
 | 改名 | `rename-session.mjs`（`renameSession`） | `thread/name/set` | |
 | 删除 | `delete-session.mjs`（`deleteSession`） | `codex delete --force <id>` | 删除前先做占用检查 |
@@ -67,7 +67,7 @@ Claude 侧的 SDK 打包与许可见 `docs/specs/claude-sdk-distribution-researc
 | 页面 | Claude Code | Codex | 写入 |
 |---|---|---|---|
 | Skills | `~/.claude/skills`；共享目录 `~/.agents/skills` 与 `~/.agents/.skill-lock.json` | `$CODEX_HOME/skills`，内置技能 `skills/.system` | 不写技能目录；收藏 / 标签存 `~/.lightty/skills-organization.json` |
-| Plugins | `~/.claude/plugins/installed_plugins.json` + `settings.json` 的 `enabledPlugins`；使用计数读 `~/.claude.json` 的 `pluginUsage` / `skillUsage` | `codex plugin list --json` 拿清单，再读 `plugins/cache` 里的内容；命令失败沿用上次结果 | Claude 改 `settings.json` 的 `enabledPlugins`；Codex 改 `config.toml` 的 `[plugins."…"].enabled` |
+| Plugins | `~/.claude/plugins/installed_plugins.json` + `settings.json` 的 `enabledPlugins`；使用计数读 `~/.claude.json` 的 `pluginUsage` / `skillUsage` | 常驻 app-server 的 `plugin/installed` 拿已装清单（含远端装的；远端部分拉不到只回本地的，不报错），再读 `plugins/cache` 里的内容；失败沿用上次结果 | Claude 改 `settings.json` 的 `enabledPlugins`；Codex 改 `config.toml` 的 `[plugins."…"].enabled` |
 | MCP | `~/.claude.json` 的 `mcpServers`（没有启用开关，配了就是开着） | `config.toml` 的 `[mcp_servers.*]` 与其 `enabled` | 只有 Codex 可切换 |
 | Handoff | 读插件安装状态（第二节） | 同左 | 无 |
 
@@ -92,7 +92,7 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 改了会**直接失效**的，按影响面排序：
 
 1. hook 载荷字段名、`hookSpecificOutput.additionalContext` 协议、插件目录约定 —— 状态、绑定、注入全没。
-2. `codex app-server` 的方法名与响应形状（官方仍标 experimental）—— Codex 会话列表与改名。
+2. `codex app-server` 的方法名与响应形状（官方仍标 experimental）—— Codex 会话列表与改名、插件清单（`plugin/installed`）。app-server 须常驻：它一启动就跑插件同步、git 市场升级检查等启动任务，问一句就关会砍断这些任务，留下孤儿 `git` 和 `~/.codex/.tmp/git-*`。
 3. `@anthropic-ai/claude-agent-sdk` 的 `listSessions` / `renameSession` / `deleteSession` —— Claude 会话列表；版本锁在 `scripts/claude-session-helper/package.json`。
 4. `claude agents --json` 的输出格式 —— 占用一律变成「问不出来」，删除时每次都弹确认。
 5. `claude plugin …` / `codex plugin …` 子命令形状 —— hook 装不上，已装的照常工作。

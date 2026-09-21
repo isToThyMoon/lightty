@@ -50,8 +50,16 @@ struct PluginCatalogTests {
         }
         try fixture.skill(".codex/plugins/cache/store/stray/1.0/skills/old", name: "old")
         // Remote installs need no config.toml declaration. Old versions must not leak contents.
-        let data = Data(#"{"installed":[{"pluginId":"tool@store","version":"2.0","installed":true,"enabled":true},{"pluginId":"missing@store","version":"3.0","installed":true,"enabled":false},{"pluginId":"cloud@store","version":"1.0","installed":true,"enabled":true,"source":{"source":"remote","id":"plugin_x"}}]}"#.utf8)
-        let entries = try CodexPluginInventory.decode(data)
+        // `plugin/list` from app-server: grouped by marketplace, available plugins included.
+        let entries = try CodexPluginInventory.decode(["marketplaces": [["name": "store", "plugins": [
+            ["id": "tool@store", "version": NSNull(), "localVersion": "2.0", "installed": true, "enabled": true,
+             "source": ["type": "local", "path": "/somewhere"]],
+            ["id": "missing@store", "localVersion": "3.0", "installed": true, "enabled": false],
+            ["id": "cloud@store", "version": "1.0", "localVersion": "1.0", "installed": true, "enabled": true,
+             "source": ["type": "remote"]],
+            ["id": "offered@store", "localVersion": "9.0", "installed": false, "enabled": false],
+        ]]]])
+        #expect(entries.entries.map(\.pluginId) == ["tool@store", "missing@store", "cloud@store"])
         let catalog = PluginCatalog(home: fixture.home, environment: [:], inventory: { _, _ in entries })
         let snapshot = catalog.scan()
         let tool = try #require(snapshot.plugins.first { $0.identifier == "tool@store" })
@@ -86,11 +94,16 @@ struct PluginCatalogTests {
         #expect(!quick.codexQueryFailed)
         #expect(quick.warnings.isEmpty)
         #expect(failing.scan(queryCodex: false).plugins.isEmpty)
-        #expect(throws: (any Error).self) { try CodexPluginInventory.decode(Data("{}".utf8)) }
+        #expect(throws: (any Error).self) { try CodexPluginInventory.decode([:]) }
         #expect(throws: (any Error).self) {
-            try CodexPluginInventory.decode(Data(#"{"installed":[{"pluginId":"../bad@store","installed":true,"enabled":true}]}"#.utf8))
+            try CodexPluginInventory.decode(["marketplaces": [["plugins": [
+                ["id": "../bad@store", "installed": true, "enabled": true]]]]])
         }
-        let empty = PluginCatalog(home: fixture.home, environment: [:], inventory: { _, _ in [] }).scan(previous: snapshot)
+        #expect(throws: (any Error).self) {
+            try CodexPluginInventory.decode(["marketplaces": [["plugins": [
+                ["id": "tool@store", "localVersion": "..", "installed": true, "enabled": true]]]]])
+        }
+        let empty = PluginCatalog(home: fixture.home, environment: [:], inventory: { _, _ in .init(entries: []) }).scan(previous: snapshot)
         #expect(!empty.codexQueryFailed)
         #expect(empty.plugins.allSatisfy { $0.state == .cachedOnly })
     }
@@ -169,6 +182,19 @@ struct PluginCatalogTests {
         let browser = try #require(plugins.first { $0.name == "browser" })
         #expect(browser.contents.map(\.name) == ["browser"])
         #expect(browser.contents.first?.fileURL.lastPathComponent == "plugin.json")
+    }
+
+    /// Codex 没加载成功的市场要进提示：那里装的插件不在清单里，否则只是悄悄消失。
+    @Test func codexMarketplaceLoadErrorsBecomeWarnings() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let inventory = try CodexPluginInventory.decode(["marketplaces": [],
+            "marketplaceLoadErrors": [["marketplacePath": "/broken/market", "message": "manifest missing"]]])
+        let snapshot = PluginCatalog(home: fixture.home, environment: [:], inventory: { _, _ in inventory }).scan()
+        #expect(snapshot.warnings.contains { $0.contains("/broken/market") && $0.contains("manifest missing") })
+        let quick = PluginCatalog(home: fixture.home, environment: [:], inventory: { _, _ in .init(entries: []) })
+            .scan(previous: snapshot, queryCodex: false)
+        #expect(quick.warnings == snapshot.warnings)
     }
 
     @Test func hooksComeFromEachAgentsOwnManifest() throws {
@@ -350,7 +376,7 @@ struct PluginCatalogTests {
             try write(path, String(decoding: try JSONSerialization.data(withJSONObject: value), as: UTF8.self))
         }
         func catalog(_ environment: [String: String] = [:]) -> PluginCatalog {
-            PluginCatalog(home: home, environment: environment, inventory: { _, _ in [] })
+            PluginCatalog(home: home, environment: environment, inventory: { _, _ in .init(entries: []) })
         }
         func scan(_ environment: [String: String] = [:]) -> PluginCatalogSnapshot {
             catalog(environment).scan()

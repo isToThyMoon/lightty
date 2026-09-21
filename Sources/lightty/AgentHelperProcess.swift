@@ -59,7 +59,7 @@ struct AgentHelperProcess: Equatable {
                  arguments: arguments, directory: directory)
     }
 
-    /// 一问一答：跑完读回 stdout。长连接（`codex app-server`）见 `CatalogJSONRPC`。
+    /// 一问一答：跑完读回 stdout。常驻的 `codex app-server` 见 `CodexAppServer`。
     func output(cancelled: () -> Bool = { false }, timeout: TimeInterval = 15,
                 maximumBytes: Int = 1024 * 1024) throws -> Data {
         try SessionHelperProcess.readPage(executable: executable, arguments: arguments, directory: directory,

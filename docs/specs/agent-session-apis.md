@@ -21,7 +21,7 @@
 
 | 要做的事 | Codex | Claude |
 | --- | --- | --- |
-| 列出会话 | `codex app-server` 的 `thread/list`（`CodexSessionProvider`） | 开发包的 `listSessions`（`scripts/claude-session-helper/list-sessions.mjs`） |
+| 列出会话 | 常驻 `codex app-server` 的 `thread/list`（`CodexSessionProvider` → `CodexAppServer`） | 开发包的 `listSessions`（`scripts/claude-session-helper/list-sessions.mjs`） |
 | 删除会话 | `codex delete --force <id>`（`SessionDeletion`） | 开发包的 `deleteSession`（`delete-session.mjs`） |
 | 改名（会话没开） | `thread/name/set`（`SessionRename`） | 开发包的 `renameSession`（`rename-session.mjs`） |
 | 改名（会话开着） | 把 `/rename` 敲进那个终端（`AgentCommand.rename`） | 同左 |

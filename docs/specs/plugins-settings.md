@@ -69,8 +69,12 @@
 
 ### Codex
 
-- `codex plugin list --json` 的 `installed` 清单决定安装状态、启用状态和生效版本；
-  用完整 `name@marketplace` 区分身份，包含停用项，不硬编码排除内置市场。
+- 常驻 `codex app-server` 的 `plugin/installed` 决定安装状态、启用状态和生效版本
+  （本地市场取 `localVersion`，远端装的取 `version`，即缓存目录名）；用完整 `name@marketplace` 区分身份，
+  包含停用项，不硬编码排除内置市场。它只回装上的插件（含远端全局目录装的），远端部分拉不到时只回本地的；
+  冷启动第一次可能要联网，等待上限 45 秒，长于 Codex 自己的 30 秒。
+  不用 `plugin/list`：它连远端全局目录几千个可装插件一起返回，本机实测 10MB。
+  不用 `codex plugin list --json`：远端目录缓存过了 3 小时必须联网重拉，网络卡住时整份清单拿不到。
 - 从 `plugins/cache/<marketplace>/<plugin>/<version>/` 读取清单指定版本的内容；
   尚未缓存的安装仍保留，不混入旧版本：来源为 `remote` 的由 Codex 按需下载，未落盘是正常状态，
   只在详情里说明、不进提示；本地来源缺缓存才进提示。缓存中不在清单的条目

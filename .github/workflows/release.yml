@@ -176,8 +176,6 @@ jobs:
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
-          # 最后一个发布通用包、且自带「按架构改指更新源」逻辑（UpdateFeed）的版本。
-          LEGACY_FEED_TAG: v0.14.0
         run: |
           set -euo pipefail
           PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
@@ -190,16 +188,6 @@ jobs:
           result=0
           for pid in "${pids[@]}"; do wait "$pid" || result=1; done
           [ "$result" -eq 0 ]
-          # 冻结的 appcast.xml：分架构之前装好的 app，SUFeedURL 写死为
-          # releases/latest/download/appcast.xml，`latest` 永远指向最新 Release，
-          # 所以每次都要把它原样再传一份，否则老安装检查更新是 404、永远停在旧版。
-          # 它只列 $LEGACY_FEED_TAG 的通用包（下载地址指向那个 Release，签名不变）；
-          # 老安装先经它升到该版本，下次检查由 UpdateFeed 改指到单架构源。
-          mkdir -p dist/feed-legacy
-          gh release download "$LEGACY_FEED_TAG" --pattern appcast.xml --dir dist/feed-legacy
-          grep -q "sparkle:edSignature" dist/feed-legacy/appcast.xml
-          grep -q "/releases/download/$LEGACY_FEED_TAG/" dist/feed-legacy/appcast.xml
-          echo "$PWD/dist/feed-legacy/appcast.xml" > dist/feed-legacy/upload.txt
           cat dist/feed-*/upload.txt > dist/upload.txt
           cat dist/upload.txt
 
@@ -229,7 +217,7 @@ jobs:
           launch: **System Settings → Privacy & Security → scroll down →
           "Open Anyway"**, or run \`xattr -cr /Applications/lightty.app\`.
           EOF
-          # 两份整包 + 各自的增量包 + 两条单架构 feed + 冻结的 appcast.xml
+          # 两份整包 + 各自的增量包 + 两条单架构 feed
           gh release create "$GITHUB_REF_NAME" \
             --title "v$VERSION" \
             --notes-file notes.md \

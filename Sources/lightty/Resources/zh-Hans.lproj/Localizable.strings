@@ -251,6 +251,11 @@
 "Primary sidebar" = "第一侧栏";
 "The CLI session interface is not supported by this version." = "当前 CLI 版本不支持此会话接口。";
 "Reading CLI sessions timed out. Try refreshing." = "读取 CLI 会话超时，请刷新重试。";
+"Codex app-server exited. Try refreshing." = "Codex app-server 已退出，请刷新重试。";
+"Codex app-server did not answer in time. Try refreshing." = "Codex app-server 没有及时回应，请刷新重试。";
+"Codex app-server returned more data than lightty loads." = "Codex app-server 返回的数据超出加载上限。";
+"Codex app-server answered in a format lightty does not recognize." = "Codex app-server 的回应格式无法识别。";
+"Codex app-server rejected the request: %@" = "Codex app-server 拒绝了请求：%@";
 "The session catalog exceeded the loading limit." = "会话目录超出加载上限。";
 "Project data could not be read. The original file has been preserved." = "无法读取项目数据，原文件已保留。";
 "CLI was not found on this Mac." = "本机未找到该 CLI。";

@@ -138,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
         // 但干净退出不该给下一次启动留活。
         PaneStatusStore.shared.stop()
+        // 常驻的 codex app-server：关 stdin，让它自己收尾退出。
+        CodexAppServer.shutdownAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
