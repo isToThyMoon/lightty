@@ -48,8 +48,45 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         let data = Data("{\"version\":1,\"sessions\":[{\"id\":\"\(id)\",\"title\":\"name\",\"cwd\":null,\"updatedAt\":1700000000000}],\"nextCursor\":null}".utf8)
         let page = try ClaudeSessionProvider.decode(data, source: source, offset: 0)
         XCTAssertEqual(page.sessions.first?.updatedAt?.timeIntervalSince1970, 1700000000)
+        XCTAssertEqual(page.sessions.first?.titleSettled, true, "缺 titled 按已定处理，通知不白等")
         XCTAssertThrowsError(try ClaudeSessionProvider.decode(Data("{\"version\":2,\"sessions\":[]}".utf8), source: source, offset: 0))
         XCTAssertThrowsError(try ClaudeSessionProvider.decode(Data("{\"version\":1,\"sessions\":[],\"nextCursor\":\"0\"}".utf8), source: source, offset: 0))
+    }
+
+    /// 有 AI 标题的会话名字已定；只有提示的会话拿「最近一条提示」当名字，下一轮还会变。
+    /// 完成通知靠这个标记决定要不要等目录重读（见 `PaneNotifier.postOrHold`）。
+    func testHelperMarksWhetherTheTitleIsSettled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("claude-titled-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("projects/project-a")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func session(_ extra: [[String: Any]]) throws -> String {
+            let id = UUID().uuidString.lowercased()
+            let prompt: [String: Any] = ["type": "user", "sessionId": id, "uuid": UUID().uuidString,
+                "parentUuid": NSNull(), "isSidechain": false, "cwd": "/tmp/project",
+                "timestamp": "2026-09-21T00:00:00Z", "entrypoint": "cli",
+                "message": ["role": "user", "content": "你好"]]
+            var file = Data()
+            for record in [prompt] + extra.map({ $0.merging(["sessionId": id]) { $1 } }) {
+                file.append(try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]))
+                file.append(10)
+            }
+            try file.write(to: project.appendingPathComponent("\(id).jsonl"))
+            return id
+        }
+        let named = try session([["type": "ai-title", "aiTitle": "okr 内容"]])
+        let prompted = try session([["type": "last-prompt", "lastPrompt": "你好"]])
+
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude", configuration: .custom(root.path))
+        let provider = ClaudeSessionProvider(source: source, helperDirectory: helper)
+        let rows = try provider.page(archived: false, cursor: nil, cancelled: { false }).sessions
+        let settled = try XCTUnwrap(rows.first { $0.key.nativeID == named })
+        let unsettled = try XCTUnwrap(rows.first { $0.key.nativeID == prompted })
+        XCTAssertEqual(settled.title, "okr 内容")
+        XCTAssertTrue(settled.titleSettled)
+        XCTAssertEqual(unsettled.title, "你好")
+        XCTAssertFalse(unsettled.titleSettled)
     }
 
     func testMissingHelperDoesNotFallBackToUserNodeOrPrivateParser() {

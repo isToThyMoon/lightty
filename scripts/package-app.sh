@@ -6,6 +6,7 @@
 #   SIGN_IDENTITY="Developer ID Application: …" scripts/package-app.sh 1.0.0
 #   MAKE_DMG=1 scripts/package-app.sh 1.0.0     # 附带产出 dist/lightty-<version>-<架构>.dmg
 #   FLAVOR=arm64 MAKE_DMG=1 scripts/package-app.sh 1.0.0   # 单架构包
+#   USE_PREBUILT=1 ...                          # helper 与 Swift release 已由调用方准备
 #
 # 架构（FLAVOR）：universal（默认）/ arm64 / x64。
 # 通用包里两份 Node 运行时就占 218MB，用户只用得上一份；单架构包砍掉另一份，
@@ -49,10 +50,14 @@ GHOSTTY_SHARE="$ROOT/vendor/ghostty/zig-out/share/ghostty"
 }
 
 # ── 构建（universal：xcframework 本身就是 arm64+x86_64 双架构）─────────────
-echo "▸ prepare pinned Claude session helper (build-time dependencies)"
-node "$ROOT/scripts/prepare-claude-helper.mjs" --all
-echo "▸ swift build -c release (arm64 + x86_64)"
-swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT"
+if [ "${USE_PREBUILT:-0}" != "1" ]; then
+    echo "▸ prepare pinned Claude session helper (build-time dependencies)"
+    node "$ROOT/scripts/prepare-claude-helper.mjs" --all
+    echo "▸ swift build -c release (arm64 + x86_64)"
+    swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT"
+else
+    echo "▸ use prebuilt helper and Swift release products"
+fi
 BIN="$ROOT/.build/apple/Products/Release/lightty"
 [ -x "$BIN" ] || BIN="$ROOT/.build/release/lightty"
 [ -x "$BIN" ] || { echo "build output not found"; exit 1; }

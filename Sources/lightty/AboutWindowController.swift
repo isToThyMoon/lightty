@@ -2,8 +2,8 @@ import AppKit
 
 /// A small, reusable window. Opening About never creates a terminal or touches preferences.
 final class AboutWindowController: NSWindowController {
-    static let greeting = "Thank you for finding lightty."
-    static let message = "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier."
+    static let greeting = "Thank you for discovering lightty."
+    static let message = "A terminal built for running many agent CLIs side by side.\nMay we, amid the surging flood of data,\nhold on to our own abiding calm,\nand enjoy life."
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 390),

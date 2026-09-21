@@ -171,6 +171,59 @@ struct PluginCatalogTests {
         #expect(browser.contents.first?.fileURL.lastPathComponent == "plugin.json")
     }
 
+    @Test func hooksComeFromEachAgentsOwnManifest() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        func hooks(_ events: [String], agent: String) -> [String: Any] {
+            ["hooks": Dictionary(uniqueKeysWithValues: events.map {
+                ($0, [["hooks": [["type": "command", "command": "hook --agent \(agent)"]]]])
+            })]
+        }
+        // One directory carrying both manifests, the way lightty ships its own plugin.
+        let shared = ".codex/plugins/cache/lightty/lightty/1.0"
+        try fixture.json("\(shared)/.claude-plugin/plugin.json", ["name": "lightty"])
+        try fixture.json("\(shared)/.codex-plugin/plugin.json", ["name": "lightty", "hooks": "./hooks.json"])
+        try fixture.json("\(shared)/hooks/hooks.json", hooks(["Notification", "Stop"], agent: "claude"))
+        try fixture.json("\(shared)/hooks.json", hooks(["Interrupt", "Stop"], agent: "codex"))
+        // Without a `hooks` entry Codex falls back to the same default as Claude Code.
+        let plain = ".codex/plugins/cache/store/plain/1.0"
+        try fixture.json("\(plain)/.codex-plugin/plugin.json", ["name": "plain"])
+        try fixture.json("\(plain)/hooks/hooks.json", hooks(["SessionStart"], agent: "codex"))
+        let inline = ".codex/plugins/cache/store/inline/1.0"
+        try fixture.json("\(inline)/.codex-plugin/plugin.json",
+                         ["name": "inline", "hooks": [hooks(["Stop"], agent: "codex"),
+                                                      hooks(["Stop", "PreToolUse"], agent: "codex")]])
+        try fixture.json("\(inline)/hooks/hooks.json", hooks(["Notification"], agent: "stray"))
+        try fixture.json(".claude/plugins/installed_plugins.json", ["plugins": [
+            "lightty@lightty": [["installPath": fixture.url(shared).path, "scope": "user", "version": "1.0"]],
+        ]])
+        try fixture.write(".codex/config.toml", """
+        [plugins."lightty@lightty"]
+        enabled = true
+
+        [plugins."plain@store"]
+        enabled = true
+
+        [plugins."inline@store"]
+        enabled = true
+        """)
+        let plugins = fixture.scan().plugins
+        func hookContents(_ name: String, _ agent: PluginAgent) throws -> [PluginContent] {
+            try #require(plugins.first { $0.name == name && $0.agent == agent }).contents.filter { $0.kind == .hook }
+        }
+        let codex = try hookContents("lightty", .codex)
+        #expect(codex.map(\.name) == ["Interrupt", "Stop"])
+        #expect(codex.allSatisfy { $0.content.contains("--agent codex") })
+        #expect(codex.first?.fileURL.path.hasSuffix("1.0/hooks.json") == true)
+        let claude = try hookContents("lightty", .claudeCode)
+        #expect(claude.map(\.name) == ["Notification", "Stop"])
+        #expect(claude.allSatisfy { $0.content.contains("--agent claude") })
+        #expect(try hookContents("plain", .codex).map(\.name) == ["SessionStart"])
+        let inlined = try hookContents("inline", .codex)
+        #expect(inlined.map(\.name) == ["Stop", "PreToolUse"])
+        #expect(inlined.allSatisfy { $0.fileURL.lastPathComponent == "plugin.json" })
+    }
+
     @Test func brokenInstallationsStayVisible() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

@@ -58,7 +58,11 @@ struct ClaudeSessionProvider: AgentSessionProvider {
     }
 
     static func decode(_ data: Data, source: SessionCatalogSource, offset: Int) throws -> SessionCatalogPage {
-        struct Record: Decodable { let id: String; let title: String; let cwd: String?; let updatedAt: Double }
+        struct Record: Decodable {
+            let id: String; let title: String; let cwd: String?; let updatedAt: Double
+            /// 有自定义名或 AI 标题；缺省按已定处理，老格式不会让通知白等。
+            let titled: Bool?
+        }
         struct Response: Decodable { let version: Int; let sessions: [Record]; let nextCursor: String? }
         guard let response = try? JSONDecoder().decode(Response.self, from: data), response.version == 1,
               response.sessions.count <= 100 else { throw SessionCatalogError.protocolFailure }
@@ -69,7 +73,8 @@ struct ClaudeSessionProvider: AgentSessionProvider {
             guard UUID(uuidString: row.id) != nil, row.updatedAt.isFinite else { throw SessionCatalogError.protocolFailure }
             return AgentSession(key: .init(agent: .claude, sourceRoot: source.root.path, nativeID: row.id),
                 title: row.title, workingDirectory: row.cwd,
-                updatedAt: Date(timeIntervalSince1970: row.updatedAt / 1000))
+                updatedAt: Date(timeIntervalSince1970: row.updatedAt / 1000),
+                titleSettled: row.titled ?? true)
         }
         guard Set(rows.map(\.key)).count == rows.count else { throw SessionCatalogError.protocolFailure }
         return SessionCatalogPage(sessions: rows, nextCursor: response.nextCursor)

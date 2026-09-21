@@ -102,8 +102,9 @@ public struct AgentSpec: Sendable {
     /// 这家读的那份插件清单，相对插件目录。
     public let pluginManifestPath: String
 
-    /// 这家读的那份 hook 定义，相对插件目录。Claude Code 走 `hooks/` 目录约定，
-    /// Codex 不看目录、由它自己那份清单指路。
+    /// lightty 给这家写的那份 hook 定义，相对插件目录。两家在清单没写 `hooks` 时
+    /// 都读 `hooks/hooks.json`；Codex 这份放在别处、由它自己的清单指路，
+    /// 免得和同目录里 Claude Code 那份撞上。
     public let hooksDocumentPath: String
 
     /// 这家经 OSC 0 写进终端标题的形状：哪些前缀表示忙、闲、等用户处理，见 `AgentTerminalTitle`。

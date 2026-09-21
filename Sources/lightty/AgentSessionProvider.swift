@@ -58,7 +58,7 @@ extension AgentSessionProvider {
                 return AgentSession(key: session.key, title: session.title,
                                     workingDirectory: directory, updatedAt: session.updatedAt,
                                     sourceArchived: session.sourceArchived,
-                                    sourceProcesses: observed)
+                                    sourceProcesses: observed, titleSettled: session.titleSettled)
             },
             nextCursor: page.nextCursor)
     }

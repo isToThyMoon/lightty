@@ -26,8 +26,8 @@
 "Open in lightty" = "已打开";
 "Open in another terminal" = "在其他终端中打开";
 "Development build" = "开发版本";
-"Thank you for finding lightty." = "谢谢你，找到了 lightty。";
-"This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "这是我的第一个 Swift App。\n它将始终免费、开源。\n愿它能为你的日常使用，带来一点点帮助。";
+"Thank you for discovering lightty." = "谢谢你，发现了 lightty。";
+"A terminal built for running many agent CLIs side by side.\nMay we, amid the surging flood of data,\nhold on to our own abiding calm,\nand enjoy life." = "这是为并行运行多 Agent CLI 设计的终端。\n希望我们在翻涌滚动的数据洪流中\n驾驭自身永恒的平静\n享受生活";
 "Quit lightty" = "退出 lightty";
 "Check for Updates…" = "检查更新…";
 "Services" = "服务";

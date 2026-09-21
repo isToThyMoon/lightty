@@ -94,6 +94,8 @@ try {
   const sessions = rows.map(row => ({
     id: row.sessionId,
     title: text(row.customTitle || row.summary, 240) || '',
+    // SDK 的 customTitle 是「/rename 的名字或 AI 标题」；都没有时 summary 退回最近一条提示，还会变。
+    titled: Boolean(row.customTitle),
     cwd: row.cwd ?? null,
     updatedAt: row.lastModified,
   }));

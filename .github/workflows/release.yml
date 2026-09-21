@@ -10,8 +10,8 @@
 name: release
 
 # main 分支也触发：GitHub 缓存按 ref 隔离，tag 之间互不可见，只有 main 上的
-# 缓存全局可读——内核缓存必须由 main 的 run 播种，tag 发版才能命中。
-# main 上发布类步骤被 ref_type == tag 门禁跳过，只做构建打包（兼当 CI 冒烟）。
+# 缓存全局可读。main 只准备内核、helper 与 Swift release 产物；同一 commit 的 tag
+# 直接复用这些产物，再并行组装两种架构，不在 main 上重复签名和制作 DMG。
 on:
   push:
     tags: ["v*"]
@@ -89,8 +89,34 @@ jobs:
       - name: Sync GhosttyKit into SwiftPM layout
         run: scripts/sync-ghosttykit.sh
 
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-v1-macos-${{ hashFiles('scripts/claude-session-helper/package-lock.json') }}
+
+      # Swift 的增量缓存依赖源码 mtime；checkout 会刷新 mtime，跨 runner 恢复后仍会
+      # 重编译。这里缓存打包真正消费的最终产物，并按 commit 精确命中。
+      - name: Cache prepared release products
+        id: release-products
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/apple/Products/Release/lightty
+            .build/apple/Products/Release/lightty-hook
+            .build/apple/Products/Release/lightty_lightty.bundle
+            .build/apple/Products/Release/Sparkle.framework
+            .build/claude-session-helper
+          key: release-products-v1-macos26-${{ runner.arch }}-xcode${{ steps.toolchain.outputs.xcode }}-sdk${{ steps.toolchain.outputs.sdk }}-${{ hashFiles('Package.resolved', 'scripts/claude-session-helper/package-lock.json', 'scripts/prepare-claude-helper.mjs') }}-${{ github.sha }}
+
+      - name: Prepare helper + Swift release products
+        if: steps.release-products.outputs.cache-hit != 'true'
+        run: |
+          node scripts/prepare-claude-helper.mjs --all
+          swift build -c release --arch arm64 --arch x86_64
+
       - name: Import Developer ID certificate
-        if: env.HAS_CERT == 'true'
+        if: github.ref_type == 'tag' && env.HAS_CERT == 'true'
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -108,17 +134,23 @@ jobs:
           rm cert.p12
 
       - name: Package app + DMG
+        if: github.ref_type == 'tag'
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.0-ci"
-          # 只发 arm64 / x64 两种单架构包，共用同一次 swift build（增量），分别组包签名。
-          # 通用包不再发布：分架构之前装好的 app 经冻结的 appcast.xml 迁移，见下面的 feed 步骤。
+          # helper 与 Swift release 已在上一步准备；两种架构只读这些产物，输出目录互不重叠。
+          pids=()
           for flavor in arm64 x64; do
-            FLAVOR=$flavor MAKE_DMG=1 scripts/package-app.sh "$VERSION"
+            (FLAVOR=$flavor MAKE_DMG=1 USE_PREBUILT=1 scripts/package-app.sh "$VERSION") &
+            pids+=("$!")
           done
+          result=0
+          for pid in "${pids[@]}"; do wait "$pid" || result=1; done
+          [ "$result" -eq 0 ]
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Verify packaged SDK and deployment target
+        if: github.ref_type == 'tag'
         run: |
           bash scripts/verify-release-sdk.sh dist/arm64/lightty.app/Contents/MacOS/lightty arm64
           bash scripts/verify-release-sdk.sh dist/x64/lightty.app/Contents/MacOS/lightty x86_64
@@ -126,7 +158,7 @@ jobs:
       # 公证要排在 appcast 之前：stapler 会把票据写进 DMG，改动文件内容，
       # 先算好的 EdDSA 签名就对不上了，Sparkle 会拒绝安装。
       - name: Notarize + staple
-        if: env.HAS_NOTARY == 'true'
+        if: github.ref_type == 'tag' && env.HAS_NOTARY == 'true'
         env:
           APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
@@ -147,11 +179,17 @@ jobs:
           # 最后一个发布通用包、且自带「按架构改指更新源」逻辑（UpdateFeed）的版本。
           LEGACY_FEED_TAG: v0.14.0
         run: |
+          set -euo pipefail
           PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
+          pids=()
           for flavor in arm64 x64; do
-            echo "$SPARKLE_ED_PRIVATE_KEY" | scripts/build-appcast.sh \
-              "$flavor" "dist/lightty-$VERSION-$flavor.dmg" "appcast-$flavor.xml" "$PREFIX"
+            (echo "$SPARKLE_ED_PRIVATE_KEY" | scripts/build-appcast.sh \
+              "$flavor" "dist/lightty-$VERSION-$flavor.dmg" "appcast-$flavor.xml" "$PREFIX") &
+            pids+=("$!")
           done
+          result=0
+          for pid in "${pids[@]}"; do wait "$pid" || result=1; done
+          [ "$result" -eq 0 ]
           # 冻结的 appcast.xml：分架构之前装好的 app，SUFeedURL 写死为
           # releases/latest/download/appcast.xml，`latest` 永远指向最新 Release，
           # 所以每次都要把它原样再传一份，否则老安装检查更新是 404、永远停在旧版。

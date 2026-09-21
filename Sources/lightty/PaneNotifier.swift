@@ -49,6 +49,11 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var pendingReminders: [UUID: PaneActivity] = [:]
     /// OSC 通知仍逐条保留；配对成功时只消费最后一条，其余照常投递。
     private var pendingDesktopMessages: [UUID: [DesktopMessage]] = [:]
+    /// 标题还没定的会话（`AgentSession.titleSettled == false`）：提醒压在这里，记下压住时的标题。
+    /// 目录重读带回不同的标题就放行，否则到点照发——标题本来就没变时不能一直等。
+    private var heldForTitle: [UUID: (title: String, release: DispatchWorkItem)] = [:]
+    /// 目录重读在回合结束 1.5 秒后开始，再加上读目录本身的耗时。
+    private static let titleWait: TimeInterval = 3
     private var installed = false
 
     private override init() { super.init() }
@@ -87,6 +92,9 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(paneStatusDidChange),
             name: .lighttyPaneStatusDidChange, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(sessionLibraryDidChange(_:)),
+            name: .lighttySessionLibraryDidChange, object: AppState.shared?.sessionLibrary)
     }
 
     private func seedStates() {
@@ -176,7 +184,11 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         pendingReminders.removeValue(forKey: paneID)
         if pendingDesktopMessages[paneID]?.isEmpty != false {
             pending.removeAll { $0 == paneID }
+        } else if heldForTitle[paneID] != nil {
+            // 压着的这段时间攒下的 OSC 不能跟着卡住，放回队列按没配上处理
+            enqueue(paneID)
         }
+        heldForTitle.removeValue(forKey: paneID)?.release.cancel()
         Self.center?.removeDeliveredNotifications(withIdentifiers: [Self.requestID(for: paneID)])
     }
 
@@ -186,6 +198,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         pending.removeAll { $0 == paneID }
         pendingReminders.removeValue(forKey: paneID)
         pendingDesktopMessages.removeValue(forKey: paneID)
+        heldForTitle.removeValue(forKey: paneID)?.release.cancel()
         Self.center?.removeDeliveredNotifications(withIdentifiers: [Self.requestID(for: paneID)])
     }
 
@@ -201,11 +214,40 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         withAuthorization { [weak self] granted in
             guard let self else { return }
             if granted {
-                reminders.forEach(self.post)
+                reminders.forEach(self.postOrHold)
             } else {
                 // 系统权限是 app 级的；即使被拒绝也消费本批，避免缓存滞留。
                 reminders.forEach(self.discard)
             }
+        }
+    }
+
+    /// 会话标题还会变时先压住：Claude 拿「最近一条提示」当标题，那条记录在回合结束后才落盘，
+    /// 立刻发的话副标题是上一句，和随后刷新的侧栏对不上。标题已定的直接发。
+    private func postOrHold(_ paneID: UUID) {
+        guard heldForTitle[paneID] == nil else { return }  // 已在等，放行时一起发
+        guard let state = AppState.shared?.sessionLibrary.paneState(for: paneID),
+              let session = state.session, !session.titleSettled
+        else { return post(paneID) }
+        let release = DispatchWorkItem { [weak self] in self?.releaseHeld(paneID) }
+        heldForTitle[paneID] = (state.title, release)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.titleWait, execute: release)
+    }
+
+    private func releaseHeld(_ paneID: UUID) {
+        guard let held = heldForTitle.removeValue(forKey: paneID) else { return }
+        held.release.cancel()
+        post(paneID)
+    }
+
+    /// 只认标题真的变了：回合结束前就在路上的那次重读，读回来的还是旧标题。
+    @objc private func sessionLibraryDidChange(_ notification: Notification) {
+        guard !heldForTitle.isEmpty,
+              let change = notification.userInfo?["change"] as? SessionChange,
+              let library = AppState.shared?.sessionLibrary else { return }
+        for (id, fields) in change.panes where fields.contains(.metadata) {
+            guard let held = heldForTitle[id], library.paneState(for: id)?.title != held.title else { continue }
+            releaseHeld(id)
         }
     }
 
@@ -263,7 +305,7 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         let reminder = pendingReminders.removeValue(forKey: paneID)
         let desktops = pendingDesktopMessages.removeValue(forKey: paneID) ?? []
         guard let reminder else {
-            desktops.forEach(Self.postDesktop)
+            forwardUnpaired(desktops, from: paneID)
             return
         }
 
@@ -272,25 +314,27 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
               PaneStatusStore.shared.unreadActivity(for: paneID) == reminder,
               !isOnScreen(match.pane, in: match.controller)
         else {
-            desktops.forEach(Self.postDesktop)
+            forwardUnpaired(desktops, from: paneID)
             return
         }
 
         let pairedDesktop = desktops.last
-        desktops.dropLast().forEach(Self.postDesktop)
+        forwardUnpaired(Array(desktops.dropLast()), from: paneID)
         guard let center = Self.center else { return }
 
         let content = UNMutableNotificationContent()
         content.categoryIdentifier = Self.categoryID
         content.sound = .default
         content.userInfo = [Self.paneIDKey: paneID.uuidString]
+        // 通知不能设字体颜色，只能靠三格分行区分：task 是固定的上下文，跟在状态后面；
+        // session 是具体哪件事，独占副标题；正文留给 agent 自己的原话，没有就空着。
         let statusTitle = reminder == .attention ? L("Needs your attention") : L("Agent finished")
+        let task = match.pane.boundTask?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let session = Self.sessionName(for: match.pane)
+        content.title = task.isEmpty ? statusTitle : "\(statusTitle) · \(task)"
+        content.subtitle = session == task ? "" : session
         if let pairedDesktop {
-            content.title = "\(statusTitle) · \(Self.displayName(for: match.pane))"
             content.body = pairedDesktop.body.isEmpty ? pairedDesktop.title : pairedDesktop.body
-        } else {
-            content.title = statusTitle
-            content.body = Self.displayName(for: match.pane)
         }
 
         let id = Self.requestID(for: paneID)
@@ -300,7 +344,17 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
-    /// 未与状态提醒配对的 OSC 通知保持原行为：随机 request id、不使用 lightty
+    /// 没配上状态提醒的 OSC 通知。hook 已经认出 agent 的 pane，它说的事状态提醒都覆盖了，
+    /// 只是来得晚——Claude 的权限提醒在对话框挂 6 秒后才发，空闲提醒要等 60 秒——
+    /// 单独再弹一条就是重复，而且不跟已读撤回，所以丢掉。没有 agent 的普通 shell 照原样投递。
+    private func forwardUnpaired(_ desktops: [DesktopMessage], from paneID: UUID) {
+        guard !desktops.isEmpty else { return }
+        if let status = PaneStatusStore.shared.status(for: paneID),
+           status.agent != nil, status.event != "SessionEnd" { return }
+        desktops.forEach(Self.postDesktop)
+    }
+
+    /// 普通 shell 的 OSC 通知保持原行为：随机 request id、不使用 lightty
     /// category，因此前台展示策略仍由系统决定，也不会被 pane 的已读状态撤回。
     private static func postDesktop(_ message: DesktopMessage) {
         guard let center = center else { return }
@@ -314,9 +368,13 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
             trigger: nil))
     }
 
-    private static func displayName(for pane: PaneView) -> String {
-        if let task = pane.boundTask?.name, !task.isEmpty { return task }
-        let name = pane.header.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// pane 头上显示的名字：绑定了会话就是会话名，否则是 pane 名。
+    /// pane 头上显示的名字。直接取会话库的值而不是读 header：两者订阅同一条变更，
+    /// 放行时 header 未必已经刷新。
+    private static func sessionName(for pane: PaneView) -> String {
+        let title = AppState.shared?.sessionLibrary.paneState(for: pane.dragIdentifier)?.title
+            ?? pane.header.title
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? L("Pane") : name
     }
 

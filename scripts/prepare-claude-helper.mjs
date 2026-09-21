@@ -1,7 +1,7 @@
 // Build-time preparation only. Never invoked by the running application.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, cp, readFile, writeFile, rename, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, readFile, writeFile, rename, stat, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -12,9 +12,27 @@ function run(command, args) {
   const result = spawnSync(command, args, { stdio: 'inherit' });
   if (result.error || result.status !== 0) throw new Error(`Build command failed: ${command}`);
 }
-run('npm', ['ci', '--prefix', source, '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund']);
-// Keep npm's relative bin links inside the relocatable helper/app bundle.
-await cp(join(source, 'node_modules'), join(output, 'node_modules'), { recursive: true, verbatimSymlinks: true });
+const lockData = await readFile(join(source, 'package-lock.json'));
+const dependencyHash = createHash('sha256').update(lockData).digest('hex');
+const dependencyMetadataPath = join(output, 'dependencies.json');
+const dependencyMetadata = await readFile(dependencyMetadataPath, 'utf8').then(JSON.parse).catch(() => null);
+if (dependencyMetadata?.lockSHA256 === dependencyHash
+    && await stat(join(output, 'node_modules')).catch(() => null)) {
+  console.log('Reusing cached Claude helper dependencies');
+} else {
+  run('npm', ['ci', '--prefix', source, '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund']);
+  const temporary = await mkdtemp(join(output, '.dependencies-'));
+  const prepared = join(temporary, 'node_modules');
+  // Keep npm's relative bin links inside the relocatable helper/app bundle.
+  await cp(join(source, 'node_modules'), prepared, { recursive: true, verbatimSymlinks: true });
+  const destination = join(output, 'node_modules');
+  if (await stat(destination).catch(() => null)) {
+    await rename(destination, join(temporary, 'previous-node_modules'));
+  }
+  await rename(prepared, destination);
+  await writeFile(dependencyMetadataPath, JSON.stringify({ lockSHA256: dependencyHash }));
+  await rm(temporary, { recursive: true, force: true });
+}
 await cp(join(source, 'list-sessions.mjs'), join(output, 'list-sessions.mjs'));
 await cp(join(source, 'delete-session.mjs'), join(output, 'delete-session.mjs'));
 await cp(join(source, 'rename-session.mjs'), join(output, 'rename-session.mjs'));
@@ -46,5 +64,6 @@ for (const arch of architectures) {
   // Preserve a previous build artifact, never recursively delete an unresolved path.
   if (await stat(destination).catch(() => null)) await rename(destination, join(temporary, 'previous-runtime'));
   await rename(prepared, destination);
+  await rm(temporary, { recursive: true, force: true });
 }
 console.log(`Prepared Claude metadata helper: ${output}`);

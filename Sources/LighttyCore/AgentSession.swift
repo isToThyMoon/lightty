@@ -70,9 +70,14 @@ public struct AgentSession: Equatable, Sendable {
     /// another terminal. The app model reconciles ownership and exit using PID + start time.
     /// Empty means no evidence; it does not guarantee native resume is available.
     public let sourceProcesses: Set<AgentProcessIdentity>
+    /// 标题是否已经定下来。Claude 没有自定义名和 AI 标题时拿「最近一条提示」当标题，
+    /// 这条记录在回合结束之后才落盘，于是每个回合结束那一刻读到的都还是上一句。
+    /// false 表示标题还会随下一次重读变化；Codex 的线程名不随提示变，恒为 true。
+    public let titleSettled: Bool
 
     public init(key: AgentSessionKey, title: String, workingDirectory: String?,
-                updatedAt: Date?, sourceArchived: Bool = false, sourceProcesses: Set<AgentProcessIdentity> = []) {
+                updatedAt: Date?, sourceArchived: Bool = false, sourceProcesses: Set<AgentProcessIdentity> = [],
+                titleSettled: Bool = true) {
         self.key = key
         self.title = String(title.unicodeScalars.filter {
             !CharacterSet.controlCharacters.contains($0)
@@ -81,6 +86,7 @@ public struct AgentSession: Equatable, Sendable {
         self.updatedAt = updatedAt
         self.sourceArchived = sourceArchived
         self.sourceProcesses = sourceProcesses
+        self.titleSettled = titleSettled
     }
 }
 

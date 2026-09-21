@@ -50,9 +50,10 @@ Sparkle 的 `generate_appcast`，生成 `.delta` 并写进 feed。实测 v0.13.1
 所以脚本改名后同步改 feed 里的 URL——签名签的是内容不是文件名，改名不影响验签。
 
 - 修复使用补丁版本，新功能使用次版本；发布前核对远端 tag 和 Releases，不能覆盖已发布 tag。
-- `main` 推送也构建打包、填充内核缓存，但不创建 Release；其构建版本为 `0.0.0-ci`。
+- `main` 推送只构建并填充发布缓存，不制作安装包或创建 Release。
 - 应用版本取 tag 去掉 `v`，build number 取 `git rev-list --count HEAD` 加 235（`BUILD_NUMBER_OFFSET`）。历史改写后提交数从 236 降到 63，而 v0.14.1 的 build number 是 236；2026-09-17 再次 squash 后提交数从 83 降到 77，而已装的 v0.19.1 是 283，偏移从 200 提到 210；2026-09-20 把 v0.14.0 之后的 26 个提交压成 1 个，已发布 v0.20.0 的 build number 是 295，偏移提到 235，让下一版继续为 296。Sparkle 按 build number 判断新旧，偏移只能加不能减。正式发布沿 main 前进，保持 build number 递增。
 - 手动运行 workflow 不等于正式发布；只有 tag ref 执行 Release 和 appcast 步骤。
+- main 的 workflow 只预热 Ghostty、npm 下载缓存、Claude helper 与 Swift release 最终产物；不签名、不制作 DMG。同一 commit 的 tag run 直接复用 main 准备好的 helper 和可执行文件，跳过 npm 与 Swift 构建，再并行组装 arm64/x64 包和更新源。若 tag 在 main 预热完成前启动，则自行构建以保证产物对应当前提交。最终 app、DMG 与 Sparkle 签名每版重新生成，不缓存发布产物。
 
 ## 发布前检查
 

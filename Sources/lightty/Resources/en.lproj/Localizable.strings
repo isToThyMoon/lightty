@@ -26,8 +26,8 @@
 "Open in lightty" = "Open in lightty";
 "Open in another terminal" = "Open in another terminal";
 "Development build" = "Development build";
-"Thank you for finding lightty." = "Thank you for finding lightty.";
-"This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier." = "This is my first Swift app.\nIt will always be free and open source.\nI hope it makes your everyday work a little easier.";
+"Thank you for discovering lightty." = "Thank you for discovering lightty.";
+"A terminal built for running many agent CLIs side by side.\nMay we, amid the surging flood of data,\nhold on to our own abiding calm,\nand enjoy life." = "A terminal built for running many agent CLIs side by side.\nMay we, amid the surging flood of data,\nhold on to our own abiding calm,\nand enjoy life.";
 "Quit lightty" = "Quit lightty";
 "Check for Updates…" = "Check for Updates…";
 "Services" = "Services";

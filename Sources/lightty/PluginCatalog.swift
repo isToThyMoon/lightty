@@ -441,17 +441,31 @@ struct PluginCatalog {
         }
 
         private mutating func hooks(in root: URL, agent: PluginAgent) -> [PluginContent] {
-            for candidate in ["hooks/hooks.json", "hooks.json"] {
-                let url = root.appendingPathComponent(candidate)
-                guard files.fileExists(atPath: url.path) else { continue }
-                guard let json = jsonObject(at: url) else { return [] }
-                return events(in: json["hooks"] as? [String: Any] ?? json, at: url)
+            // 两家的规则相同：清单里写了 `hooks` 就只认它（一个或一组路径，或内联），
+            // 没写才读 `hooks/hooks.json`。同一个目录可能同时装着两家的清单
+            // （lightty 自己的插件就是），不看清单就会读到另一家的那份。
+            let manifest = root.appendingPathComponent(agent.sessionAgent.spec.pluginManifestPath)
+            let declared = jsonObject(at: manifest)?["hooks"]
+            var sources: [(hooks: [String: Any], url: URL)] = []
+            func add(_ document: [String: Any], at url: URL) {
+                sources.append((document["hooks"] as? [String: Any] ?? document, url))
             }
-            // Codex 的清单可以把 hooks 直接写在 plugin.json 里。
-            let manifest = root.appendingPathComponent(
-                agent == .codex ? ".codex-plugin/plugin.json" : ".claude-plugin/plugin.json")
-            guard let json = jsonObject(at: manifest), let hooks = json["hooks"] as? [String: Any] else { return [] }
-            return events(in: hooks["hooks"] as? [String: Any] ?? hooks, at: manifest)
+            func load(_ relative: String) {
+                let url = URL(fileURLWithPath: relative, relativeTo: root).standardizedFileURL
+                if let json = jsonObject(at: url) { add(json, at: url) }
+            }
+            switch declared {
+            case let path as String: load(path)
+            case let paths as [String]: paths.forEach(load)
+            case let inline as [String: Any]: add(inline, at: manifest)
+            case let inlines as [[String: Any]]: inlines.forEach { add($0, at: manifest) }
+            default: load("hooks/hooks.json")
+            }
+            // 多份来源里同名的事件只列第一份，内容 id 按事件名取。
+            var seen: Set<String> = []
+            return sources.flatMap { source in
+                events(in: source.hooks.filter { seen.insert($0.key).inserted }, at: source.url)
+            }
         }
 
         private func events(in hooks: [String: Any], at url: URL) -> [PluginContent] {
