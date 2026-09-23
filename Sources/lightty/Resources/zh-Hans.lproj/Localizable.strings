@@ -78,6 +78,8 @@
 "Tab" = "标签页";
 "Tab %d" = "标签页 %d";
 "Rename tab" = "重命名标签页";
+"Name tab" = "命名标签页";
+"Tab name" = "标签页名称";
 "Tabs" = "标签页";
 "Close tab" = "关闭标签页";
 "Collapse tab" = "折叠标签页";

@@ -9,7 +9,10 @@ import LighttyCore
 enum ShellStyle {
     /// 操作菜单：行内紧凑、组间留白，尾注从属于操作文字。
     enum Menu {
-        static let width: CGFloat = 240
+        /// 按内容定宽：最宽一行加左右留白，夹在上下限之间，像原生菜单那样。
+        /// 以前写死 240，一项短命令也撑成一张大卡；太长的行在上限处截断，悬停看全文。
+        static let minWidth: CGFloat = 160
+        static let maxWidth: CGFloat = 320
         static let inset: CGFloat = 6
         static let rowInset: CGFloat = 10
         static let rowHeight: CGFloat = 28

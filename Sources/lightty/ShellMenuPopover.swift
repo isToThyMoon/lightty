@@ -170,11 +170,8 @@ final class ShellMenuWindow: NSWindow {
     private let card = MenuCardView()
     private let shadowHost = MenuShadowView()
 
-    /// 卡片本体尺寸（不含阴影边距）
-    var cardSize: NSSize {
-        let size = controller.view.fittingSize
-        return NSSize(width: max(size.width, 224), height: size.height)
-    }
+    /// 卡片本体尺寸（不含阴影边距）。宽度由内容决定，上下限见 `ShellStyle.Menu`。
+    var cardSize: NSSize { controller.view.fittingSize }
 
     func setBackdrop(_ image: NSImage?) {
         backdrop.image = image
@@ -361,7 +358,8 @@ final class ShellMenuController: NSViewController {
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: ShellStyle.Menu.inset),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -ShellStyle.Menu.inset),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -ShellStyle.Menu.inset),
-            root.widthAnchor.constraint(equalToConstant: ShellStyle.Menu.width),
+            root.widthAnchor.constraint(greaterThanOrEqualToConstant: ShellStyle.Menu.minWidth),
+            root.widthAnchor.constraint(lessThanOrEqualToConstant: ShellStyle.Menu.maxWidth),
         ]
         for row in rows {
             constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor))

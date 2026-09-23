@@ -27,7 +27,7 @@ enum TabRowKind: Equatable {
 /// ——「标签页 N · 1」两样都是空信息，独占一行只会让列表变重。合并行沿用两级树的
 /// 网格：标签页图标占容器行图标那一列，pane 内容从子级缩进位起，看上去仍是"标签页
 /// 包着一个 pane"。行本身是 pane 行（状态原地更新、拖拽源），标签页语义叠在上面：
-/// 落点 = 移入该标签页，⋯ / 双击 = 重命名标签页。
+/// 落点 = 移入该标签页，⋯ / 双击 = 给标签页起名：就地展开成分组行，在标题位输入。
 /// 用户给标签页起了名字，它就有了自己的身份，恢复容器行 + pane 行呈现，名字始终可见；
 /// 开出第二个分屏同样展开成两级树，关回一个（且仍是默认名）再收回。
 final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
@@ -232,6 +232,34 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private lazy var reloads = Coalescer(.nextTick) { [weak self] in self?.reload() }
     @objc private func scheduleReload() { reloads.schedule() }
 
+    // MARK: 就地命名叶子标签页
+
+    /// 正在命名的叶子标签页。命名途中它临时以分组行 + pane 行出现，分组行的标题位
+    /// 就是输入框：名字会出现在哪、这一行会变成什么样，打字时就看得见。
+    private var namingTabID: UUID?
+    /// 已经打的字由列表保管，行视图重建时交回给新的输入框。
+    private var namingDraft = ""
+
+    /// 叶子行的 ⋯「命名标签页」与双击都走这里。
+    func beginNaming(_ tabID: UUID) {
+        namingTabID = tabID
+        namingDraft = ""
+        rebuild()
+    }
+
+    /// `name` 为 nil 是撤回：叶子行原样收回。重复回调（回车之后紧跟着失焦）只认第一次。
+    private func finishNaming(_ tabID: UUID, name: String?) {
+        guard namingTabID == tabID else { return }
+        namingTabID = nil
+        namingDraft = ""
+        if let name, let controller {
+            // 起了名就不再是叶子行，renameTab 会刷新侧栏，分组行直接留下。
+            controller.renameTab(withID: tabID, to: name)
+        } else {
+            rebuild()
+        }
+    }
+
     @objc private func newTab() {
         // 有活跃 pane 时走 Ghostty action 通路：新标签页继承当前 pane 的
         // cwd/font/context。空态（全部标签页已关）没有活跃 pane，直接建一个。
@@ -258,7 +286,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         controller?.activePane?.terminal.performBindingAction("new_split:down")
     }
 
+    /// 命名期间不重建：重建会换掉输入框，失焦就分不清是用户点了别处还是行被重建。
+    /// 这期间的刷新请求直接略过，命名结束时总会重建一次，结构变化那时一并补上；
+    /// 命名只持续几秒，这几秒里结构不刷新可以接受。
     func reload() {
+        guard namingTabID == nil else { return }
+        rebuild()
+    }
+
+    private func rebuild() {
         guard let controller else { return }
         reload(overview: controller.tabOverview())
     }
@@ -276,21 +312,26 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         var rowItems: [RowItem] = []
         paneRows.removeAllObjects()
         collapsedTabIDs.formIntersection(overview.map(\.id))
+        if let naming = namingTabID, !overview.contains(where: { $0.id == naming }) {
+            // 命名途中标签页被关掉了：没有东西可命名，状态一并清掉。
+            namingTabID = nil
+            namingDraft = ""
+        }
         for entry in overview {
-            if entry.panes.count == 1, !entry.hasCustomTitle, let pane = entry.panes.first {
+            if entry.panes.count == 1, !entry.hasCustomTitle, entry.id != namingTabID,
+               let pane = entry.panes.first {
                 // 叶子标签页：折叠对它无意义，折叠集合里的残留不影响它。
                 let tabID = entry.id
-                let title = entry.title
                 rowItems.append(RowItem(kind: .leaf(tab: tabID, pane: pane.dragIdentifier),
                     makeView: { [weak self, weak pane] existing in
                         guard let self, let pane else { return NSView() }
-                        return self.makeLeafRow(for: pane, tabID: tabID, tabTitle: title,
-                            reusing: existing as? PaneRowView)
+                        return self.makeLeafRow(for: pane, tabID: tabID, reusing: existing as? PaneRowView)
                     }))
                 continue
             }
             // 拖容器行时它临时折叠：只影响这次显示，不写进用户的折叠状态。
-            let isCollapsed = collapsedTabIDs.contains(entry.id) || drag?.collapsedForDrag == entry.id
+            let isCollapsed = entry.id != namingTabID
+                && (collapsedTabIDs.contains(entry.id) || drag?.collapsedForDrag == entry.id)
             let presentation = TabPresentation(id: entry.id, title: entry.title,
                 isActive: entry.isActive, count: entry.panes.count)
             rowItems.append(RowItem(kind: .tab(entry.id), makeView: { [weak self] existing in
@@ -322,6 +363,13 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             isActive: entry.isActive,
             isCollapsed: isCollapsed)
         row.configure(title: entry.title, count: entry.count, isActive: entry.isActive, isCollapsed: isCollapsed)
+        if tabID == namingTabID {
+            row.onNamingDraft = { [weak self] text in self?.namingDraft = text }
+            row.onNamingFinish = { [weak self] name in self?.finishNaming(tabID, name: name) }
+            row.beginNaming(draft: namingDraft, placeholder: L("Tab name"))
+        } else {
+            row.endNaming()
+        }
         row.onSelect = { [weak self] in
             guard let self else { return }
             if wasActive {
@@ -378,7 +426,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func makeLeafRow(
         for pane: PaneView,
         tabID: UUID,
-        tabTitle: String,
         reusing existing: PaneRowView?
     ) -> PaneRowView {
         let row = makePaneRow(for: pane, leading: .leafTab,
@@ -388,17 +435,13 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         row.onPaneDrop = { [weak self] sourceID in
             self?.controller?.movePane(withID: sourceID, intoTabWithID: tabID) ?? false
         }
-        let rename: () -> Void = { [weak self, weak row] in
-            guard let self, let anchor = row, let controller = self.controller else { return }
-            NameEditorPopover.present(
-                from: anchor, title: L("Rename tab"),
-                initial: tabTitle, confirmLabel: L("Rename")
-            ) { name in controller.renameTab(withID: tabID, to: name) }
-        }
-        row.onRename = rename
+        // 叶子行的标签页还叫默认名，没有可「重命名」的东西：这里是给它起名，
+        // 起了名它就成为分组。就地展开成分组行，在名字将要出现的位置输入。
+        let name: () -> Void = { [weak self] in self?.beginNaming(tabID) }
+        row.onRename = name
         row.onMenu = { [weak row] in
             guard let anchor = row else { return }
-            ShellMenuPopover.present(from: anchor, items: [.action(L("Rename tab"), symbol: ShellSymbol.rename, handler: rename)])
+            ShellMenuPopover.present(from: anchor, items: [.action(L("Name tab"), symbol: ShellSymbol.rename, handler: name)])
         }
         return row
     }
@@ -863,8 +906,40 @@ private final class TabRowContainer: NSView {
 /// disclosure 始终直接切换折叠。双击改名；hover 显示重命名菜单与独立关闭键，
 /// 关闭不在菜单里重复出现。
 ///
+/// 行内改名用的文本格。AppKit 接管编辑时会把字段编辑器包进一个裁剪视图，白底是
+/// 那个裁剪视图画的；编辑一开始就把它和字段编辑器的底都关掉，换上导航色的光标，
+/// 让输入框和它所在的行融为一体。
+private final class InlineTitleCell: NSTextFieldCell {
+    var caretColor: NSColor = .controlAccentColor
+
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+        let editor = super.setUpFieldEditorAttributes(textObj)
+        editor.drawsBackground = false
+        (editor as? NSTextView)?.insertionPointColor = caretColor
+        return editor
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                         delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: rect, in: controlView, editor: textObj, delegate: delegate,
+                     start: selStart, length: selLength)
+        clearBackground(around: textObj)
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                       delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: rect, in: controlView, editor: textObj, delegate: delegate, event: event)
+        clearBackground(around: textObj)
+    }
+
+    private func clearBackground(around textObj: NSText) {
+        textObj.drawsBackground = false
+        (textObj.superview as? NSClipView)?.drawsBackground = false
+    }
+}
+
 /// 活跃态只染强调色（图标 + 标题），不给填充——填充留给当前 pane 行独占。
-private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
+private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow, NSTextFieldDelegate {
     var onSelect: (() -> Void)?
     var onToggleCollapse: (() -> Void)?
     var onRename: (() -> Void)?
@@ -891,15 +966,21 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             guard oldValue != hovered else { return }
             applyFill()
             applyGlyph()
-            menuButton.isHidden = !hovered
-            closeButton.isHidden = !hovered
+            applyTrailingAccessories()
             needsLayout = true
             // tooltip 只在 hover 时挂：NSToolTipManager 每帧都会重算所有已注册
             // tooltip 的矩形，几十行常驻就是滚动期的一笔固定开销。
             closeButton.toolTip = hovered ? L("Close tab") : nil
-            // 计数与 ⋯/✕ 共用行尾，hover 时让位
-            countLabel.isHidden = hovered
         }
+    }
+
+    /// 计数与 ⋯/✕ 共用行尾：hover 时计数让位。命名时 ⋯/✕ 收起——它们会压在输入区上，
+    /// 那时点它们也没有意义；计数照常，命名中的行和起完名的分组行长得一样。
+    private func applyTrailingAccessories() {
+        let naming = nameEditor != nil
+        menuButton.isHidden = !hovered || naming
+        closeButton.isHidden = !hovered || naming
+        countLabel.isHidden = hovered && !naming
     }
 
     init(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {
@@ -986,6 +1067,105 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     override func layout() {
         super.layout()
         RowActionFade.apply(to: [label], in: self, clearFrom: hovered ? menuButton.frame.minX : nil)
+    }
+
+    // MARK: 就地命名
+
+    /// 每次改字都报给列表，由列表保管：行视图被复用或重建时字不会丢。
+    var onNamingDraft: ((String) -> Void)?
+    /// 结束命名：给名字是确认，nil 是撤回。
+    var onNamingFinish: ((String?) -> Void)?
+    private var nameEditor: NSTextField?
+
+    /// 标题位换成输入框并拿到焦点。反复调用只补字和焦点，不重建：列表刷新时也会走到这里。
+    func beginNaming(draft: String, placeholder: String) {
+        let editor = nameEditor ?? makeNameEditor(placeholder: placeholder)
+        label.isHidden = true
+        applyEditorStyle(editor, placeholder: placeholder)
+        applyTrailingAccessories()
+        applyFill()
+        if editor.currentEditor() == nil { editor.stringValue = draft }
+        // 视图此刻可能还没进窗口（列表正在重建），焦点等下一拍再给。
+        DispatchQueue.main.async { [weak self, weak editor] in
+            guard let self, let editor, editor.currentEditor() == nil, let window = self.window else { return }
+            window.makeFirstResponder(editor)
+            let end = editor.stringValue.utf16.count
+            editor.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
+        }
+    }
+
+    func endNaming() {
+        guard let editor = nameEditor else { return }
+        nameEditor = nil
+        editor.delegate = nil
+        editor.removeFromSuperview()
+        label.isHidden = false
+        applyTrailingAccessories()
+        applyFill()
+    }
+
+    /// 输入框就是这一行将来的标题：同字体、同颜色、同一条基线，行底色也是它真实的状态，
+    /// 确认时一个像素都不跳。没有底、没有框——可输入只靠导航色的光标和占位符表达。
+    private func makeNameEditor(placeholder: String) -> NSTextField {
+        let editor = NSTextField()
+        editor.cell = InlineTitleCell(textCell: "")
+        editor.isEditable = true
+        editor.isBordered = false
+        editor.isBezeled = false
+        editor.drawsBackground = false
+        editor.focusRingType = .none
+        editor.lineBreakMode = .byTruncatingTail
+        editor.cell?.isScrollable = true
+        editor.cell?.wraps = false
+        editor.delegate = self
+        editor.setAccessibilityLabel(placeholder)
+        editor.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(editor)
+        NSLayoutConstraint.activate([
+            editor.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            editor.firstBaselineAnchor.constraint(equalTo: label.firstBaselineAnchor),
+            editor.trailingAnchor.constraint(equalTo: countLabel.leadingAnchor, constant: -6),
+        ])
+        nameEditor = editor
+        return editor
+    }
+
+    private func applyEditorStyle(_ editor: NSTextField, placeholder: String) {
+        editor.font = label.font
+        editor.textColor = label.textColor
+        editor.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
+            .font: label.font ?? ShellStyle.Font.groupTitle,
+            .foregroundColor: ShellStyle.tertiaryText,
+        ])
+        (editor.cell as? InlineTitleCell)?.caretColor = ShellStyle.navigationAccent
+        (editor.currentEditor() as? NSTextView)?.insertionPointColor = ShellStyle.navigationAccent
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        onNamingDraft?(nameEditor?.stringValue ?? "")
+    }
+
+    /// 回车确认、Esc 撤回。失焦也确认（和访达改名一样）；名字为空一律按撤回。
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)): finishNaming(confirm: true); return true
+        case #selector(NSResponder.cancelOperation(_:)): finishNaming(confirm: false); return true
+        default: return false
+        }
+    }
+
+    /// 失焦按确认。命名期间列表不重建（见 `TabColumnView.reload()`），这一行和它的
+    /// 输入框始终是同一个，所以失焦只会来自用户自己点了别处。
+    func controlTextDidEndEditing(_ notification: Notification) { finishNaming(confirm: true) }
+
+    /// 结果放到下一拍再交出去：交出去会重建列表，而此刻还在输入框自己的回调里，
+    /// 当场拆掉正在编辑的控件不安全。回车之后紧跟着的失焦也会走到这里，列表只认第一次。
+    private func finishNaming(confirm: Bool) {
+        guard let editor = nameEditor else { return }
+        let name = editor.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = confirm && !name.isEmpty ? name : nil
+        let finish = onNamingFinish
+        DispatchQueue.main.async { finish?(result) }
     }
 
     func configure(title: String, count: Int, isActive: Bool, isCollapsed: Bool) {

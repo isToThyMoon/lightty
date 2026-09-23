@@ -78,6 +78,8 @@
 "Tab" = "Tab";
 "Tab %d" = "Tab %d";
 "Rename tab" = "Rename tab";
+"Name tab" = "Name tab";
+"Tab name" = "Tab name";
 "Tabs" = "Tabs";
 "Close tab" = "Close tab";
 "Collapse tab" = "Collapse tab";
