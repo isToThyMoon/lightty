@@ -1050,12 +1050,12 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow, NST
             countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
-            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
-            menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
+            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
-            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.compactActionSize),
+            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
         ])
         applyFill()
     }
@@ -1492,15 +1492,17 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             dotView.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
             dotView.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
+            // 热区用列表行的操作尺寸：两行高的行与第一侧栏同一密度，18pt 点不准。
+            // 字形不变，只放大可点范围；分组行同尺寸同右距，⋯ / ✕ 在整列上下对齐。
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 18),
-            closeButton.heightAnchor.constraint(equalToConstant: 18),
+            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
             // ⋯ 槽位只在装了菜单（叶子行）时占宽，普通 pane 行不为它让出标题空间。
             menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             menuButtonWidth,
-            menuButton.heightAnchor.constraint(equalToConstant: 18),
+            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
 
             // agent 图标领第二行：第一行本来就挤（标题 + 状态词），第二行只有一条路径，
             // 空着大半。挪下来之后标题多出 14pt，两个图标上下同列，起点仍是一条直线。
@@ -1559,7 +1561,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// 与容器行一致：活跃标签页的图标染导航色。
 
     private func applyMenuSlot() {
-        menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.compactActionSize
+        menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.listActionSize
         menuButton.isHidden = !hovered || onMenu == nil
         needsLayout = true
     }

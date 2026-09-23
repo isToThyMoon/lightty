@@ -63,12 +63,11 @@ enum ShellStyle {
 
     // MARK: Icons
 
-    /// 字形尺寸与命中区域分别定义；紧凑树行保留较小的操作槽位。
+    /// 字形尺寸与命中区域分别定义：行内操作的热区统一用 `listActionSize`，字形各自按场合取。
     static let toolbarIconSize: CGFloat = 12.5
     static let compactIconSize: CGFloat = 10
     static let closeIconSize: CGFloat = 8.5
     static let listActionSize: CGFloat = 26
-    static let compactActionSize: CGFloat = 20
     static let statusDotSize: CGFloat = 7
 
     // MARK: Geometry

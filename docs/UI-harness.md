@@ -25,7 +25,7 @@
 | 表面与状态 | `sidebarBackground` / `titlebarBackground` 为壳层底色，`raisedSurface` 为浮起面；`controlFill`、`inputFill` 对应控件与输入区域。hover、pressed、selection 各有已有 token。 |
 | 导航与活动 | `activeContainerFill` / `activeItemFill` 区分所在容器与当前终端；`navigationAccent` 表达位置，`accent` 表达控件强调。任务绑定与 agent 活动通过 `dotColor` / `statusColor` 取色，避免混同导航与活动状态。 |
 | 间距 | `textLineGap` 属于同一文本块，`inlineGap` 属于相邻元素，`rowVerticalInset` 是行内留白，`listRowGap` 是行间留白。`sidebarHorizontalInset`、`sectionInset`、`chromeGap` 分别服务于行内容、分组内容和 chrome 区块。 |
-| 尺寸与圆角 | `chromeRowHeight` 是工具栏/终端头部的共同模数；`listActionSize`、`compactActionSize` 是不同密度下的操作区域。`panelCornerRadius`、`rowCornerRadius`、`compactRowCornerRadius`、`controlCornerRadius`、`capsuleCornerRadius` 按容器角色选择。 |
+| 尺寸与圆角 | `chromeRowHeight` 是工具栏/终端头部的共同模数；`listActionSize` 是侧栏行内操作（⋯、✕、详情）的统一热区，字形大小另取、不随热区放大。`panelCornerRadius`、`rowCornerRadius`、`compactRowCornerRadius`、`controlCornerRadius`、`capsuleCornerRadius` 按容器角色选择。 |
 
 两级侧栏的模式/标题带共用 `ShellStyle.SidebarHeader`，对齐头部中心和列表起点；第一侧栏的模式说明放在 tooltip 与空状态，不常驻占一行。第一侧栏保留浮卡的外框与阴影，窗口外轮廓由系统负责。行内更多操作在悬停、键盘聚焦或菜单打开时显示，操作槽位始终保留。
 
