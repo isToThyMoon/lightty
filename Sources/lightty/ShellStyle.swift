@@ -66,7 +66,7 @@ enum ShellStyle {
     static let closeIconSize: CGFloat = 8.5
     static let listActionSize: CGFloat = 26
     static let compactActionSize: CGFloat = 20
-    static let statusDotSize: CGFloat = 6
+    static let statusDotSize: CGFloat = 7
 
     // MARK: Geometry
 
@@ -190,16 +190,15 @@ enum ShellStyle {
 
     // 下面五个是 agent 活动状态色。选色的约束有两条：
     // 1. 要同时压在壳层暖灰底和任意 terminal 底色上都读得出来，所以明暗两套都给足彩度；
-    // 2. thinking / tool 同属「还在跑」，刻意用同一蓝族只差一档亮度——它们的区别
-    //    对用户不重要；真正要一眼分开的是「还在跑 / 要你 / 跑完了」这三类。
-    //    腾出来的色相留给后两者，让它们离得足够远。
+    // 2. thinking / tool 同属「还在跑」，用同一个蓝——它们的区别对用户不重要，
+    //    交给呼吸节奏；真正要一眼分开的是「还在跑 / 要你 / 跑完了」这三类。
+    //    省下的色相留给后两者，让它们离得足够远。
 
     /// 无活跃 turn。比 `dormantAccent` 暖一点，表示「hook 接上了，只是没在跑」。
     static let statusIdle = NSColor.shellDynamic(light: 0x8E8A87, dark: 0x817C86)
-    /// 思考中：冷静的蓝，能长时间挂在眼角。
+    /// 还在跑（thinking / tool 共用）：冷静的蓝，能长时间挂在眼角。
+    /// 两者原本差一档亮度，6pt 上分不出来，改为只靠呼吸节奏区分（工具更快）。
     static let statusThinking = NSColor.shellDynamic(light: 0x4E6EF2, dark: 0x7E9BFF)
-    /// 执行工具：同蓝族偏青一档，「更活跃」但不换语义。
-    static let statusTool = NSColor.shellDynamic(light: 0x1E8FD0, dark: 0x55BAF0)
     /// 需要你介入：系统橙。曾用土琥珀（C97A08/F2A93B），在菜单栏里读成脏黄点；
     /// 系统橙更亮更饱和，也是 macOS 通知/警示的惯用色。跟随系统动态明暗。
     static let statusAttention = NSColor.systemOrange
@@ -211,7 +210,9 @@ enum ShellStyle {
         switch activity {
         case .idle: return statusIdle
         case .thinking: return statusThinking
-        case .tool: return statusTool
+        // 工具与思考共用一个蓝：两者对用户的含义相同（它在干活，不用管），
+        // 区分交给呼吸节奏（工具更快）。颜色档位少一个，剩下的橙与品红更跳得出来。
+        case .tool: return statusThinking
         case .attention: return statusAttention
         case .done: return statusDone
         }

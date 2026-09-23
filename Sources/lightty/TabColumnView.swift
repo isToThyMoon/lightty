@@ -1168,9 +1168,11 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     var onMenu: (() -> Void)? { didSet { applyMenuSlot() } }
     var onRename: (() -> Void)?
 
-    /// 行首形态。`nested`：标签页下的子行，圆点缩进到子级位；`leafTab`：单 pane 标签页
-    /// 的合并行，标签页图标占容器行图标那一列、pane 内容仍从子级位起——两种行的
-    /// pane 文字轴严格对齐，列表扫下来是一条直线。
+    /// 行首形态。`nested`：标签页下的子行，标记列缩进到子级位；`leafTab`：单 pane
+    /// 标签页的合并行，它与容器行同级，标记列就占容器行图标那一列、文字与容器行标题
+    /// 同起点。不再额外画标签页图标：一行本就有状态点和 agent 图标两个标记，
+    /// 再加一个左边就成了三处，视觉重心不稳；「这是一个标签页」由它与容器行同级的
+    /// 位置表达。
     enum Leading { case nested, leafTab }
 
     /// 行持有 pane 身份（以前只拿到一堆字符串），才谈得上原地更新。
@@ -1178,12 +1180,13 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// 少一条会让关掉的 pane 多活一会儿的强/弱引用。
     private(set) var paneID: UUID
 
+    /// 12pt 标记列的左缘：叶子行与容器行同级，占容器行图标那一列（8）；
+    /// 子行缩进到子级位（26）。文字统一在标记列右侧 5pt 处起。
+    private let markerLeading: CGFloat
     private let dotView = NSView()
     private let closeButton = NSButton()
     private let menuButton = NSButton()
     private var menuButtonWidth: NSLayoutConstraint!
-    /// 叶子标签页行的标签页图标（与容器行同一字形、同一列），nested 行没有。
-    private let tabGlyph: NSImageView?
     private var tracking: NSTrackingArea?
     private var bound: Bool
     private var taskName: String?
@@ -1223,8 +1226,8 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         self.bound = bound
         self.taskName = taskName
         self.isActive = isActive
+        markerLeading = leading == .leafTab ? 8 : 26
         terminalWorkingDirectory = workingDirectory
-        tabGlyph = leading == .leafTab ? NSImageView() : nil
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = ShellStyle.compactRowCornerRadius
@@ -1286,6 +1289,12 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
         agentIcon.contentTintColor = ShellStyle.primaryText
         applyAgentIcon()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(ambientConditionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(ambientConditionsChanged),
+            name: NSWindow.didChangeOcclusionStateNotification, object: nil)
         // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
         for view in [nameLabel, statusLabel, secondaryStack] as [NSView] { view.wantsLayer = true }
         menuButtonWidth = menuButton.widthAnchor.constraint(equalToConstant: 0)
@@ -1293,26 +1302,13 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        if let tabGlyph {
-            tabGlyph.image = SymbolImages.image(
-                ShellSymbol.tab, pointSize: ShellStyle.compactIconSize, weight: .medium, description: L("Tab"))
-            tabGlyph.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(tabGlyph)
-            // 与容器行的图标同列同尺寸（leading 5、宽 18），跟第一行对齐。
-            // 要等 nameLabel 已进视图树再激活，否则约束引用不在层级里的视图会直接炸。
-            NSLayoutConstraint.activate([
-                tabGlyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
-                tabGlyph.widthAnchor.constraint(equalToConstant: 18),
-                tabGlyph.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            ])
-        }
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 42),
 
             // 嵌进标签页标题的文字轴之下再退一步，属地关系靠缩进本身表达；
-            // 圆点跟第一行对齐，不悬在两行中间。叶子行同样从子级位起，前面的
-            // 标签页图标负责说明"这是一个标签页"。
-            dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26),
+            // 标记列固定 12pt（26…38）：第一行是状态点，第二行是 agent 图标，两者上下同列。
+            // 点在列里居中，不随尺寸改变推动文字。
+            dotView.centerXAnchor.constraint(equalTo: leadingAnchor, constant: markerLeading + 6),
             dotView.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
             dotView.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
 
@@ -1326,12 +1322,14 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             menuButtonWidth,
             menuButton.heightAnchor.constraint(equalToConstant: 18),
 
-            agentIcon.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 7),
-            agentIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            // agent 图标领第二行：第一行本来就挤（标题 + 状态词），第二行只有一条路径，
+            // 空着大半。挪下来之后标题多出 14pt，两个图标上下同列，起点仍是一条直线。
+            agentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: markerLeading),
+            agentIcon.centerYAnchor.constraint(equalTo: secondaryStack.centerYAnchor),
             agentIcon.heightAnchor.constraint(equalToConstant: 12),
             // Agent 有无变化不推动名称与副标题左右跳动。
             agentIcon.widthAnchor.constraint(equalToConstant: 12),
-            nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor, constant: 5),
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: markerLeading + 17),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             dotView.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
@@ -1342,7 +1340,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.textTrailingInset),
             statusLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
 
-            // 副标题与名称共用文字轴，图标及状态点不参与文字缩进。
+            // 副标题与名称共用文字轴，标记列里的状态点与 agent 图标都不参与文字缩进。
             secondaryStack.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             secondaryStack.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -Self.textTrailingInset),
@@ -1354,7 +1352,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyStatusLabel()
         applyMetadataLine()
         applyFill()
-        applyTabGlyphTint()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1380,9 +1377,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     /// 与容器行一致：活跃标签页的图标染导航色。
-    private func applyTabGlyphTint() {
-        tabGlyph?.contentTintColor = isActive ? ShellStyle.navigationAccent : ShellStyle.secondaryText
-    }
 
     private func applyMenuSlot() {
         menuButtonWidth.constant = onMenu == nil ? 0 : ShellStyle.compactActionSize
@@ -1394,7 +1388,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         guard isActive != active else { return }
         isActive = active
         applyFill()
-        applyTabGlyphTint()
     }
 
     func configure(
@@ -1419,7 +1412,6 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyStatusLabel()
         applyMetadataLine()
         applyFill()
-        applyTabGlyphTint()
     }
 
     func applyWorkingDirectory(_ directory: String?) {
@@ -1527,9 +1519,18 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     private func applyDotColor() {
-        dotView.layer?.backgroundColor = ShellStyle
-            .dotColor(bound: bound, activity: activity)
-            .shellResolvedCGColor(for: effectiveAppearance)
+        let color = ShellStyle.dotColor(bound: bound, activity: activity)
+        dotView.layer?.backgroundColor = color.shellResolvedCGColor(for: effectiveAppearance)
+        applyDotBreath(color)
+    }
+
+    /// 「还在跑」的两个状态让圆点呼吸；看不见的时候不烧动画，「减弱动态效果」下不呼吸。
+    private func applyDotBreath(_ color: NSColor) {
+        guard let layer = dotView.layer else { return }
+        let visible = !isHiddenOrHasHiddenAncestor && window?.occlusionState.contains(.visible) == true
+        StatusDotBreath.apply(to: layer, color: color, activity: activity,
+                              appearance: effectiveAppearance,
+                              enabled: visible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
     private func applyFill() {
@@ -1546,6 +1547,11 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         }
     }
 
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyDotColor()
@@ -1559,6 +1565,12 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         applyStatusLabel()
         applyFill()
     }
+
+    override func viewDidHide() { super.viewDidHide(); applyDotColor() }
+    override func viewDidUnhide() { super.viewDidUnhide(); applyDotColor() }
+
+    /// 窗口被挡住、或用户改了「减弱动态效果」时重新判断要不要呼吸。
+    @objc private func ambientConditionsChanged() { applyDotColor() }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

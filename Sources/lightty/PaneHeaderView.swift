@@ -449,7 +449,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     // MARK: - agent 活动状态
 
-    private static let dotBreatheKey = "statusBreathe"
     private static let dotPulseKey = "statusPulse"
 
     private var status: PaneStatus?
@@ -547,7 +546,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     private func updateAmbientAnimations() {
         guard canAnimate else {
-            dotView.layer?.removeAnimation(forKey: Self.dotBreatheKey)
+            dotView.layer?.removeAnimation(forKey: StatusDotBreath.animationKey)
             attentionRing?.layer?.removeAnimation(forKey: Self.ringBreatheKey)
             return
         }
@@ -558,24 +557,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                 breathe(from: 0.3, to: 0.9, duration: 0.9), forKey: Self.ringBreatheKey)
         }
 
-        // hover 时圆点整个 isHidden，动画留着也没人看，白烧
-        let wantsBreath = !capsuleHovered
-            && (activity == .thinking || activity == .tool)
-        if wantsBreath {
-            // 已经在跑同一个态就别重加：重加会把呼吸相位掐回起点，
-            // 而 PostToolUse/PreToolUse 是成对高频来的，会变成一顿抽搐
-            if dotView.layer?.animation(forKey: Self.dotBreatheKey) == nil {
-                // 0.55 是刻意的下限：低到能看出"在动"，高到不至于像故障闪烁
-                dotView.layer?.add(
-                    breathe(
-                        from: 0.55, to: 1,
-                        duration: activity == .tool
-                            ? ShellStyle.statusToolBreathDuration
-                            : ShellStyle.statusBreathDuration),
-                    forKey: Self.dotBreatheKey)
-            }
-        } else {
-            dotView.layer?.removeAnimation(forKey: Self.dotBreatheKey)
+        // 与第二侧栏同一套呼吸（`StatusDotBreath`）：颜色往身后的表面上混，不动透明度或几何，
+        // 所有点共用一个时钟。这里身后是终端自己的背景色，不是侧栏底色。
+        // hover 时圆点整个 isHidden，动画留着也没人看，白烧。
+        if let layer = dotView.layer {
+            StatusDotBreath.apply(to: layer, color: effectiveDotColor, activity: activity,
+                                  appearance: effectiveAppearance, enabled: !capsuleHovered,
+                                  into: terminalBackground)
         }
 
         if pendingDonePulse && !capsuleHovered {
