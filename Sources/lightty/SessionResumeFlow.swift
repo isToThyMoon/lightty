@@ -9,7 +9,8 @@ enum SessionResumeFlow {
         open(TerminalLaunchRequest(.resume(session, source: source), destination: destination), in: controller)
     }
 
-    private static func open(_ request: TerminalLaunchRequest, in controller: TerminalWindowController) {
+    /// 已经组好的续接请求（启动浮层选了去处）。拒绝原因的呈现与上面一致。
+    static func open(_ request: TerminalLaunchRequest, in controller: TerminalWindowController) {
         AppState.shared.paneLauncher.launch(request, in: controller) { [weak controller] outcome in
             guard let controller, case .notLaunched(let refusal) = outcome else { return }
             switch refusal {

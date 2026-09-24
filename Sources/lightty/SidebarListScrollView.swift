@@ -35,6 +35,13 @@ class SidebarListScrollView: NSScrollView {
         if hoveredRow === row { changeHover(to: nil) }
     }
 
+    /// 行在指针下面挪动之后（列表重排）重新认一次悬停行：指针没动就没有进出事件。
+    func refreshPointerHover() {
+        guard !suppressesPointerFeedback else { return }
+        changeHover(to: nil)
+        restorePointerHover()
+    }
+
     private func changeHover(to row: NSView?) {
         guard hoveredRow !== row else { return }
         (hoveredRow as? SidebarHoverRow)?.setSidebarHovered(false)

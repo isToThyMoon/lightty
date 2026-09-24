@@ -175,6 +175,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         if !searchMode { searchRow.heightAnchor.constraint(equalToConstant: 0).isActive = true }
         moreHeight = more.heightAnchor.constraint(equalToConstant: 0)
         NotificationCenter.default.addObserver(self, selector: #selector(libraryDidChange(_:)), name: .lighttySessionLibraryDidChange, object: library)
+        if !searchMode {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowArrangementDidChange),
+                name: .lighttyWindowArrangementDidChange, object: nil)
+        }
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -259,6 +263,8 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     /// 新的目录显示项放进这个结构；选中和已打开状态由 `syncTerminalSelection()` 单独更新。
     struct SidebarState: Equatable {
         var rows: [Row]
+        /// 置顶的开着的会话及其顺序。会话开关、标签页重排不是目录变化，靠比它决定要不要重排。
+        var openOrder: [AgentSessionKey]
         /// 会话行显示的位置串要用项目名，而 `Row.session` 只带项目的 UUID。
         /// 放进状态里，改名就能被整体比较发现，不必再留一个额外的旗标。
         var projectNames: [UUID: String]
@@ -283,8 +289,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         renderedState = state
 
         if previous?.language != state.language {
-            let language = LanguagePreference.current()
-            relativeDateFormatter.locale = language == .system ? .current : Locale(identifier: language.rawValue)
+            relativeDateFormatter.locale = LanguagePreference.current().locale
             relativeDateFormatter.unitsStyle = .short
         }
         // 表格：行的增删由稳定标识差异驱动；项目名或语种变了要让已建单元格重排一遍，
@@ -372,8 +377,34 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     @objc private func libraryDidChange(_ notification: Notification) {
         guard let change = SessionChange.from(notification) else { return }
         refreshSessionPresence(change.sessions)
-        if change.catalog { libraryChanges.schedule() }
+        if change.catalog || openOrderChanged() { libraryChanges.schedule() }
         else { syncTerminalSelection() }
+    }
+
+    /// 标签页重排或关窗不经过会话库，置顶顺序要自己跟上。
+    @objc private func windowArrangementDidChange() {
+        if openOrderChanged() { libraryChanges.schedule() }
+    }
+
+    private func openOrderChanged() -> Bool {
+        guard !searchMode, !sortByTitle, let renderedState else { return false }
+        return renderedState.openOrder != openSessionOrder()
+    }
+
+    /// 在 lightty 里开着的会话，按标签页侧栏的顺序（窗口 → 标签页 → pane），
+    /// 两个侧栏上下对得上。
+    private func openSessionOrder() -> [AgentSessionKey] {
+        let opened = library.openedSessionKeys
+        guard !opened.isEmpty else { return [] }
+        var order: [AgentSessionKey] = []
+        var seen = Set<AgentSessionKey>()
+        for entry in AppState.shared?.runningPanes() ?? [] {
+            if let key = library.paneState(for: entry.pane.dragIdentifier)?.sessionKey,
+               opened.contains(key), seen.insert(key).inserted { order.append(key) }
+        }
+        // 不在任何窗口里的（测试里孤立的 pane）排在后面，顺序固定即可。
+        order += opened.subtracting(seen).sorted { $0.nativeID < $1.nativeID }
+        return order
     }
 
     @objc private func reload() {
@@ -392,6 +423,9 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         for assignment in organization.assignments where seenAssignments.insert(assignment.session).inserted {
             if let id = assignment.projectID, projectNames[id] != nil { assignedProjects[assignment.session] = id }
         }
+        // 按名称排时顺序本来就不会跳，严格按名称；搜索结果按相关的时间排。
+        let openOrder = searchMode || sortByTitle ? [] : openSessionOrder()
+        let openRank = Dictionary(uniqueKeysWithValues: openOrder.enumerated().map { ($1, $0) })
         let filtered = library.records.filter { record in
             let providerMatches = agentFilter == 0
                 || (agentFilter == 1 ? record.key.agent == .codex : record.key.agent == .claude)
@@ -403,6 +437,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 && (query.isEmpty || [record.title, record.workingDirectory ?? "", record.key.agent.sourceName, projectName]
                     .contains { $0.localizedCaseInsensitiveContains(query) })
         }.sorted {
+            // 开着的会话排在各自分区最前，彼此按标签页顺序：Agent 跑动会刷新更新时间，
+            // 按时间排它们就会一直往上跳。
+            let lhs = openRank[$0.key], rhs = openRank[$1.key]
+            if lhs != nil || rhs != nil { return (lhs ?? .max) < (rhs ?? .max) }
             if sortByTitle, $0.title != $1.title { return $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             if $0.updatedAt != $1.updatedAt { return ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
             return $0.key.nativeID < $1.key.nativeID
@@ -443,6 +481,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         if let error = library.storageError { messages.append(error) }
         return SidebarState(
             rows: rows,
+            openOrder: openOrder,
             projectNames: projectNames,
             language: LanguagePreference.current().rawValue,
             showsIntroduction: showsIntroduction,
@@ -464,25 +503,34 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                   case .project(let old)? = oldByID[row.id] else { return false }
             return old.collapsed != project.collapsed
         }
-        let difference = rows.map(\.id).difference(from: previous.map(\.id))
-        var removed = IndexSet(), inserted = IndexSet()
+        let oldIDs = previous.map(\.id), newIDs = rows.map(\.id)
+        let motion = window != nil && !previous.isEmpty && !searchMode
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // 换了位置的行（会话开关后进出置顶、目录刷新改了时间）滑过去，而不是在旧处消失、
+        // 新处冒出。不能动画时仍按删 + 插处理，结果一样，只是没有过程。
+        let difference = motion ? newIDs.difference(from: oldIDs).inferringMoves()
+                                : newIDs.difference(from: oldIDs)
+        var removed = IndexSet(), inserted = IndexSet(), moves = false
         for change in difference {
             switch change {
-            case .remove(let index, _, _): removed.insert(index)
-            case .insert(let index, _, _): inserted.insert(index)
+            case .remove(let index, _, let move): if move == nil { removed.insert(index) } else { moves = true }
+            case .insert(let index, _, let move): if move == nil { inserted.insert(index) }
             }
         }
         if !difference.isEmpty {
-            let animate = (sectionDisclosureRequested || projectDisclosure)
-                && window != nil && !previous.isEmpty && !searchMode
-                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            let animate = (sectionDisclosureRequested || projectDisclosure) && motion
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = animate ? ShellStyle.animationDuration : 0
+                context.duration = animate || moves ? ShellStyle.animationDuration : 0
                 context.timingFunction = ShellStyle.easeInOutCubic
                 table.beginUpdates()
                 table.removeRows(at: removed, withAnimation: animate ? [.effectFade, .slideUp] : [])
+                if moves { moveRows(from: oldIDs.enumerated().filter { !removed.contains($0.offset) }.map(\.element),
+                                    to: newIDs.enumerated().filter { !inserted.contains($0.offset) }.map(\.element)) }
                 table.insertRows(at: inserted, withAnimation: animate ? [.effectFade, .slideDown] : [])
                 table.endUpdates()
+            } completionHandler: { [weak self] in
+                // 行滑走了，指针下面已是另一行；悬停不会自己跟上（指针没动就没有进出事件）。
+                if moves { self?.scroll.refreshPointerHover() }
             }
         }
         for (index, row) in rows.enumerated() where !inserted.contains(index) && (oldByID[row.id] != row || contentInvalidated) {
@@ -495,6 +543,18 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             }
             // Moving a session into/out of a project changes its indentation and height.
             if case .session = row, oldByID[row.id] != row { table.noteHeightOfRows(withIndexesChanged: [index]) }
+        }
+    }
+
+    /// 表格的挪行按调用顺序逐个生效，所以边挪边维护一份当前顺序：两边是同一组行，
+    /// 从头对齐到目标顺序即可。
+    private func moveRows(from current: [Row.ID], to target: [Row.ID]) {
+        var working = current
+        for (index, id) in target.enumerated() where working[index] != id {
+            guard let from = working[index...].firstIndex(of: id) else { continue }
+            working.remove(at: from)
+            working.insert(id, at: index)
+            table.moveRow(at: from, to: index)
         }
     }
 
@@ -646,14 +706,24 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         record.updatedAt.map { relativeDateFormatter.localizedString(for: $0, relativeTo: now()) } ?? ""
     }
 
+    /// 第二行。开着的会话在变，时间没有意义：Agent 活动时由状态词顶替（见 `SessionListCell`），
+    /// 空闲时就写「已打开」。
     private func sessionDetail(_ record: AgentSession) -> String {
-        let openness: String
         switch library.presence(for: record.key) {
-        case .inLightty: openness = L("Open in lightty")
-        case .elsewhere: openness = L("Open in another terminal")
-        case .unknown: openness = ""
+        case .inLightty: return L("Open in lightty")
+        case .elsewhere: return [relativeDate(record), L("Open in another terminal")].filter { !$0.isEmpty }.joined(separator: " · ")
+        case .unknown: return relativeDate(record)
         }
-        return [relativeDate(record), openness].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func cellPresence(_ record: AgentSession) -> SessionListCell.Presence {
+        switch library.presence(for: record.key) {
+        case .inLightty:
+            let state = library.openPaneIDs(for: record.key).lazy.compactMap { self.library.paneState(for: $0) }.first
+            return .open(state?.status, isUnread: state?.isUnread ?? false)
+        case .elsewhere: return .elsewhere
+        case .unknown: return .closed
+        }
     }
 
     private func searchSnippet(_ record: AgentSession) -> NSAttributedString {
@@ -692,6 +762,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                 ?? record.workingDirectory ?? ""
             cell.setAgent(record.key.agent)
             cell.detail.stringValue = sessionDetail(record)
+            cell.setPresence(cellPresence(record))
             cell.location.stringValue = location.hasPrefix("/") ? URL(fileURLWithPath: location).lastPathComponent : location
             if projectID != nil && !searchMode {
                 cell.location.stringValue = ""
@@ -709,15 +780,31 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             library.updateOrganization { state in
                 if let index = state.projects.firstIndex(where: { $0.id == project.id }) { state.projects[index].collapsed.toggle() }
             }
-        case .session(let record, _): open(record)
+        case .session(let record, _): activate(record, at: row)
         case .projectsHeading, .heading, .emptyProjects: break
         }
     }
-    private func open(_ record: AgentSession, destination: TerminalLaunchDestination = .tab) {
+    /// 单击会话：已在 lightty 里开着就直接前往；没开就弹启动浮层选去处（默认新标签页），
+    /// 与 Handoff 单击任务一致——点一下就起一个终端，用户未必意识到发生了什么。
+    /// 搜索面板是键盘流程，回车即续接，不经过这里。
+    private func activate(_ record: AgentSession, at row: Int) {
+        guard !searchMode, openPane(for: record) == nil,
+              let controller = window?.windowController as? TerminalWindowController,
+              let source = library.source(for: record.key.agent)
+        else { return open(record) }
+        let anchor = table.rowView(atRow: row, makeIfNecessary: false) ?? self
+        LaunchComposer.begin(.resume(record, source: source), from: anchor, in: controller)
+    }
+    private func openPane(for record: AgentSession) -> PaneView? {
+        let paneIDs = library.openPaneIDs(for: record.key)
+        return AppState.shared?.runningPanes()
+            .first { paneIDs.contains($0.pane.dragIdentifier) }?.pane
+    }
+    private func open(_ record: AgentSession) {
         guard let controller = window?.windowController as? TerminalWindowController,
               let source = library.source(for: record.key.agent) else { return }
         onRequestDismiss?()
-        SessionResumeFlow.open(record, source: source, in: controller, destination: destination)
+        SessionResumeFlow.open(record, source: source, in: controller)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -745,14 +832,9 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         // 那样它终端里显示的标题也跟着变；会话没开就走官方接口。唯一给不了的情况是
         // 「开着但 agent 正在跑」——这时 PTY 前台是它的输出流，塞不进命令，而从外面
         // 改又会和它自己屏幕上显示的标题不一致。
-        let paneIDs = library.openPaneIDs(for: record.key)
-        let openPane = AppState.shared?.runningPanes()
-            .first { paneIDs.contains($0.pane.dragIdentifier) }?.pane
-        var items: [ShellMenuPopover.Item] = openPane == nil ? [
-            .action(L("Continue in new tab"), symbol: ShellSymbol.newTab) { [weak self] in self?.open(record) },
-            .action(L("Split in current tab"), symbol: ShellSymbol.splitRight) { [weak self] in self?.open(record, destination: .split) },
-            .action(L("New window"), symbol: ShellSymbol.newWindow) { [weak self] in self?.open(record, destination: .window) },
-        ] : [
+        // 打开方式不在菜单里：单击会话弹的启动浮层已经给了三个去处。
+        let openPane = openPane(for: record)
+        var items: [ShellMenuPopover.Item] = openPane == nil ? [] : [
             .action(L("Show terminal"), symbol: ShellSymbol.terminal) { [weak self] in self?.open(record) },
         ]
         if openPane == nil || openPane?.acceptsInjectedCommand == true {
@@ -863,8 +945,9 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
     }
 
     let projectIcon = NSImageView()
+    private var markerLeading: NSLayoutConstraint!
     private var titleLeading: NSLayoutConstraint!
-    var indent: CGFloat = 10 { didSet { titleLeading.constant = indent } }
+    var indent: CGFloat = 10 { didSet { applyLeading() } }
     let title = SessionTruncatingLabel(labelWithString: "")
     let detail = NSTextField(labelWithString: "")
     let agentIcon = NSImageView()
@@ -873,7 +956,67 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
         agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
         agentIcon.isHidden = agent == nil
         agentIcon.toolTip = agent?.iconToolTip
-        detailLeading.constant = agent == nil ? 0 : 16
+        detailLeading.constant = agent == nil ? 0 : Self.markerColumn
+    }
+
+    /// 这段会话此刻在哪儿开着。只有开着的行才有行首状态点，其余行不为它留位——
+    /// 「有没有点」本身就是区分。
+    enum Presence: Equatable {
+        case closed
+        /// 在 lightty 里：点与状态词跟标签页侧栏同一套（颜色、呼吸、已读）。
+        case open(PaneStatus?, isUnread: Bool)
+        /// 在别的终端里：空心点，lightty 看不到也管不了它的状态。
+        case elsewhere
+    }
+    private(set) var presence = Presence.closed
+    private let dot = NSView()
+    /// 开着且 Agent 在活动时顶替第二行的时间；空闲时隐藏，第二行显示「已打开」。
+    let statusLabel = PaneStatusLabel()
+    /// 标记列：第一行的状态点与第二行的 Agent 图标上下同列，文字统一从列右侧起，
+    /// 与标签页侧栏的 pane 行同一个形状。
+    private static let markerColumn: CGFloat = 16
+
+    func setPresence(_ presence: Presence) {
+        guard self.presence != presence else { return }
+        self.presence = presence
+        applyLeading()
+        applyPresence()
+    }
+
+    private func applyLeading() {
+        markerLeading.constant = indent
+        titleLeading.constant = indent + (presence == .closed ? 0 : Self.markerColumn)
+    }
+
+    private func applyPresence() {
+        switch presence {
+        case .open(let status, let isUnread): statusLabel.apply(status, isUnread: isUnread)
+        case .closed, .elsewhere: statusLabel.apply(nil, isUnread: false)
+        }
+        detail.isHidden = !statusLabel.isHidden
+        applyDot()
+    }
+
+    private func applyDot() {
+        guard let layer = dot.layer else { return }
+        dot.isHidden = presence == .closed
+        switch presence {
+        case .closed:
+            layer.removeAnimation(forKey: StatusDotBreath.animationKey)
+        case .elsewhere:
+            layer.removeAnimation(forKey: StatusDotBreath.animationKey)
+            layer.backgroundColor = NSColor.clear.cgColor
+            layer.borderWidth = 1.2
+            layer.borderColor = ShellStyle.tertiaryText.shellResolvedCGColor(for: effectiveAppearance)
+        case .open(let status, _):
+            let color = ShellStyle.dotColor(bound: false, activity: status?.state)
+            layer.borderWidth = 0
+            layer.backgroundColor = color.shellResolvedCGColor(for: effectiveAppearance)
+            let visible = !isHiddenOrHasHiddenAncestor && window?.occlusionState.contains(.visible) == true
+            StatusDotBreath.apply(to: layer, color: color, activity: status?.state,
+                                  appearance: effectiveAppearance,
+                                  enabled: visible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        }
     }
     let location = SessionTruncatingLabel(labelWithString: "")
     let menuButton = ShellIconButton(symbol: ShellSymbol.more, accessibilityLabel: L("Session actions"), target: nil, action: nil)
@@ -891,6 +1034,7 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
         projectIcon.isHidden = true
         projectIcon.image = nil
         menuButton.isHidden = false
+        setPresence(.closed)
         indent = 10
     }
     override init(frame: NSRect) {
@@ -910,15 +1054,33 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
         menuButton.isBordered = false; menuButton.target = self; menuButton.action = #selector(openMenu)
         menuButton.onRevealChange = { [weak self] _ in self?.needsLayout = true }
         // RowActionFade 的遮罩挂在各文字视图自己的 layer 上
-        for view in [title, detail, location] { view.wantsLayer = true }
+        for view in [title, detail, location, statusLabel] as [NSView] { view.wantsLayer = true }
         menuButton.setAccessibilityLabel(L("Session actions"))
         agentIcon.isHidden = true
         agentIcon.contentTintColor = ShellStyle.secondaryText
-        for view in [title, detail, location, menuButton, projectIcon, agentIcon] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
-        titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sidebarHorizontalInset)
-        detailLeading = detail.leadingAnchor.constraint(equalTo: title.leadingAnchor)
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = ShellStyle.statusDotSize / 2
+        dot.isHidden = true
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.textColor = ShellStyle.secondaryText
+        for view in [title, detail, location, menuButton, projectIcon, agentIcon, dot, statusLabel] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        markerLeading = agentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        detailLeading = detail.leadingAnchor.constraint(equalTo: agentIcon.leadingAnchor)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(ambientConditionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(ambientConditionsChanged),
+            name: NSWindow.didChangeOcclusionStateNotification, object: nil)
         NSLayoutConstraint.activate([
             titleLeading,
+            markerLeading,
+            dot.centerXAnchor.constraint(equalTo: agentIcon.centerXAnchor),
+            dot.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
+            dot.heightAnchor.constraint(equalToConstant: ShellStyle.statusDotSize),
+            statusLabel.leadingAnchor.constraint(equalTo: detail.leadingAnchor),
+            statusLabel.firstBaselineAnchor.constraint(equalTo: detail.firstBaselineAnchor),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: title.trailingAnchor),
             projectIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShellStyle.sidebarHorizontalInset),
             projectIcon.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             projectIcon.widthAnchor.constraint(equalToConstant: 18),
@@ -928,7 +1090,6 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
             // ⋯ 显示时浮在文字上，由 RowActionFade 渐隐。
             title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellStyle.sidebarHorizontalInset),
             detailLeading,
-            agentIcon.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             agentIcon.centerYAnchor.constraint(equalTo: detail.centerYAnchor),
             agentIcon.widthAnchor.constraint(equalToConstant: 11),
             agentIcon.heightAnchor.constraint(equalToConstant: 11),
@@ -945,13 +1106,27 @@ private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
     }
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError() }
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+    }
     override func rightMouseDown(with event: NSEvent) { onMenu?() }
     @objc private func openMenu() { onMenu?() }
+
+    /// 窗口被挡住、或用户改了「减弱动态效果」时重新判断要不要呼吸。
+    @objc private func ambientConditionsChanged() { applyDot() }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); applyDot() }
+    override func viewDidHide() { super.viewDidHide(); applyDot() }
+    override func viewDidUnhide() { super.viewDidUnhide(); applyDot() }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyDot()
+    }
 
     override func layout() {
         super.layout()
         let shown = !menuButton.isHidden && menuButton.isRevealed
-        RowActionFade.apply(to: [title, detail, location], in: self,
+        RowActionFade.apply(to: [title, detail, location, statusLabel], in: self,
                             clearFrom: shown ? menuButton.frame.minX : nil)
     }
 }

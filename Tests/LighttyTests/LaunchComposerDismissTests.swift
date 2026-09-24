@@ -65,6 +65,25 @@ final class LaunchComposerDismissTests: XCTestCase {
         XCTAssertTrue(LaunchComposer.isPresented, "a click inside the composer is not a dismissal")
     }
 
+    /// 锚在列表行上的浮层，列表一滚就收：行视图滚出去会被表格复用给别的行，
+    /// 箭头就指错了条目。
+    func testScrollingTheAnchorsListClosesComposer() throws {
+        LaunchComposer.dismiss()
+        let controller = try XCTUnwrap(window.windowController as? TerminalWindowController)
+        let scroll = NSScrollView(frame: NSRect(x: 20, y: 100, width: 200, height: 300))
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 1200))
+        scroll.documentView = document
+        window.contentView?.addSubview(scroll)
+        let row = NSView(frame: NSRect(x: 0, y: 1000, width: 200, height: 40))
+        document.addSubview(row)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 900))
+        LaunchComposer.begin(.session, from: row, in: controller)
+        try waitUntil("composer shown") { LaunchComposer.isPresented }
+
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 700))
+        try waitUntil("composer closed") { !LaunchComposer.isPresented }
+    }
+
     /// 按下走 `NSApp.sendEvent`，让本地事件监视器看到它；抬起先排进队列，
     /// 供按钮的跟踪循环取走。
     private func click(at point: NSPoint, in window: NSWindow) throws {

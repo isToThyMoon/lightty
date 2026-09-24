@@ -95,6 +95,49 @@ extension SessionAssociationTests {
     }
 }
 
+/// 表格里真正排出来的会话标题顺序（只认 `titles` 里的，标题行等略过）。
+@MainActor
+private func renderedOrder(in view: NSView, of titles: Set<String>) -> [String] {
+    func table(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        return view.subviews.lazy.compactMap { table(in: $0) }.first
+    }
+    guard let table = table(in: view) else { return [] }
+    return (0..<table.numberOfRows).compactMap { row in
+        table.view(atColumn: 0, row: row, makeIfNecessary: true)
+            .flatMap { presenceLabels(in: $0).first(where: titles.contains) }
+    }
+}
+
+extension SessionAssociationTests {
+    /// 开着的会话排在分区最前，不随更新时间跳；关掉后回到按时间的位置。
+    /// 开关不是目录变化，列表得自己跟上重排。
+    @Test func openSessionsStayOnTopAndFallBackWhenClosed() async throws {
+        _ = NSApplication.shared
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let key = { (id: String) in AgentSessionKey(agent: f.catalog.source.agent, sourceRoot: f.root.path, nativeID: id) }
+        let newer = AgentSession(key: key("newer"), title: "Newer", workingDirectory: f.root.path, updatedAt: Date())
+        let older = AgentSession(key: key("older"), title: "Older", workingDirectory: f.root.path,
+                                 updatedAt: Date(timeIntervalSinceNow: -3600))
+        try await f.load([newer, older])
+        let list = SessionsSidebarContent(library: f.library)
+        list.frame = NSRect(x: 0, y: 0, width: 280, height: 600)
+        let titles: Set = ["Newer", "Older"]
+        try await f.wait { renderedOrder(in: list, of: titles) == ["Newer", "Older"] }
+
+        let pane = f.pane(), window = UUID()
+        f.library.associate(.attached(f.association(older)), with: pane)
+        f.library.updateWindow(window, panes: [pane], selected: pane)
+        try await f.wait { renderedOrder(in: list, of: titles) == ["Older", "Newer"] }
+        #expect(list.detailTextForTesting(older) == L("Open in lightty"))
+
+        f.library.updateWindow(window, panes: [], selected: nil)
+        try await f.wait { renderedOrder(in: list, of: titles) == ["Newer", "Older"] }
+        #expect(list.detailTextForTesting(older) != L("Open in lightty"))
+    }
+}
+
 @MainActor
 struct SessionPresenceModelTests {
     private func sleepingProcess() throws -> Process {

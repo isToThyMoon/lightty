@@ -280,7 +280,8 @@
 "No matching sessions." = "没有匹配的会话。";
 "Recent sessions" = "最近会话";
 "Untitled session" = "未命名会话";
-"Continue in new tab" = "在新标签页继续";
+"Continue session" = "继续会话";
+"Continue in %@" = "在 %@ 中继续";
 "Move to project" = "移到项目";
 "Rename project" = "重命名项目";
 "Add project folder…" = "添加项目目录…";

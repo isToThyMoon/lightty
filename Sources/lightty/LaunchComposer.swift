@@ -13,6 +13,8 @@ enum LaunchSubject {
     case task(fileURL: URL, task: TaskFile)
     /// 新建任务：名字与初始正文在浮层里填，可以建完就启动，也可以只建不启动。
     case newTask
+    /// 续接一段已有会话：Agent 与目录是会话自带的，这里只选开到哪里。
+    case resume(AgentSession, source: SessionCatalogSource)
 }
 
 /// 启动浮层：把上面四件事摆在一屏里，点启动才创建终端。
@@ -35,7 +37,7 @@ enum LaunchComposer {
         dismiss()
         let content = LaunchComposerController(subject: resolved(subject), controller: controller)
         content.onDone = { dismiss() }
-        current = Presentation(content: content)
+        current = Presentation(content: content, anchor: anchor)
         current?.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: preferredEdge)
     }
 
@@ -44,14 +46,18 @@ enum LaunchComposer {
     /// 不用 `.transient`：那一档由 AppKit 关，关掉浮层的那一下点击不会再送给底下
     /// 的控件——浮层开着时点任务行的「⋯」，第一下只关浮层，第二下才出菜单。
     /// 这里自己关，再把事件原样放行，一下就到。
+    ///
+    /// 锚点所在的列表一滚动也收起：锚点是行视图，滚出视窗后表格会把它复用给别的行，
+    /// 浮层的箭头就指到了另一条会话 / 任务上。与系统菜单一致，滚动即收。
     private final class Presentation {
         let popover = NSPopover()
         private var outsideClick: Any?
         private var deactivation: NSObjectProtocol?
+        private var anchorScroll: NSObjectProtocol?
         /// 目录选择面板开着时，落在它上面的点击不算「点在浮层外面」。
         private var choosingDirectory = false
 
-        init(content: LaunchComposerController) {
+        init(content: LaunchComposerController, anchor: NSView) {
             popover.contentViewController = content
             popover.delegate = content
             popover.behavior = .applicationDefined
@@ -67,6 +73,12 @@ enum LaunchComposer {
             deactivation = NotificationCenter.default.addObserver(
                 forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
             ) { _ in LaunchComposer.dismiss() }
+            if let clip = anchor.enclosingScrollView?.contentView {
+                clip.postsBoundsChangedNotifications = true
+                anchorScroll = NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+                ) { _ in LaunchComposer.dismiss() }
+            }
         }
 
         func close() {
@@ -74,6 +86,8 @@ enum LaunchComposer {
             outsideClick = nil
             if let deactivation { NotificationCenter.default.removeObserver(deactivation) }
             deactivation = nil
+            if let anchorScroll { NotificationCenter.default.removeObserver(anchorScroll) }
+            anchorScroll = nil
             popover.close()
         }
 
@@ -193,8 +207,10 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     }
     /// 启动之后终端会挂一个任务吗？已有任务和新建任务都算，纯会话不算。
     private var carriesTask: Bool {
-        if case .session = subject { return false }
-        return true
+        switch subject {
+        case .session, .resume: return false
+        case .task, .newTask: return true
+        }
     }
 
     init(subject: LaunchSubject, controller: TerminalWindowController?, embedded: Bool = false) {
@@ -203,6 +219,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         switch subject {
         case .task(_, let task): defaultDirectory = task.workdir
         case .session, .newTask: defaultDirectory = LaunchComposer.defaultDirectory(in: controller)
+        case .resume(let session, _): defaultDirectory = session.workingDirectory ?? ""
         }
         directory = WorkingDirectoryEditor(path: defaultDirectory)
         agentPicker = ShellDropdown(
@@ -227,6 +244,7 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         case .session: return L("New session")
         case .task: return L("Start working")
         case .newTask: return L("New task")
+        case .resume: return L("Continue session")
         }
     }
 
@@ -269,26 +287,37 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         case .newTask:
             rows.append(newTaskFields())
             fullWidth.append(rows[rows.count - 1])
+        case .resume(let session, _):
+            let identity = Self.sessionIdentity(session)
+            rows.append(identity)
+            fullWidth.append(identity)
         }
 
-        let agentRow = NSStackView(views: [Self.sectionLabel("Agent"), agentPicker])
-        agentRow.spacing = 12
-        rows.append(agentRow)
-        sectionLabels.append(agentRow)
+        // 续接的 Agent 与目录由会话决定，换了就接不上原来的会话，所以不给选。
+        var agentRow: NSView?
+        var directoryGroup: NSView?
+        if case .resume = subject {} else {
+            let row = NSStackView(views: [Self.sectionLabel("Agent"), agentPicker])
+            row.spacing = 12
+            rows.append(row)
+            sectionLabels.append(row)
+            agentRow = row
 
-        saveDirectory.font = .systemFont(ofSize: 11)
-        saveDirectory.controlSize = .small
-        saveDirectory.isHidden = taskFileURL == nil
-        directoryError.font = .systemFont(ofSize: 10.5)
-        directoryError.textColor = .systemRed
-        let directoryGroup = NSStackView(views: [
-            Self.sectionLabel(L("Working directory")), directory, saveDirectory, directoryError,
-        ])
-        directoryGroup.orientation = .vertical
-        directoryGroup.alignment = .leading
-        directoryGroup.spacing = 6
-        rows.append(directoryGroup)
-        fullWidth += [directoryGroup, directory, directoryError]
+            saveDirectory.font = .systemFont(ofSize: 11)
+            saveDirectory.controlSize = .small
+            saveDirectory.isHidden = taskFileURL == nil
+            directoryError.font = .systemFont(ofSize: 10.5)
+            directoryError.textColor = .systemRed
+            let group = NSStackView(views: [
+                Self.sectionLabel(L("Working directory")), directory, saveDirectory, directoryError,
+            ])
+            group.orientation = .vertical
+            group.alignment = .leading
+            group.spacing = 6
+            rows.append(group)
+            fullWidth += [group, directory, directoryError]
+            directoryGroup = group
+        }
 
         let destinations = NSStackView()
         destinations.orientation = .vertical
@@ -328,13 +357,16 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        stack.setCustomSpacing(12, after: agentRow)
-        stack.setCustomSpacing(14, after: directoryGroup)
+        if let agentRow { stack.setCustomSpacing(12, after: agentRow) }
+        if let directoryGroup { stack.setCustomSpacing(14, after: directoryGroup) }
         stack.setCustomSpacing(12, after: destinations)
         stack.setCustomSpacing(8, after: contextHint)
         if !embedded { stack.setCustomSpacing(10, after: heading) }
         if case .task = subject, !embedded, rows.count > 2 {
             stack.setCustomSpacing(10, after: rows[1])
+        }
+        if case .resume = subject, !embedded, rows.count > 2 {
+            stack.setCustomSpacing(14, after: rows[1])
         }
         for label in sectionLabels {
             if let index = rows.firstIndex(where: { $0 === label }), index > 0 {
@@ -401,6 +433,47 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         rows.append(newTerminal)
         sectionLabels.append(newTerminal)
         return rows
+    }
+
+    /// 续接的是哪段会话：标题，下面一行「Agent · 更新时间」，再一行目录。
+    /// 目录只显示末几级、完整路径放 tooltip；没读出目录就不显示，续接时再让用户挑。
+    private static func sessionIdentity(_ session: AgentSession) -> NSView {
+        let title = NSTextField(wrappingLabelWithString: session.title.isEmpty ? L("Untitled session") : session.title)
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = ShellStyle.primaryText
+        title.isSelectable = false
+        title.maximumNumberOfLines = 3
+
+        // 与会话行同一种写法（语种、短格式），浮层里的时间和点的那一行对得上。
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = LanguagePreference.current().locale
+        formatter.unitsStyle = .short
+        let updated = session.updatedAt.map { formatter.localizedString(for: $0, relativeTo: Date()) }
+        let meta = NSTextField(labelWithString: [session.key.agent.sourceName, updated]
+            .compactMap { $0 }.joined(separator: " · "))
+        meta.font = .systemFont(ofSize: 11)
+        meta.textColor = ShellStyle.secondaryText
+
+        var views: [NSView] = [title, meta]
+        if let path = session.workingDirectory {
+            let location = NSTextField(labelWithString: (path as NSString).abbreviatingWithTildeInPath)
+            location.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+            location.textColor = ShellStyle.secondaryText
+            location.lineBreakMode = .byTruncatingHead
+            location.toolTip = path
+            location.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            views.append(location)
+        }
+        let group = NSStackView(views: views)
+        group.orientation = .vertical
+        group.alignment = .leading
+        group.spacing = 3
+        group.setCustomSpacing(4, after: title)
+        for view in views {
+            view.widthAnchor.constraint(lessThanOrEqualTo: group.widthAnchor).isActive = true
+        }
+        title.widthAnchor.constraint(equalTo: group.widthAnchor).isActive = true
+        return group
     }
 
     /// 新建任务的名字与初始正文。正文可留空——它只是 Agent 启动时读到的第一段交接内容。
@@ -509,6 +582,10 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     /// 已有任务重读后按选中的目录启动，新建任务先落盘再按同一条路启动。
     /// 怎么造终端、放到哪里归 `PaneLauncher`。
     func makeRequest() -> TerminalLaunchRequest? {
+        if case .resume(let session, let source) = subject {
+            // 目录归会话，不在这里校验：缺了由续接流程让用户挑。
+            return TerminalLaunchRequest(.resume(session, source: source), destination: selectedDestination)
+        }
         guard let path = WorkingDirectory.validated(directory.path) else {
             show(directoryError, L("Choose an existing folder."))
             return nil
@@ -519,6 +596,8 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         case .session:
             return TerminalLaunchRequest(.agent(selectedAgent), workingDirectory: path,
                                          destination: selectedDestination)
+        case .resume:
+            return nil // 已在开头返回
         case .task(let fileURL, _):
             do {
                 // Reload before editing so a fresh Agent handoff is not replaced by the preview snapshot.
@@ -586,6 +665,11 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
     }
 
     private func updateAgentPresentation() {
+        if case .resume(let session, _) = subject {
+            launchButton.title = L("Continue in %@", session.key.agent.sourceName)
+            contextHint.isHidden = true
+            return
+        }
         if case .newTask = subject {
             launchButton.title = selectedAgent == .terminal
                 ? L("Create and open terminal")
@@ -633,6 +717,12 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         // 顺序反过来会留下一个「文件建好了、终端没开」的半截结果。
         guard selectedDestination == .window || controller != nil else { return }
         guard let request = makeRequest() else { return }
+        if case .resume = subject, let controller {
+            // 续接可能接着弹目录面板或占用提示，先收起浮层，别让它挡在前面。
+            onDone?()
+            SessionResumeFlow.open(request, in: controller)
+            return
+        }
         AppState.shared.paneLauncher.launch(request, in: controller) { [weak self] outcome in
             guard let self else { return }
             switch outcome {

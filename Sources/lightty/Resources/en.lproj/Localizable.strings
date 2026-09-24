@@ -276,7 +276,8 @@
 "No matching sessions." = "No matching sessions.";
 "Recent sessions" = "Recent sessions";
 "Untitled session" = "Untitled session";
-"Continue in new tab" = "Continue in new tab";
+"Continue session" = "Continue session";
+"Continue in %@" = "Continue in %@";
 "Move to project" = "Move to project";
 "Rename project" = "Rename project";
 "Add project folder…" = "Add project folder…";

@@ -115,9 +115,10 @@ final class PrimarySidebarTests: XCTestCase {
                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
         let items = content.sessionMenuItems(record, anchor: NSView())
         XCTAssertTrue(items.contains { $0.title == L("Rename session…") })
-        // 没打开的会话给的是三个打开方式，不是「显示终端」。
-        XCTAssertTrue(items.contains { $0.title == L("Continue in new tab") })
-        XCTAssertFalse(items.contains { $0.title == L("Show terminal") })
+        // 没打开的会话，打开方式归单击弹的启动浮层，菜单里不再重复，也没有「显示终端」。
+        for title in [L("Split in current tab"), L("New tab"), L("New window"), L("Show terminal")] {
+            XCTAssertFalse(items.contains { $0.title == title }, title)
+        }
     }
 
     /// 按住一行时 AppKit 会把它报成「深色重点底」，行里的模板图标和 SF Symbol 随之

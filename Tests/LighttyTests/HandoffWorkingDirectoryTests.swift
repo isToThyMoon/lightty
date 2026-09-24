@@ -261,6 +261,33 @@ extension SessionAssociationTests {
         #expect(window.tabCount == 1)
     }
 
+    /// 续接会话：Agent 与目录归会话，浮层只给三个去处，默认新标签页；
+    /// 选了哪个去处，续接请求就带哪个。
+    @MainActor @Test func resumeComposerOffersOnlyDestinations() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = SessionCatalogSource(agent: .claude, root: root, executable: "/bin/false",
+                                          configuration: .custom(root.path))
+        let session = AgentSession(key: .init(agent: .claude, sourceRoot: root.path, nativeID: "fixture"),
+                                   title: "Fixture", workingDirectory: root.path, updatedAt: nil)
+        let controller = LaunchComposerController(subject: .resume(session, source: source), controller: nil)
+        let views = descendants(controller.view)
+        #expect(!views.contains { $0 is ShellDropdown })
+        #expect(!views.contains { $0 === controller.directory })
+        let radios = views.compactMap { $0 as? RestoreSelectionButton }.filter { !$0.isHidden }
+        #expect(radios.map(\.title) == [L("Split in current tab"), L("New tab"), L("New window")])
+        #expect(radios.first { $0.title == L("New tab") }?.state == .on)
+        let launch = try #require(views.compactMap { $0 as? ShellAccentButton }.first)
+        #expect(launch.title == L("Continue in %@", SessionAgent.claude.sourceName))
+
+        let tab = try #require(controller.makeRequest())
+        guard case .resume(let resumed, _) = tab.subject else { Issue.record("不是续接请求"); return }
+        #expect(resumed.key == session.key)
+        #expect(tab.destination == .tab)
+        radios[0].performClick(nil)
+        #expect(controller.makeRequest()?.destination == .split)
+    }
+
     /// 搜索面板预览：任务已在多个终端打开时，操作区比预览高，应在自己的滚动区里滚，
     /// 各行保持原高；以前贴合约束和标签抗压缩打平，「已打开」「工作目录」被挤成一团。
     @MainActor @Test func searchPreviewScrollsTallActionsInsteadOfSquashingThem() throws {
