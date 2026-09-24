@@ -261,6 +261,50 @@ extension SessionAssociationTests {
         #expect(window.tabCount == 1)
     }
 
+    /// 搜索面板预览：任务已在多个终端打开时，操作区比预览高，应在自己的滚动区里滚，
+    /// 各行保持原高；以前贴合约束和标签抗压缩打平，「已打开」「工作目录」被挤成一团。
+    @MainActor @Test func searchPreviewScrollsTallActionsInsteadOfSquashingThem() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let previous = AppState.shared
+        AppState.shared = AppState(taskDirectory: root.appendingPathComponent("tasks"), sweepStalePanes: false)
+        defer { AppState.shared = previous ?? AppState.shared; try? FileManager.default.removeItem(at: root) }
+        ensureTerminalRuntime()
+
+        let created = try AppState.shared.taskBindings.store.create(
+            name: "Opened fixture", workdir: root.path, body: String(repeating: "正文\n", count: 40))
+        let window = TerminalWindowController()
+        defer { window.window?.close() }
+        AppState.shared.windowControllers.append(window)
+        for _ in 0..<4 { window.addTab(initialPane: PaneView()) }
+        for pane in window.panes() { pane.bind(to: created.fileURL, name: created.task.name) }
+        #expect(AppState.shared.boundPanes(of: created.fileURL).count == 5)
+
+        let palette = SearchPaletteView(controller: window)
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 560),
+                            styleMask: [.borderless], backing: .buffered, defer: false)
+        host.contentView = palette
+        palette.frame = NSRect(x: 0, y: 0, width: 1100, height: 560)
+        palette.layoutSubtreeIfNeeded()
+
+        let views = descendants(palette)
+        let opened = try #require(views.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == L("Already open") })
+        let composerStack = try #require(opened.superview as? NSStackView)
+        let actionsScroll = try #require(views.compactMap { $0 as? NSScrollView }
+            .first { composerStack.isDescendant(of: $0.documentView ?? NSView()) })
+        // 内容比可见区高：可滚，而非被压。
+        #expect(composerStack.frame.height > actionsScroll.contentView.bounds.height + 1)
+        for row in composerStack.arrangedSubviews where !row.isHidden {
+            #expect(row.frame.height >= row.fittingSize.height - 0.5, "\(type(of: row)) 被压扁了")
+        }
+        let rows = composerStack.arrangedSubviews.filter { !$0.isHidden }.map(\.frame)
+        for (upper, lower) in zip(rows, rows.dropFirst()) {
+            #expect(!upper.intersects(lower), "相邻行重叠")
+        }
+    }
+
     /// 会话模式的新建：能选目录（这正是它以前缺的），而且不写任何任务文件。
     @MainActor @Test func newSessionUsesTheChosenDirectoryAndWritesNoTask() throws {
         _ = NSApplication.shared

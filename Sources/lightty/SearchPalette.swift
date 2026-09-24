@@ -92,15 +92,21 @@ final class SearchPaletteView: NSView, NSTextFieldDelegate {
         previewActions.translatesAutoresizingMaskIntoConstraints = false
         actionsDocument.addSubview(previewActions)
         NSLayoutConstraint.activate([
+            actionsDocument.topAnchor.constraint(equalTo: actionsScroll.contentView.topAnchor),
+            actionsDocument.leadingAnchor.constraint(equalTo: actionsScroll.contentView.leadingAnchor),
             actionsDocument.widthAnchor.constraint(equalTo: actionsScroll.contentView.widthAnchor),
             previewActions.topAnchor.constraint(equalTo: actionsDocument.topAnchor),
             previewActions.leadingAnchor.constraint(equalTo: actionsDocument.leadingAnchor),
             previewActions.trailingAnchor.constraint(equalTo: actionsDocument.trailingAnchor),
             previewActions.bottomAnchor.constraint(equalTo: actionsDocument.bottomAnchor),
         ])
+        // 操作区贴合内容，但最多占预览 70%（见下方约束）；超出时在滚动区里滚，而不是压扁内容。
+        // 贴合约束必须低于标签的抗压缩（750），否则两者打平，AutoLayout 会把「已打开」
+        // 「工作目录」等行挤成重叠。
         let fittedActions = actionsScroll.heightAnchor.constraint(equalTo: previewActions.heightAnchor)
-        fittedActions.priority = .defaultHigh
+        fittedActions.priority = .init(NSLayoutConstraint.Priority.defaultHigh.rawValue - 1)
         fittedActions.isActive = true
+        actionsScroll.heightAnchor.constraint(lessThanOrEqualTo: previewActions.heightAnchor).isActive = true
         previewActions.orientation = .vertical
         previewActions.alignment = .leading
         previewActions.spacing = 4
