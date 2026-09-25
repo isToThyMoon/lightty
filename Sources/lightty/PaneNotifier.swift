@@ -178,6 +178,9 @@ final class PaneNotifier: NSObject, UNUserNotificationCenterDelegate {
         let id = pane.dragIdentifier
         pendingDesktopMessages[id, default: []].append(message)
         enqueue(id)
+        // Codex 的 hook 失效时，这条通知还要兜底推状态；由此产生的完成提醒落在同一缓冲窗口里，
+        // 与这条合成一条投递。
+        AppState.shared?.sessionLibrary.noteDesktopNotification(body.isEmpty ? title : body, in: id)
     }
 
     private func withdrawReminder(_ paneID: UUID) {

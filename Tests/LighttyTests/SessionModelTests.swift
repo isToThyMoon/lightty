@@ -284,6 +284,22 @@ struct SessionModelTests {
         #expect(f.library.paneState(for: id)?.displayAgent == nil, "图标一起走")
     }
 
+    /// Codex 的 hook 全失效时，本 pane 的标题与桌面通知兜底推状态；只动 Codex，
+    /// Claude 的 pane 收到同样的信号不改状态。
+    @Test func terminalSignalsStandInForCodexButNotClaude() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let codex = f.pane(), claude = f.pane()
+        f.library.noteTerminalTitle("⠋ 回应问候 | florian", in: codex)
+        #expect(f.statuses.status(for: codex)?.state == .thinking)
+        f.library.noteDesktopNotification("你好！有什么我可以帮忙的？", in: codex)
+        #expect(f.statuses.unreadActivity(for: codex) == .done)
+
+        f.library.noteTerminalTitle("◑ Shopify 公司介绍", in: claude)
+        f.library.noteDesktopNotification("Agent turn complete", in: claude)
+        #expect(f.statuses.status(for: claude) == nil)
+    }
+
     @Test func hooksDirectoryAndExitUseTheSameBindingState() async throws {
         let f = try SessionModelFixture()
         defer { f.close() }

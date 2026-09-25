@@ -128,6 +128,34 @@ final class SessionLibrary {
         }
         return .unknown
     }
+    /// 这个 pane 的终端发来桌面通知（OSC 9 / 777）。在跑 Codex 时交给兜底：hook 全失效时
+    /// 它和标题一起推状态（见 `PaneStatusStore.noteCodexFallbackNotification`）。
+    func noteDesktopNotification(_ text: String, in id: UUID) {
+        guard let input = runtime.inputs[id] else { return }
+        let agent = input.titleAgent ?? statusStore.status(for: id)?.agent.flatMap(SessionAgent.init(rawValue:))
+        guard agent == .codex else { return }
+        statusStore.noteCodexFallbackNotification(text, in: id)
+    }
+
+    /// 已知承载这段 Codex 会话的 pane：续接或恢复时声明的意图，或 hook 已经确认的绑定。
+    /// 比按进程推断准，`CodexSessionRouter` 先问这里。
+    func panes(forCodexThread id: String) -> [UUID] {
+        runtime.inputs.keys.filter { pane in
+            let key = runtime.inputs[pane]?.intent.association?.key ?? runtime.panes[pane]?.sessionKey
+            return key?.agent == .codex && key?.nativeID == id
+        }
+    }
+
+    var registeredPaneIDs: Set<UUID> { Set(runtime.inputs.keys) }
+
+    /// 有没有哪个 pane 此刻在跑 Codex（按终端标题认出，或已绑定 / 声明了 Codex 会话）。
+    var hasCodexPane: Bool {
+        runtime.inputs.contains { pane, input in
+            input.titleAgent == .codex || input.intent.association?.key.agent == .codex
+                || runtime.panes[pane]?.sessionKey?.agent == .codex
+        }
+    }
+
     func openPaneIDs(for key: AgentSessionKey) -> Set<UUID> {
         Set(runtime.openedPaneIDs.filter { runtime.panes[$0]?.sessionKey == key })
     }
@@ -179,6 +207,8 @@ final class SessionLibrary {
         runtime.inputs[id]?.agentTitle = hookInstalled(agent) ? nil : title
         reconcilePane(id)
         if registered != nil { statusStore.noteTerminalTitle(parsed, in: id) }
+        // Codex 的 hook 全失效时用标题兜底；hook 在管时 store 自己会忽略。
+        if agent == .codex { statusStore.noteCodexFallbackTitle(parsed, in: id) }
         guard terminalTitleNames[id] != parsed.body else { return }
         terminalTitleNames[id] = parsed.body
         if let key = runtime.panes[id]?.sessionKey { invalidateMetadata(for: key) }

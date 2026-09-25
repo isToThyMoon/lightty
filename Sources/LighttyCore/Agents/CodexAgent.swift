@@ -2,6 +2,14 @@ import Foundation
 
 /// Codex CLI 的全部事实。改这一家只改这个文件。
 public enum CodexAgent {
+    /// 桌面通知（OSC 9）里「要你处理」那几类的开头；其余都是回合完成，正文是回复预览。
+    /// 只给兜底用：hook 全失效时，lightty 靠 Codex 写进本 pane 的终端信号推状态。
+    /// 来源：openai/codex 0.157.0，`codex-rs/tui/src/chatwidget/notifications.rs`
+    /// （`Notification::display`）。只在终端没有焦点时发（`tui.notification_condition` 默认）。
+    public static let attentionNotificationPrefixes = [
+        "Approval requested", "Codex wants to edit", "Plan mode prompt:", "Question:",
+    ]
+
     public static let spec = AgentSpec(
         executableName: "codex",
         configurationVariable: "CODEX_HOME",

@@ -95,10 +95,21 @@ extension AgentProcessIdentity {
         return (chain[index], chain[..<index].contains { !$0.hasControllingTerminal })
     }
 
-    /// 结构判定的结果：agent 进程的运行时身份（找不到组长时为 nil）＋ 是不是子会话。
+    /// 结构判定的结果：agent 进程的运行时身份（找不到组长时为 nil）＋ 是不是子会话
+    /// ＋ 链上有没有任何带控制终端的进程。
     public struct Ancestry: Equatable, Sendable {
         public let process: AgentProcessIdentity?
         public let isNested: Bool
+        /// 一个都没有，说明 hook 根本不在哪个终端里：典型是 Codex 被系统收养的共享后台进程
+        /// （PPID 1、无控制终端）。这时继承来的 `LIGHTTY_PANE_ID` 属于当初拉起后台进程的终端，
+        /// 按它发只会发错 pane。
+        public let inTerminal: Bool
+
+        public init(process: AgentProcessIdentity?, isNested: Bool, inTerminal: Bool) {
+            self.process = process
+            self.isNested = isNested
+            self.inTerminal = inTerminal
+        }
     }
 
     /// 从 `pid`（调用方传 hook 的父进程）起沿父进程链采集 `TerminalFacts`，最近的在前。
@@ -118,8 +129,10 @@ extension AgentProcessIdentity {
 
     /// 采集 + 判定。超出 `limit` 仍没找到组长就当没找到（多报一发，不丢事件）。
     public static func ancestry(startingAt pid: Int32, limit: Int = 16) -> Ancestry {
-        let found = foregroundJobLeader(in: terminalChain(startingAt: pid, limit: limit))
-        return Ancestry(process: found.leader.flatMap { read($0.pid) }, isNested: found.isNested)
+        let chain = terminalChain(startingAt: pid, limit: limit)
+        let found = foregroundJobLeader(in: chain)
+        return Ancestry(process: found.leader.flatMap { read($0.pid) }, isNested: found.isNested,
+                        inTerminal: chain.contains(where: \.hasControllingTerminal))
     }
 
     /// `proc_bsdinfo` 里没有控制终端的前台进程组，只能另读一次 `kinfo_proc`。

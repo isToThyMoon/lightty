@@ -27,6 +27,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - Claude 官方 SDK helper：`node scripts/prepare-claude-helper.mjs` 准备 debug 依赖，再运行 `swift build && .build/debug/lightty`。打包脚本自动准备双架构运行时；应用运行时不下载依赖。
 - PaneLauncher：由 lightty 发起的新终端（启动浮层、续接会话、原生会话选择器、任务开始处理、重启恢复）都构造启动请求交给它；删除互斥、已打开则聚焦、占用检查、会话关联、任务绑定、放置都在这里，结果交回调用方决定怎么提示。原生 CLI 恢复，目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
 - SessionResumeFlow：续接与原生选择器的呈现层，只按启动器的结果弹目录面板、占用提示和错误框。
+- CodexSessionRouter / CodexDaemonChannel：Codex 0.157 起会话和 hook 跑在多终端共用的后台进程里，hook 继承的 pane 不对。它经官方 `codex app-server proxy` 旁听后台进程的会话广播，把会话对到 pane，写 `~/.lightty/run/sessions/<session_id>`（`AgentSessionRoute`），hook 先查这条记录，其余照旧走 pane。对 pane 用的是进程事实（`ProcessInspector`：前台作业组长、启动参数、继承的 `LIGHTTY_PANE_ID`、工作目录）——这是上面「不读进程表反推」的唯一例外：要回答的是「这个界面进程在哪个 lightty pane」，pane ID 是 lightty 自己注入的，Codex 没有也不会有这个接口；会话本身的事实仍只问官方广播。规则与边界见 [hooks 文档](docs/hooks.md#codex-共享后台进程)。
 - TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 PathWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
 - PaneView / TerminalSurfaceView：终端视图与 libghostty surface；任务绑定只读查询 TaskBindings。
 - WorkspaceSnapshot / WorkspaceStore：窗口现场保存与重启恢复；不是全量 Agent 会话目录。

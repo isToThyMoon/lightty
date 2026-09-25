@@ -44,14 +44,22 @@ final class HookAgentEndToEndTests: XCTestCase {
     }
 
     /// 起一发 hook，等 store 收到这一 pane 的报文，返回它记下的状态与前台作业组长的 pid。
+    ///
+    /// `route` 给了就先替这段会话写一条路由记录（指向这个 pane），hook 继承的环境则指向
+    /// 另一个不相干的 pane——正是 Codex 共享后台进程里的形状：环境属于别的终端，只有记录可信。
     private func statusReported(
         shape: HookLauncher.Shape = .foreground, payload: String, arguments: [String] = [],
-        environment: [String: String] = [:]
+        environment: [String: String] = [:], route: (session: String, client: AgentProcessIdentity?)? = nil
     ) throws -> (status: PaneStatus?, leaderPID: pid_t?) {
         let pane = UUID()
         store.attach(pane)  // store 只收登记过的 pane；attach 会建运行时目录，detach 负责清
         defer { store.detach(pane) }
-        let env = hookEnvironment(pane: pane, extra: environment)
+        if let route {
+            try AgentSessionRoute(pane: pane, socket: socketPath.path, client: route.client)
+                .write(sessionID: route.session)
+        }
+        defer { if let route { AgentSessionRoute.remove(sessionID: route.session) } }
+        let env = hookEnvironment(pane: route == nil ? pane : UUID(), extra: environment)
         let run = try launcher.run(shape, payload: payload, arguments: arguments, environment: env)
         try waitUntil("datagram for \(pane)") { [store] in store?.status(for: pane) != nil }
         if shape == .detached {  // 孤儿进程不在 launcher 手里，得自己等它走干净
@@ -132,7 +140,7 @@ final class HookAgentEndToEndTests: XCTestCase {
     }
 
     /// 没有 pty（hook 跑在没有控制终端的环境里）：照发报文，只是没有进程身份。
-    /// 宁可多报一发状态，也不能把事件当成子会话丢掉。
+    /// 宁可多报一发状态，也不能把事件当成子会话丢掉。这是 Claude 的规则，Codex 见下面两条。
     func testWithoutAnyTerminalTheStatusStillArrivesWithoutAProcessIdentity() throws {
         let reported = try statusReported(
             shape: .detached,
@@ -140,6 +148,50 @@ final class HookAgentEndToEndTests: XCTestCase {
             arguments: ["--agent", "claude"])
         XCTAssertEqual(reported.status?.state, .done)
         XCTAssertNil(reported.status?.agentProcess)
+    }
+
+    /// Codex 的 hook 不在任何终端里：0.157 被系统收养的共享后台进程就是这个形状，
+    /// 继承来的 pane 属于当初拉起后台进程的那个终端，和这段会话无关。没有路由记录就不发，
+    /// 否则状态（连同子会话、工具里 `codex exec` 的 SessionStart）会落进那个不相干的 pane。
+    func testCodexOutsideAnyTerminalWithoutARouteStaysSilent() throws {
+        let pane = UUID()
+        store.attach(pane)
+        defer { store.detach(pane) }
+        let run = try launcher.run(
+            .detached, payload: #"{"hook_event_name":"Stop","session_id":"unrouted","cwd":"/tmp"}"#,
+            arguments: ["--agent", "codex"], environment: hookEnvironment(pane: pane))
+        try waitUntil("orphan shell exits") { kill(run.hookParent, 0) != 0 }
+        // hook 退出前就发完了；真发了的话，这段时间足够它到达
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(store.status(for: pane))
+    }
+
+    /// 同样不在终端里，但 lightty 为这段 Codex 会话写了路由记录：状态送到记录里的 pane，
+    /// agent 进程报成记录里的界面进程——而不是继承环境里那个 pane。
+    func testRoutedCodexSessionReachesItsPaneFromOutsideAnyTerminal() throws {
+        let session = UUID().uuidString
+        let client = try XCTUnwrap(AgentProcessIdentity.read(getpid()))
+        let reported = try statusReported(
+            shape: .detached,
+            payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"\#(session)","cwd":"/tmp"}"#,
+            arguments: ["--agent", "codex"], route: (session, client))
+        XCTAssertEqual(reported.status?.state, .thinking)
+        XCTAssertEqual(reported.status?.sessionID, session)
+        XCTAssertEqual(reported.status?.agentProcess, client)
+    }
+
+    /// 路由记录只给 Codex 用。Claude 的会话哪怕碰上同名记录也照旧按继承的环境走。
+    func testClaudeIgnoresSessionRoutes() throws {
+        let pane = UUID(), elsewhere = UUID()
+        store.attach(pane)
+        defer { store.detach(pane) }
+        let session = UUID().uuidString
+        try AgentSessionRoute(pane: elsewhere, socket: socketPath.path, client: nil).write(sessionID: session)
+        defer { AgentSessionRoute.remove(sessionID: session) }
+        try launcher.run(payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"\#(session)","cwd":"/tmp"}"#,
+                         arguments: ["--agent", "claude"], environment: hookEnvironment(pane: pane))
+        try waitUntil("datagram for the inherited pane") { [store] in store?.status(for: pane) != nil }
+        XCTAssertEqual(store.status(for: pane)?.sessionID, session)
     }
 
     /// 主会话工具里拉起的子会话（组长 → 脱离终端的工具 shell → hook）不发状态，

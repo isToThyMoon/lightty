@@ -135,6 +135,52 @@ final class PaneStatusStoreTests: XCTestCase {
         }
     }
 
+    /// 仅 Codex 的兜底：hook 全失效时，本 pane 的标题与 OSC 9 推状态；hook 在管时一律不动；
+    /// hook 报文一到就接管，哪怕它的时间戳比兜底状态早（标题常比 hook 先到）。
+    func testCodexTerminalSignalsStandInOnlyWhileNoHookIsInCharge() throws {
+        let busy = AgentTerminalTitle(phase: .busy, body: "t")
+        let settled = AgentTerminalTitle(phase: .settled, body: "t")
+        let attention = AgentTerminalTitle(phase: .attention, body: "t")
+        let pane = UUID()
+        attach(pane)
+
+        store.noteCodexFallbackTitle(settled, in: pane)
+        XCTAssertNil(store.status(for: pane), "起步时的空闲标题不算完成，还没跑过回合")
+        store.noteCodexFallbackTitle(busy, in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+        XCTAssertEqual(store.status(for: pane)?.agent, "codex")
+        store.noteCodexFallbackTitle(attention, in: pane)
+        XCTAssertEqual(store.unreadActivity(for: pane), .attention)
+        store.noteCodexFallbackTitle(settled, in: pane)
+        XCTAssertEqual(store.unreadActivity(for: pane), .done)
+        store.markRead(pane)
+        store.noteCodexFallbackTitle(settled, in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .idle, "读过之后停在提示符上不再算完成")
+
+        store.noteCodexFallbackNotification("Approval requested: rm -rf build", in: pane)
+        XCTAssertEqual(store.unreadActivity(for: pane), .attention)
+        store.noteCodexFallbackNotification("好的，已经改完了。", in: pane)
+        XCTAssertEqual(store.unreadActivity(for: pane), .done)
+
+        // hook 接管：时间戳早于兜底状态的报文照收
+        PaneStatusDatagram(pane: pane, status: PaneStatus(
+            ts: Date().addingTimeInterval(-5), state: .thinking, agent: "codex", sessionID: "s",
+            event: "UserPromptSubmit")).send(to: socketPath)
+        try waitUntil("hook takes over") { self.store.status(for: pane)?.event == "UserPromptSubmit" }
+        for title in [settled, attention, busy] { store.noteCodexFallbackTitle(title, in: pane) }
+        store.noteCodexFallbackNotification("Agent turn complete", in: pane)
+        XCTAssertEqual(store.status(for: pane)?.event, "UserPromptSubmit", "hook 在管时兜底不动")
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+
+        // 会话结束后，下一段会话若没有 hook，兜底重新可用
+        PaneStatusDatagram(pane: pane, status: PaneStatus(
+            ts: Date(), state: .idle, agent: "codex", sessionID: "s", event: "SessionEnd")).send(to: socketPath)
+        try waitUntil("session ended") { self.store.status(for: pane)?.event == "SessionEnd" }
+        store.noteCodexFallbackTitle(busy, in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+        XCTAssertEqual(store.status(for: pane)?.event, PaneStatusStore.fallbackEvent)
+    }
+
     /// 分发是**定向**的：通知必须说清是哪个 pane 变了，否则呈现层只能全量重扫。
     func testNotificationCarriesTheChangedPaneID() throws {
         let a = UUID()

@@ -39,8 +39,14 @@ helper 不按进程名认 agent——名字随安装方式变——只看内核�
   不发状态也不注入，否则它的 SessionStart / SessionEnd 会顶掉主会话的状态与绑定。
 - 判定从 hook 的**父进程**起算：Claude 把 hook 自己脱离了终端，hook 没有控制终端不作数，
   也因此 helper 不能 `open("/dev/tty")` 或 `tcgetpgrp`，只能沿祖先链读 `kinfo_proc`。
-- 链上找不到组长（hook 跑在没有 pty 的环境里）：不记进程身份，**也不按子会话处理**——
-  宁可多报一发状态，不能把主会话的事件丢掉。
+- 链上找不到组长：不记进程身份，**也不按子会话处理**——宁可多报一发状态，不能把主会话的事件丢掉。
+- **仅 Codex**（Claude 照上面三条）：
+  - 先按 `session_id` 查会话路由记录（`AgentSessionRoute`，`~/.lightty/run/sessions/`）。
+    查到就用记录里的 pane 与界面进程，不看继承的环境和祖先链。记录由 lightty 的
+    `CodexSessionRouter` 写，见 [hooks 文档](../hooks.md#codex-共享后台进程)。
+  - 查不到、而链上一个带控制终端的进程都没有时静默：hook 不在哪个终端里，继承来的 pane
+    不可信。0.157 被系统收养的共享后台进程就是这个形状（2026-09-25 实测：PPID 1、无终端，
+    `LIGHTTY_PANE_ID` 属于当初拉起它的终端）。
 
 ## 3. 数据流
 

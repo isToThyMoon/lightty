@@ -205,7 +205,9 @@ final class PaneStatusStore {
         assertMain()
         // detach 之后可能还有在途报文，别把已经清掉的状态复活
         guard attached.contains(datagram.pane) else { return }
-        if let previous = statuses[datagram.pane] {
+        // 兜底状态让位于任何 hook 报文：标题比 hook 先到很常见，按时间比会把 hook 的
+        // 第一发（连同绑定会话的 SessionStart）当成旧报文丢掉。
+        if let previous = statuses[datagram.pane], previous.event != Self.fallbackEvent {
             guard datagram.status.ts >= previous.ts else { return }
             if datagram.status.event == "SessionEnd",
                (datagram.status.agent != previous.agent || datagram.status.sessionID != previous.sessionID) {
@@ -405,6 +407,57 @@ final class PaneStatusStore {
               current.state == .thinking || current.state == .tool else { return }
         statuses[paneID] = Self.idled(current)
         postChange(paneID)
+    }
+
+    // MARK: - 兜底（仅 Codex）
+
+    /// 兜底状态的事件名。hook 报文永远不会用它，据此区分「hook 在管」还是「兜底在管」。
+    static let fallbackEvent = "TerminalSignal"
+
+    /// Codex 的 hook 全失效时（后台进程里的会话没对上 pane，见 hooks 文档「Codex 共享后台进程」），
+    /// 用 Codex 写进本 pane 的终端信号推状态：标题（OSC 0）和桌面通知（OSC 9）。
+    /// 它们天然属于这个 pane，不会送错。只在这个 pane 没有 hook 在管时生效——
+    /// 没有状态、上一段会话已结束、或者当前就是兜底状态；hook 报文一到就以 hook 为准。
+    /// 兜底只有状态，没有会话身份，也做不了 handoff 注入。Claude 不走这里。
+    private func acceptsFallback(_ paneID: UUID) -> Bool {
+        guard attached.contains(paneID) else { return false }
+        guard let current = statuses[paneID] else { return true }
+        return current.event == Self.fallbackEvent || current.event == "SessionEnd"
+    }
+
+    private func setFallback(_ state: PaneActivity, in paneID: UUID) {
+        let current = statuses[paneID]
+        guard current?.event != Self.fallbackEvent || current?.state != state else { return }
+        readAttention.remove(paneID)
+        statuses[paneID] = PaneStatus(ts: Date(), state: state, agent: SessionAgent.codex.rawValue,
+                                      cwd: current?.cwd, event: Self.fallbackEvent)
+        postChange(paneID)
+    }
+
+    /// 标题：旋转字符 → 思考中；`Action Required` → 等你；从这两样回到没有前缀的标题 → 完成。
+    /// 起步时的空闲标题不算完成——那时还没跑过回合。
+    func noteCodexFallbackTitle(_ title: AgentTerminalTitle, in paneID: UUID) {
+        assertMain()
+        guard acceptsFallback(paneID) else { return }
+        let current = statuses[paneID]
+        switch title.phase {
+        case .busy: setFallback(.thinking, in: paneID)
+        case .attention: setFallback(.attention, in: paneID)
+        case .settled:
+            guard current?.event == Self.fallbackEvent,
+                  current?.state == .thinking || current?.state == .attention else { return }
+            setFallback(.done, in: paneID)
+        }
+    }
+
+    /// 桌面通知（OSC 9）：「要你处理」那几类 → 等你；其余是回合完成 → 完成。
+    /// Codex 只在终端没有焦点时发，所以它是标题之外的第二道，不是唯一一道。
+    func noteCodexFallbackNotification(_ text: String, in paneID: UUID) {
+        assertMain()
+        guard acceptsFallback(paneID) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attention = CodexAgent.attentionNotificationPrefixes.contains { trimmed.hasPrefix($0) }
+        setFallback(attention ? .attention : .done, in: paneID)
     }
 
     /// 同一份状态收回 idle，其余字段原样保留。

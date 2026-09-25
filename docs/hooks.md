@@ -20,8 +20,9 @@ lightty 启动 pane 的 shell 时注入  LIGHTTY_PANE_ID=<uuid>
 pane 头圆点 / 工作区侧栏 / 菜单栏 / 系统通知
 ```
 
-**没有后台常驻进程，没有网络，状态不落盘。** helper 只在 agent 触发事件时被拉起，
+**helper 不常驻，没有网络，状态不落盘。** helper 只在 agent 触发事件时被拉起，
 发完就退出；lightty 没在跑时包直接丢弃——状态是用完即弃的，没有需要补的账。
+唯一的例外是下面「Codex 共享后台进程」一节：lightty 自己会挂一条本机连接旁听 Codex。
 
 ## 注册方式：以插件形式，不改你的配置
 
@@ -76,6 +77,65 @@ pane 只跟踪主会话。主会话在工具里拉起的子会话（比如 Bash 
 环境变量，hook 从自己的父进程往上走，走到终端的前台作业组长之前若经过了**脱离终端**的进程，
 就认定这是子会话，静默退出，不发状态也不注入交接文档。判据全是内核里的终端结构，
 不认任何进程名，见 `docs/specs/pane-status.md` §2.1。
+
+Codex 另有一条：父进程链上一个带终端的进程都没有时（hook 不在任何终端里），继承来的 pane
+不可信，同样静默。Claude 不受影响，仍按「宁可多报」。
+
+## Codex 共享后台进程
+
+Codex 0.157 起，终端里的 `codex` 默认只是界面，会话和 hook 都跑在一个多终端共用的
+app-server 后台进程里（`codex app-server --listen unix:// --managed-daemon`）。hook 继承的是
+后台进程自己的环境，`LIGHTTY_PANE_ID` 属于当初拉起后台进程的那个终端，和当前会话无关；
+后台进程的拉起者退出后它被系统收养，父进程链上没有终端。载荷里唯一可靠的身份是 `session_id`。
+
+lightty 不改 Codex 的运行方式，只补上断掉的那一环——「这段会话显示在哪个 pane」。
+这一节只作用于 Codex，Claude 的 hook 不查路由记录：
+
+```
+lightty ──codex app-server proxy──> 共享后台进程（官方入口，WebSocket + JSON-RPC，只听广播）
+   thread/started：会话 ID、目录、创建时间、来源
+   thread/status/changed：续接的会话没有 started，第一次状态变化时 thread/read 补查
+   thread/closed：撤记录
+        ↓ 对 pane（CodexSessionRouter）
+~/.lightty/run/sessions/<session_id>   {pane, socket, owner, client}
+        ↓ hook 先按 session_id 查这条记录，查到就用它的 pane 和界面进程
+之后发状态、找任务、注入 handoff，全走原来按 pane 的路
+```
+
+会话对 pane 靠进程事实：pane 里起的进程都继承了 `LIGHTTY_PANE_ID`，界面进程是 pane 终端
+的前台作业组长、启动参数是 `codex`（`ProcessInspector`）。规则见 `CodexSessionRouter.choose`：
+
+- 启动参数里带会话 ID（`codex resume <ID>`，lightty 自己续接也是这样）：确定。
+  lightty 已声明或已绑定的会话直接用那个 pane。
+- 只凭目录配对要有新鲜证据：刚经 `thread/started` 宣布、目录里只有一个界面（含同一界面
+  `/new`）；或会话创建时间与界面启动相差 10 秒内且明显最近。界面退出后还挂在后台进程里的
+  残留会话目录可能相同，只凭目录会配错。
+- 只配 `threadSource: user` 的会话。后台进程自己也会建同目录的会话（生成标题时建
+  `thread_title`、`ephemeral` 的临时会话），配上去会挤掉真正会话的记录。
+- 一个界面同一时刻只显示一个会话，写新记录时撤掉它的旧记录。
+
+对不上的会话（手敲 `codex resume` 的选择器或 `--last`、同目录一秒内起两个）不写记录，
+hook 查不到就静默：宁可暂时没有状态，也不送进别人的 pane。子会话、工具里的 `codex exec`
+从来不在界面上，也不会有记录。
+
+连接只在机器上有 Codex 后台进程时有意义：启动时试一次，之后有 pane 开始跑 Codex 再试，
+连续失败时间隔从 5 秒倍增到 5 分钟；握手 10 秒没回应就断开重来。记录随 lightty 退出撤掉；
+写它的 lightty 或界面进程不在了，记录自动作废。
+
+### 兜底：Codex 写进本 pane 的终端信号
+
+以上都失效时（对不上 pane、`proxy` 不可用、hook 没装或没信任），状态退回 Codex 界面自己
+写进这个 pane 的两种信号。它们天然属于这个 pane，不会送错：
+
+- 终端标题（OSC 0）：旋转字符 → 思考中；`Action Required` → 等你；从这两样回到没有前缀的
+  标题 → 完成。起步时的空闲标题不算完成。
+- 桌面通知（OSC 9，Codex 只在终端没有焦点时发）：`Approval requested`、`Codex wants to edit`、
+  `Plan mode prompt:`、`Question:` 开头 → 等你；其余是回合完成（正文是回复预览）→ 完成。
+  前缀表在 `CodexAgent.attentionNotificationPrefixes`。
+
+只在这个 pane 没有 hook 在管时生效（没有状态、上一段会话已结束、或当前就是兜底状态）。
+hook 报文一到就接管，不比时间戳——标题常比 hook 先到，按时间比会丢掉 hook 的第一发。
+兜底只有状态：没有会话身份，侧栏的会话绑定和 handoff 注入都做不了。只作用于 Codex。
 
 这些事件缺一条都会让状态机少一条进出边：只登记 `Stop` 的话圆点永远不会变成"思考中"；
 漏掉 `PostToolUse`，工具跑完后状态会卡在 `tool` 上不回落；Codex 漏掉 `Interrupt`，

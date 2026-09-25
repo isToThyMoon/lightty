@@ -18,6 +18,9 @@ final class AppState {
         sessionLibrary: sessionLibrary, taskBindings: taskBindings,
         runningPanes: { [weak self] in self?.runningPanes() ?? [] },
         openWindow: { [weak self] pane in self?.newWindow(initialPane: pane) })
+    /// Codex 共享后台进程里的会话 → pane，写成 hook 读得到的路由记录。
+    private(set) lazy var codexSessionRouter = CodexSessionRouter(
+        library: sessionLibrary, socketPath: sessionLibrary.statusSocketPath.path)
 
     /// - Parameter taskFolderChanges: 任务目录变更源，测试注入手动触发的替身；默认是真实监听。
     init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true,

@@ -12,7 +12,8 @@ import LighttyCore
 //    SOCK_DGRAM 的每一种失败都是即时返回的（ENOENT / ECONNREFUSED / ENOBUFS，
 //    实测均在 25µs 内），所以「不阻塞」是传输层保证的，不是靠我们小心。
 // 3. **不在 lightty 里跑就当自己不存在**：LIGHTTY_PANE_ID / LIGHTTY_SOCK 任一未设时
-//    零输出、零副作用。用户很可能在 lightty 之外也跑同一个 agent，那时 hook 必须完全隐形。
+//    零输出、零副作用（Codex 另可凭会话路由记录找回 pane，见主流程）。用户很可能在
+//    lightty 之外也跑同一个 agent，那时 hook 必须完全隐形。
 
 // MARK: - payload 取值
 
@@ -147,18 +148,6 @@ private func handoffContext(path: String, lateBinding: Bool) -> String? {
 
 // MARK: - 主流程
 
-// 不在 lightty 的 pane 里 → 彻底隐形。两个变量由 PaneView 在 spawn 时注入，
-// 沿 shell → agent → hook 子进程继承。
-//
-// paneID 必须解析成 UUID：它既是报文的路由字段，又会拼进 handoff 指针的文件路径。
-// 值来自 lightty 自己，但 hook 是用户配置里的一条命令行，环境变量随时可能被手工
-// 改成别的东西——UUID 解析同时兜住了「路由不认识」和「路径穿越」两种脏值。
-let environment = ProcessInfo.processInfo.environment
-guard let paneID = string(environment["LIGHTTY_PANE_ID"]),
-      let paneUUID = UUID(uuidString: paneID),
-      let socketPath = string(environment["LIGHTTY_SOCK"])
-else { exit(0) }
-
 // readToEnd 抛 Swift 错误（readDataToEndOfFile 抛的是 NSException，Swift 侧接不住）
 guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
       let payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any],
@@ -169,18 +158,54 @@ guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
           interrupted: (payload["is_interrupt"] as? Bool) == true)
 else { exit(0) }
 
+let environment = ProcessInfo.processInfo.environment
+
+// 哪一家：`--agent` 说了算，它是我们自己写进 hooks 文件的。没给才退回按载荷 / 环境去猜
+// ——只为兼容还装着旧版插件的用户。
+let agentName = declaredAgent() ?? detectAgent(payload: payload)
+let isCodex = agentName == SessionAgent.codex.rawValue
+
+// 这段会话在哪个 pane、agent 进程是谁。
+//
+// **继承的环境 + 父进程链**。两个变量由 PaneView 在 spawn 时注入，沿 shell → agent →
+// hook 继承。不在 lightty 的 pane 里 → 彻底隐形。
+//
 // agent 进程与「是不是子会话」都只看终端作业结构，不认任何进程名（见
 // `AgentProcessIdentity.foregroundJobLeader(in:)` 的注释）：pane 里的 agent 是终端的前台
 // 作业组长，它工具里拉起的子会话（`claude -p` 等）中间隔着脱离终端的进程。
 // 判定必须从 hook 的**父进程**起算——Claude 把 hook 自己脱离了终端，所以不能在这里
 // `open("/dev/tty")` 或 `tcgetpgrp`，只能沿祖先链读内核字段。
 // 子会话完全隐形，不发状态也不注入，否则它的 SessionStart / SessionEnd 会顶掉主会话的绑定。
-let ancestry = AgentProcessIdentity.ancestry(startingAt: getppid())
-if ancestry.isNested { exit(0) }
+//
+// **Codex 另有一条**（只动 Codex，Claude 照旧）：0.157 起交互会话跑在多终端共用的后台
+// 进程里，hook 由它启动、继承它的环境，`LIGHTTY_PANE_ID` 是当初拉起后台进程的那个终端，
+// 和当前会话无关。所以先按 `session_id` 查 lightty 写的会话路由记录（`AgentSessionRoute`），
+// 查到就以它为准：pane 来自记录，agent 进程是 pane 里的界面进程。查不到时，父进程链上
+// 一个带终端的进程都没有（被系统收养的后台进程）说明继承的 pane 不可信，隐形。
+//
+// paneID 必须解析成 UUID：它既是报文的路由字段，又会拼进 handoff 指针的文件路径。
+// 值来自 lightty 自己，但 hook 是用户配置里的一条命令行，环境变量随时可能被手工
+// 改成别的东西——UUID 解析同时兜住了「路由不认识」和「路径穿越」两种脏值。
+let paneUUID: UUID
+let socketPath: String
+let agentProcess: AgentProcessIdentity?
+if isCodex, let sessionID = string(payload["session_id"]),
+   let route = AgentSessionRoute.read(sessionID: sessionID) {
+    paneUUID = route.pane
+    socketPath = route.socket
+    agentProcess = route.client
+} else {
+    guard let inherited = string(environment["LIGHTTY_PANE_ID"]).flatMap(UUID.init(uuidString:)),
+          let inheritedSocket = string(environment["LIGHTTY_SOCK"])
+    else { exit(0) }
+    let ancestry = AgentProcessIdentity.ancestry(startingAt: getppid())
+    if ancestry.isNested || (isCodex && !ancestry.inTerminal) { exit(0) }
+    paneUUID = inherited
+    socketPath = inheritedSocket
+    agentProcess = ancestry.process
+}
+let paneID = paneUUID.uuidString
 
-// 哪一家：`--agent` 说了算，它是我们自己写进 hooks 文件的。没给才退回按载荷 / 环境去猜
-// ——只为兼容还装着旧版插件的用户。
-let agentName = declaredAgent() ?? detectAgent(payload: payload)
 let sourceRoot = agentName.flatMap(SessionAgent.init(rawValue:)).map { agent in
     SessionConfigurationLocation.resolve(agent: agent, environment: environment)
         .root(for: agent, home: FileManager.default.homeDirectoryForCurrentUser).standardizedFileURL.path
@@ -194,7 +219,7 @@ let status = PaneStatus(
     sourceConfiguration: agentName.flatMap(SessionAgent.init(rawValue:)).map {
         SessionConfigurationLocation.resolve(agent: $0, environment: environment)
     },
-    agentProcess: ancestry.process,
+    agentProcess: agentProcess,
     tool: string(payload["tool_name"]),
     // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
     // PostToolUse 的同一份参数只是回声

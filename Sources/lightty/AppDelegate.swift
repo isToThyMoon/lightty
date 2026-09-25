@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 绑定状态 socket。必须在首个 pane spawn 之前：pane 的 shell 一起来就带着
         // LIGHTTY_SOCK，agent 随时可能打第一发；socket 没绑好那一发就发进虚空。
         PaneStatusStore.shared.start()
+        // Codex 0.157 的会话跑在共享后台进程里，hook 靠路由记录找回自己的 pane。
+        // 在恢复 pane 之前起：恢复出来的 `codex resume` 一连上就能对上。
+        AppState.shared.codexSessionRouter.start()
         // 会话恢复：上次关窗/退出时的窗口、标签页、pane（含命名、cwd、任务绑定、
         // agent --resume）。没有快照或快照为空才开默认窗口。
         let restored = WorkspaceStore.shared.load().map(WorkspaceRestorer.restore) ?? []
@@ -138,6 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 关 fd、unlink socket 文件。残留文件并非致命（下次启动按 pid 判活清掉），
         // 但干净退出不该给下一次启动留活。
         PaneStatusStore.shared.stop()
+        // 本实例写的会话路由记录随实例一起撤掉；断开对共享后台进程的旁听连接。
+        AppState.shared.codexSessionRouter.stop()
         // 常驻的 codex app-server：关 stdin，让它自己收尾退出。
         CodexAppServer.shutdownAll()
     }
