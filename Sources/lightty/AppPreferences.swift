@@ -7,7 +7,7 @@ extension Notification.Name {
 }
 
 enum PreferenceKind: String {
-    case appearance, language, terminalTheme, accent
+    case appearance, language, terminalTheme, accent, appIcon
 
     static let userInfoKey = "kind"
 
@@ -109,6 +109,49 @@ enum LanguagePreference: String, CaseIterable {
         case .system: return L("System language")
         case .english: return "English"
         case .simplifiedChinese: return "简体中文"
+        }
+    }
+}
+
+/// 应用图标：深色（出厂）/ 浅色。运行期间换 Dock 图标、关于页与弹窗的图标；
+/// 应用没在运行时 Dock 与 Finder 显示的是包里的 lightty.icns，它固定为深色版。
+enum AppIconPreference: String, CaseIterable {
+    case dark, light
+
+    static let defaultsKey = "lightty.appIcon"
+
+    static let factory: AppIconPreference = .dark
+
+    static func current(in defaults: PreferenceStorage = FilePreferences.shared) -> AppIconPreference {
+        defaults.string(forKey: defaultsKey).flatMap(AppIconPreference.init(rawValue:)) ?? factory
+    }
+
+    static func set(_ value: AppIconPreference, in defaults: PreferenceStorage = FilePreferences.shared) {
+        defaults.set(value.rawValue, forKey: defaultsKey)
+        AppBranding.install(value, on: NSApp)
+        PreferenceKind.appIcon.post()
+    }
+
+    var title: String {
+        switch self {
+        case .dark: return L("Dark")
+        case .light: return L("Light")
+        }
+    }
+
+    /// 资源里的 SVG 母图名
+    var resourceName: String {
+        switch self {
+        case .dark: return "lightty-icon-dark"
+        case .light: return "lightty-icon"
+        }
+    }
+
+    /// 菜单里的色点：图标的底色
+    var swatch: NSColor {
+        switch self {
+        case .dark: return NSColor(srgbRed: 0x09 / 255, green: 0x09 / 255, blue: 0x09 / 255, alpha: 1)
+        case .light: return NSColor(srgbRed: 0xFA / 255, green: 0xFA / 255, blue: 0xF8 / 255, alpha: 1)
         }
     }
 }

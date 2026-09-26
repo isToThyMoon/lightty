@@ -40,6 +40,18 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertEqual(AccentPreference.current(), .default)
         FilePreferences.shared.removeObject(forKey: AccentPreference.defaultsKey)
         XCTAssertEqual(AccentPreference.current(), .pink, "出厂重点色是粉色")
+
+        // 应用图标：出厂深色；两档都有母图，切换即换掉运行中的图标
+        defer { AppBranding.install(on: NSApp) }
+        XCTAssertEqual(AppIconPreference.current(in: defaults), .dark, "出厂图标是深色版")
+        AppIconPreference.set(.light, in: defaults)
+        XCTAssertEqual(AppIconPreference.current(in: defaults), .light)
+        let light = AppBranding.icon
+        XCTAssertEqual(light?.isValid, true)
+        AppIconPreference.set(.dark, in: defaults)
+        let dark = AppBranding.icon
+        XCTAssertEqual(dark?.isValid, true)
+        XCTAssertFalse(light === dark)
     }
 
     func testLanguagePreferenceSwitchesLocalizedStrings() {

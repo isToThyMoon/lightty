@@ -1,10 +1,10 @@
 #!/bin/bash
-# 从 App 资源中的 lightty-icon.svg（1024 母图）生成 assets/lightty.icns。
+# 从 App 资源中的 lightty-icon-dark.svg（1024 母图，出厂图标是深色版）生成 assets/lightty.icns。
 # SVG 渲染用 AppKit（macOS 11+ NSImage 原生支持 SVG），无第三方依赖。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SVG="$ROOT/Sources/lightty/Resources/lightty-icon.svg"
+SVG="$ROOT/Sources/lightty/Resources/lightty-icon-dark.svg"
 ICONSET="$(mktemp -d)/lightty.iconset"
 mkdir -p "$ICONSET"
 

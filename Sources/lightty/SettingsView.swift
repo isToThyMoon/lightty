@@ -509,6 +509,15 @@ final class SettingsView: NSView, NSTextFieldDelegate {
             if let option = AccentPreference(rawValue: id) { AccentPreference.set(option) }
         }
         accentGroup.addRow(title: L("Accent"), control: accentDropdown)
+        let iconDropdown = ShellDropdown(
+            options: AppIconPreference.allCases.map {
+                ShellDropdown.Option(id: $0.rawValue, title: $0.title, swatch: $0.swatch)
+            },
+            selectedID: AppIconPreference.current().rawValue)
+        iconDropdown.onChange = { id in
+            if let option = AppIconPreference(rawValue: id) { AppIconPreference.set(option) }
+        }
+        accentGroup.addRow(title: L("App icon"), control: iconDropdown)
         let toggle = ShellToggle(isOn: TerminalThemePreference.usesBuiltInTheme())
         toggle.onChange = { on in
             TerminalThemePreference.setUsesBuiltInTheme(on)

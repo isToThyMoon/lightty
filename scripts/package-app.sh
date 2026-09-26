@@ -102,7 +102,7 @@ cp -R "$GHOSTTY_SHARE/../terminfo" "$APP/Contents/Resources/terminfo"
 [ -d "$GHOSTTY_SHARE/../locale" ] && cp -R "$GHOSTTY_SHARE/../locale" "$APP/Contents/Resources/locale"
 # 图标是必需资源：缺失或母图更新时重新生成，不能静默发布系统缺省图标。
 if [ ! -f "$ROOT/assets/lightty.icns" ] || \
-   [ "$ROOT/Sources/lightty/Resources/lightty-icon.svg" -nt "$ROOT/assets/lightty.icns" ]; then
+   [ "$ROOT/Sources/lightty/Resources/lightty-icon-dark.svg" -nt "$ROOT/assets/lightty.icns" ]; then
     bash "$ROOT/scripts/make-icon.sh"
 fi
 cp "$ROOT/assets/lightty.icns" "$APP/Contents/Resources/lightty.icns"

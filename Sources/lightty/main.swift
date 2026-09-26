@@ -87,7 +87,7 @@ if CommandLine.arguments.contains("--print-effective-terminal-config") {
 }
 
 let app = NSApplication.shared
-AppBranding.install(on: app)
+AppBranding.install(AppIconPreference.current(), on: app)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)
