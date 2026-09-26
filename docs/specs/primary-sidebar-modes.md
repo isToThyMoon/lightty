@@ -42,7 +42,7 @@
 - 原始会话由 Agent 持有；lightty 只持有组织信息及可重建的列表缓存。
 
 本文 Codex 明确指 **Codex CLI**，Claude Code 指其 CLI；不是 ChatGPT App 内的 Codex。本方案只读取 CLI 的本地历史，恢复仍运行 CLI。
-“全部”的首期定义：本机已配置 CLI 来源下、跨工作目录的用户主会话。Codex 显式限定 `sourceKinds: ["cli"]`，不默认纳入 `vscode`、`appServer`、`exec` 或子 Agent；原生归档分区也作为只读发现来源，不决定 lightty 的归档筛选。
+“全部”的首期定义：本机已配置 CLI 来源下、跨工作目录的用户主会话。Codex 只收终端界面建的会话：`source: cli`，或 0.157 起的 `source: vscode` + `originator: codex-tui`（见 [CLI 会话调研](session-provider-research.md)）；不纳入桌面端/IDE、`appServer`、`exec` 或子 Agent；原生归档分区也作为只读发现来源，不决定 lightty 的归档筛选。
 若某版本对 CLI 来源编码不同，先做 fixture/真实专用会话验证并更新 Adapter，不靠放开所有来源掩盖兼容性问题。
 不承诺远程机器、云端独有会话、其他系统用户、已删除或未落盘的会话。目录扫描结果不等于用户账号的全球历史。
 
@@ -180,7 +180,7 @@ PrimarySidebar（外壳 / 模式 / 工具行）
 来源 seam 内部只要求两件事：读取某查询的一页元数据；为确定会话生成可验证的 resume 计划。
 Claude 与 Codex 是两个真实 Adapter，因此这里的协议有实际用途；不预建插件注册平台、事件总线或通用数据库层。
 分页 cursor 是 Adapter 私有 opaque token，不能让 view 处理 Codex cursor 或 Claude offset。
-Codex 按已验证版本显式配置 CLI sourceKinds，不把“没有 cwd 过滤”当成“所有来源”；桌面端、IDE、exec、子 Agent 不属于首期范围。
+Codex 按已验证版本显式配置来源与 originator，不把“没有 cwd 过滤”当成“所有来源”；桌面端、IDE、exec、子 Agent 不属于首期范围。
 Claude 列表 SDK 会读取 transcript 头尾来生成元数据，limit 也不保证底层扫描量有界；性能预算需要测实际扫描，不能只看返回条数。
 
 归组、排序、会话 key 和启动计划是 Foundation 纯逻辑；放入 LighttyCore 或独立无 AppKit 文件。

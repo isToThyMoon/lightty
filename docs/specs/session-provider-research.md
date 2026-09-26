@@ -8,7 +8,7 @@
 
 Codex 官方将 `codex resume` 描述为搜索、恢复本地聊天，且本地状态放在 `CODEX_HOME`（默认 `~/.codex`）。这是本地恢复记录的位置，不是“所有对话数据只存在本机”的隐私保证；模型推理的数据传输与保存策略另算。[CLI](https://learn.chatgpt.com/docs/codex/cli)、[本地状态位置](https://learn.chatgpt.com/docs/config-file/config-advanced#config-and-state-locations)
 
-`codex app-server` 是 codex 可执行文件的子命令，可通过本地 stdio 查询历史，不要求安装或连接 ChatGPT App。该 Interface 支持区分 `cli`、`vscode`、`appServer` 等来源，因此不能由“都叫 Codex”推断历史完全互通或完全隔离；本实现显式请求 `sourceKinds: ["cli"]`，不附加 cwd 限制。[官方 app-server 协议](https://learn.chatgpt.com/docs/app-server)
+`codex app-server` 是 codex 可执行文件的子命令，可通过本地 stdio 查询历史，不要求安装或连接 ChatGPT App。该 Interface 支持区分 `cli`、`vscode`、`appServer` 等来源，因此不能由“都叫 Codex”推断历史完全互通或完全隔离；本实现请求 `sourceKinds: ["cli", "vscode"]`、不附加 cwd 限制，再逐条只留终端界面建的会话：`source` 为 `cli`（0.156 及以前），或 `source` 为 `vscode` 且 `originator` 为 `codex-tui`（0.157 起终端会话经共享后台进程创建，来源随 app-server 记成 `vscode`；桌面端同一来源，`originator` 是 `Codex Desktop`）。本地 app-server 拒绝非空的 `originators` 参数，所以只能取回后自己筛。[官方 app-server 协议](https://learn.chatgpt.com/docs/app-server)
 
 可实现跨项目的本地会话列表，点击后在 Lightty 新终端中运行原生 resume。发现历史与执行会话必须分离：Lightty 管列表和导航，原生 CLI 管推理、权限与交互。不要把 Sessions 伪装成 HandoffTask，也不要为显示列表而启动一次 agent query。
 
@@ -43,7 +43,7 @@ Claude CLI 的 resume 接收 ID；continue 只取当前目录最近历史，不�
 
 官方 app-server 文档直接支持 `thread/list` 的分页历史 UI、初始化握手与 stdio。默认来源过滤为 interactive；归档需 `archived:true` 单独查询。`useStateDbOnly` 可跳过扫描修复，但可能牺牲历史完整性。`thread/read` 不加载执行线程；列表不需要 `thread/resume`。API 有稳定表面和 experimental opt-in，但本机命令整体仍标 experimental，不能宣传为永不变化。[官方 app-server 文档](https://developers.openai.com/codex/app-server)
 
-列表参数提供 cursor、limit、排序、modelProviders、sourceKinds、cwd、archived、searchTerm；空 sourceKinds 并非所有来源。跨目录 All 不应附加 cwd；本需求只选已验证的 cli 来源，不纳入 vscode/appServer/exec 或子 Agent。[ThreadListParams 固定快照](https://github.com/openai/codex/blob/5ecb3afd1bf405149e2159bfda50093b0c1b5fab/codex-rs/app-server-protocol/schema/typescript/v2/ThreadListParams.ts)
+列表参数提供 cursor、limit、排序、modelProviders、sourceKinds、cwd、archived、searchTerm；空 sourceKinds 并非所有来源。跨目录 All 不应附加 cwd；本需求只选终端界面建的会话（判据同上），不纳入桌面端/IDE、appServer、exec 或子 Agent。[ThreadListParams 固定快照](https://github.com/openai/codex/blob/5ecb3afd1bf405149e2159bfda50093b0c1b5fab/codex-rs/app-server-protocol/schema/typescript/v2/ThreadListParams.ts)
 
 Thread 有 id、name、preview、cwd、createdAt/updatedAt、source、parentThreadId、gitInfo 等；时间为 epoch **秒**。`path` 明标不稳定。当前源码同时有共享会话树的 sessionId 与 thread.id，恢复具体条目必须用后者；projectId 可空，不应直接当成 Lightty 项目。[Thread 固定快照](https://github.com/openai/codex/blob/5ecb3afd1bf405149e2159bfda50093b0c1b5fab/codex-rs/app-server-protocol/schema/typescript/v2/Thread.ts)
 

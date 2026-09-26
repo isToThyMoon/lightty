@@ -15,7 +15,9 @@ struct CodexSessionProvider: AgentSessionProvider {
 
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage {
         if cancelled() { throw CancellationError() }
-        var params: [String: Any] = ["limit": 100, "sourceKinds": ["cli"],
+        // `vscode` 也要：0.157 起终端会话记在这个来源下，逐条再按 originator 筛（见 `decode`）。
+        // 本地 app-server 拒绝非空的 `originators` 参数，只能拿回来自己筛。
+        var params: [String: Any] = ["limit": 100, "sourceKinds": ["cli", "vscode"],
             "modelProviders": [], "archived": archived, "sortKey": "updated_at"]
         if let cursor { params["cursor"] = cursor }
         let response = try server.request("thread/list", params: params, cancelled: cancelled)
@@ -29,7 +31,7 @@ struct CodexSessionProvider: AgentSessionProvider {
         guard let records = page["data"] as? [[String: Any]] else { throw SessionCatalogError.protocolFailure }
         return try records.compactMap { record in
             // Fail closed: source filtering must not silently import desktop/IDE threads.
-            guard record["source"] as? String == "cli" else { return nil }
+            guard Self.isTerminalThread(record) else { return nil }
             guard let id = record["id"] as? String, !id.isEmpty else { throw SessionCatalogError.protocolFailure }
             let name = record["name"] as? String
             let preview = record["preview"] as? String
@@ -39,6 +41,16 @@ struct CodexSessionProvider: AgentSessionProvider {
                 workingDirectory: record["cwd"] as? String,
                 updatedAt: (record["updatedAt"] as? Double).map(Date.init(timeIntervalSince1970:)),
                 sourceArchived: archived)
+        }
+    }
+
+    /// 终端里建的会话：0.156 及以前记成 `source: cli`；0.157 起经共享后台进程建，记成
+    /// `source: vscode`，只有 `originator` 还说明是终端界面（见 `CodexAgent.terminalOriginator`）。
+    static func isTerminalThread(_ record: [String: Any]) -> Bool {
+        switch record["source"] as? String {
+        case "cli": return true
+        case "vscode": return record["originator"] as? String == CodexAgent.terminalOriginator
+        default: return false
         }
     }
 

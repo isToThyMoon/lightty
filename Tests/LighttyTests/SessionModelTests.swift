@@ -212,7 +212,7 @@ struct SessionModelTests {
         #expect(f.catalog.requestCount == 6, "Re-read the target page, then stop before unrelated older pages")
     }
 
-    /// 用户自己在终端里敲 `/rename` 不触发任何钩子，官方也没有改名订阅接口。
+    /// 用户自己在终端里敲 `/rename` 不触发任何钩子，Claude 也没有改名订阅接口。
     /// 最早的补救时机是他开始下一轮提问（`UserPromptSubmit` → thinking）：这时重读一次官方
     /// 列表，标题不用等这一轮结束。
     @Test func aPromptAfterATerminalRenameRereadsTheTitle() async throws {
@@ -228,6 +228,11 @@ struct SessionModelTests {
         f.catalog.records = [f.record(title: "新标题")]
         try await f.status(.thinking, event: "UserPromptSubmit", pane: id, record: record)
         try await f.wait { f.library.paneState(for: id)?.title == "新标题" }
+        // Codex 0.157 起自动起名和 `/rename` 都有后台进程的改名广播，不等任何 hook。
+        // 回归：新会话的 AI 标题要等下一轮提问才到 pane。
+        f.catalog.records = [f.record(title: "打个招呼")]
+        f.library.codexThreadRenamed(record.key.nativeID)
+        try await f.wait { f.library.paneState(for: id)?.title == "打个招呼" }
     }
 
     /// 标题同一时刻只有一个来源，来源之间不穿插。hook 插件**没装**时，标题看得出是 agent 写的就照

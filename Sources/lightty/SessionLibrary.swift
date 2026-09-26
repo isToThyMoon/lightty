@@ -287,7 +287,15 @@ final class SessionLibrary {
         metadataRefreshes.schedule()
     }
 
-    /// 钩子是标题唯一的刷新时机（两家都没有「会话改名」的订阅接口）。三种情况重读元数据：
+    /// Codex 共享后台进程广播了改名（`thread/name/updated`）。只管 lightty 里开着的会话，
+    /// 别的终端里的会话等下次整表刷新。
+    func codexThreadRenamed(_ threadID: String) {
+        let keys = Set(runtime.panes.values.compactMap(\.sessionKey))
+        for key in keys where key.agent == .codex && key.nativeID == threadID { invalidateMetadata(for: key) }
+    }
+
+    /// 钩子是标题的主要刷新时机（Claude 没有「会话改名」的订阅接口；Codex 0.157 起另有
+    /// 后台进程的改名广播，见 `codexThreadRenamed`）。三种情况重读元数据：
     /// 关联变了、一个回合结束（`.done`）、以及用户开始下一轮（状态从非 thinking 变 thinking）。
     /// 最后这条是为了用户自己在终端里敲的 `/rename`：那不触发任何钩子，而他改完名通常紧接着
     /// 提问，这时顺带重读，标题不必等到这一轮结束。

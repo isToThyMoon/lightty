@@ -10,10 +10,14 @@ final class SessionCatalogTests: XCTestCase {
             ["id": "thread-1", "sessionId": "shared-tree", "source": "cli", "cwd": "/repo", "updatedAt": 1000.0, "preview": "Preview"],
             ["id": "desktop-1", "source": "appServer"],
             ["id": "ide-1", "source": "vscode"],
+            // 0.157 起终端会话经共享后台进程建，来源记成 vscode，只剩 originator 能认；
+            // 桌面端同一来源，originator 不同。回归：漏了它，新会话的标题到不了 pane 和列表。
+            ["id": "tui-157", "source": "vscode", "originator": "codex-tui", "name": "打个招呼", "preview": "你好"],
+            ["id": "desktop-2", "source": "vscode", "originator": "Codex Desktop"],
         ]]
         let rows = try CodexSessionProvider.decode(page, source: source, archived: false)
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first?.key.nativeID, "thread-1")
+        XCTAssertEqual(rows.map(\.key.nativeID), ["thread-1", "tui-157"])
+        XCTAssertEqual(rows.last?.title, "打个招呼")
         XCTAssertEqual(rows.first?.updatedAt, Date(timeIntervalSince1970: 1000))
         XCTAssertThrowsError(try CodexSessionProvider.decode([:], source: source, archived: false))
     }
@@ -26,14 +30,15 @@ final class SessionCatalogTests: XCTestCase {
         let directory = root.appendingPathComponent("sessions/2026/09/07")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var expected = Set<String>()
-        for index in 0..<3 {
+        // 0、1：旧版终端会话；2：0.157 终端会话（vscode + codex-tui）；3：别的客户端的 vscode 会话
+        for index in 0..<4 {
             let id = UUID().uuidString.lowercased()
-            if index < 2 { expected.insert(id) }
+            if index < 3 { expected.insert(id) }
             let stamp = "2026-09-07T00:00:0\(index).000Z"
             let lines: [[String: Any]] = [
                 ["timestamp": stamp, "type": "session_meta", "payload": [
                     "id": id, "timestamp": stamp, "cwd": root.path,
-                    "originator": "lightty-test", "cli_version": "0.153.4",
+                    "originator": index == 2 ? "codex-tui" : "lightty-test", "cli_version": "0.153.4",
                     "source": index < 2 ? "cli" : "vscode", "model_provider": "openai",
                 ]],
                 ["timestamp": stamp, "type": "event_msg", "payload": [

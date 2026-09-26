@@ -96,6 +96,7 @@ lightty ──codex app-server proxy──> 共享后台进程（官方入口，
    thread/started：会话 ID、目录、创建时间、来源
    thread/status/changed：续接的会话没有 started，第一次状态变化时 thread/read 补查
    thread/closed：撤记录
+   thread/name/updated：自动起名或 /rename 之后，重读官方目录里的标题
         ↓ 对 pane（CodexSessionRouter）
 ~/.lightty/run/sessions/<session_id>   {pane, socket, owner, client}
         ↓ hook 先按 session_id 查这条记录，查到就用它的 pane 和界面进程

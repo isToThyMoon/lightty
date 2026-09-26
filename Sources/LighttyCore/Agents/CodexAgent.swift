@@ -10,6 +10,14 @@ public enum CodexAgent {
         "Approval requested", "Codex wants to edit", "Plan mode prompt:", "Question:",
     ]
 
+    /// 终端界面建的会话在官方目录里记的 `originator`（建会话那个客户端 `initialize` 报的名字）。
+    /// 0.157 起终端界面经共享后台进程建会话，`source` 随 app-server 记成 `vscode`，和桌面端
+    /// （`originator` 为 `Codex Desktop`）同一个来源，只能靠它分开；0.156 及以前是 `source: cli`。
+    /// 来源：openai/codex 0.157.0，`codex-rs/tui/src/lib.rs`（`client_name`）、
+    /// `app-server/src/lib.rs`（`run_main` 默认 `SessionSource::VSCode`）、
+    /// `app-server-protocol/src/protocol/v2/thread_data.rs`（`Thread.originator`）。
+    public static let terminalOriginator = "codex-tui"
+
     public static let spec = AgentSpec(
         executableName: "codex",
         configurationVariable: "CODEX_HOME",

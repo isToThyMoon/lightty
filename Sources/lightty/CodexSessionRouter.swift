@@ -119,6 +119,9 @@ final class CodexSessionRouter {
             if let id = params["threadId"] as? String, routes[id] == nil { lookUp(id) }
         case "thread/closed":
             if let id = params["threadId"] as? String { drop(id) }
+        case "thread/name/updated":
+            // 自动起名与 `/rename` 都经 `thread/name/set`，后台进程随后广播这一条：重读目录的准确时机。
+            if let id = params["threadId"] as? String { library.codexThreadRenamed(id) }
         default:
             break
         }
