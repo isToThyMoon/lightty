@@ -136,6 +136,9 @@ enum ShellStyle {
     static let browserNavigationBackground = NSColor.shellDynamic(light: 0xF3F0EE, dark: 0x242229)
     static let browserListBackground = NSColor.shellDynamic(light: 0xFAF8F7, dark: 0x29272E)
     static let browserDetailBackground = raisedSurface
+    /// 浮卡里连续几行共用的凹托（Sessions 的已打开会话）：比 `raisedSurface` 暗一档，
+    /// 明暗两套都是往下沉，hover / 选中仍按原色画在托里。取壳层底色，读作「卡上挖出的一块」。
+    static let trayFill = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
     static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)
@@ -731,11 +734,39 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     /// 会在较深的分组底色外圈出一道亮边，连组间留白也一起染上。
     var drawsHover = true
 
+    /// 这一行在一段连续凹托里的位置。托本身由表格在背景上整块画（行间有空隙，逐行画会
+    /// 留缝），行只据此把 hover / 选中缩进托里。
+    enum TrayPosition { case none, single, top, middle, bottom }
+
+    var trayPosition = TrayPosition.none {
+        didSet { if trayPosition != oldValue { needsDisplay = true } }
+    }
+
+    /// 托的外缘相对行框内缩 2，与普通行的 hover 底对齐；托内的 hover / 选中再缩一圈，圆角同心。
+    static let trayInset: CGFloat = 2
+    static let trayPadding: CGFloat = 4
+    static var trayCornerRadius: CGFloat { ShellStyle.rowCornerRadius + trayPadding }
+
+    /// hover / 选中的底：普通行是行框内缩 2；托里的行横向与靠托外缘的一侧再缩进托的内边距。
+    private var highlightRect: NSRect {
+        let plain = bounds.insetBy(dx: Self.trayInset, dy: Self.trayInset)
+        guard trayPosition != .none else { return plain }
+        let edge = Self.trayInset + Self.trayPadding
+        let top = trayPosition == .top || trayPosition == .single ? edge : Self.trayInset
+        let bottom = trayPosition == .bottom || trayPosition == .single ? edge : Self.trayInset
+        // 行视图是否翻转由 AppKit 决定，按实际坐标系把「上」「下」落到 minY / maxY。
+        let (minInset, maxInset) = isFlipped ? (top, bottom) : (bottom, top)
+        var rect = bounds.insetBy(dx: edge, dy: 0)
+        rect.origin.y += minInset
+        rect.size.height -= minInset + maxInset
+        return rect
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         guard drawsHover, isHovered, !drawsSelection else { return }
         ShellStyle.hoverFill.setFill()
         NSBezierPath(
-            roundedRect: bounds.insetBy(dx: 2, dy: 2),
+            roundedRect: highlightRect,
             xRadius: ShellStyle.rowCornerRadius,
             yRadius: ShellStyle.rowCornerRadius).fill()
     }
@@ -744,7 +775,7 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
         guard drawsSelection else { return }
         ShellStyle.selectionFill.setFill()
         NSBezierPath(
-            roundedRect: bounds.insetBy(dx: 2, dy: 2),
+            roundedRect: highlightRect,
             xRadius: ShellStyle.rowCornerRadius,
             yRadius: ShellStyle.rowCornerRadius).fill()
     }

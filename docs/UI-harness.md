@@ -22,7 +22,7 @@
 | --- | --- |
 | 文字 | `Font.listTitle` 用于资料条目，`groupTitle` 用于树容器，`body` 用于普通正文/终端叶子名称，`section` 用于分组标题。`caption` / `captionStrong` 是元信息，`hint` 是说明，`count` 是数量。`compactTitle` / `compactBody` 留给 terminal 身份行与紧凑面板；`statusEmphasis` 表达需要注意的状态。 |
 | 文字颜色 | `primaryText` 为主要内容，`secondaryText` 为说明，`tertiaryText` 为较弱的辅助信息。颜色层级与字号层级独立选择。 |
-| 表面与状态 | `sidebarBackground` / `titlebarBackground` 为壳层底色，`raisedSurface` 为浮起面；`controlFill`、`inputFill` 对应控件与输入区域。hover、pressed、selection 各有已有 token。 |
+| 表面与状态 | `sidebarBackground` / `titlebarBackground` 为壳层底色，`raisedSurface` 为浮起面；`controlFill`、`inputFill` 对应控件与输入区域。hover、pressed、selection 各有已有 token。浮卡里需要成段归组的连续行（Sessions 的已打开会话）用 `trayFill` 凹托：比 `raisedSurface` 暗一档，整段一块、不加框线，由表格背景画以免行间空隙断开；托内 hover / 选中照常叠画并缩进一圈。 |
 | 导航与活动 | `activeContainerFill` / `activeItemFill` 区分所在容器与当前终端；`navigationAccent` 表达位置，`accent` 表达控件强调。任务绑定与 agent 活动通过 `dotColor` / `statusColor` 取色，避免混同导航与活动状态。 |
 | 间距 | `textLineGap` 属于同一文本块，`inlineGap` 属于相邻元素，`rowVerticalInset` 是行内留白，`listRowGap` 是行间留白。`sidebarHorizontalInset`、`sectionInset`、`chromeGap` 分别服务于行内容、分组内容和 chrome 区块。 |
 | 尺寸与圆角 | `chromeRowHeight` 是工具栏/终端头部的共同模数；`listActionSize` 是侧栏行内操作（⋯、✕、详情）的统一热区，字形大小另取、不随热区放大。`panelCornerRadius`、`rowCornerRadius`、`compactRowCornerRadius`、`controlCornerRadius`、`capsuleCornerRadius` 按容器角色选择。 |

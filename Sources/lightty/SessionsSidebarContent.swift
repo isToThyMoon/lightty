@@ -27,7 +27,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private var showingArchived = false
     private let status = NSTextField(labelWithString: "")
     private let introduction = NSTextField(wrappingLabelWithString: L("No local sessions yet. Start a session with the toolbar; return here to continue it."))
-    private let table = NSTableView()
+    private let table = SessionTrayTableView()
     private let scroll = SidebarListScrollView()
     private var rows: [Row] = []
     private let newProject = NSButton(title: L("New project…"), target: nil, action: nil)
@@ -281,6 +281,23 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         var canCreateProject: Bool
     }
     private var renderedState: SidebarState?
+    /// 画凹托的会话：置顶成段的开着的会话。按名称排与搜索时它们不置顶，`openOrder` 为空，也就不画。
+    private var trayKeys: Set<AgentSessionKey> = []
+
+    /// 相邻的开着的会话连成一块托。分区之间隔着标题行，托不会跨分区。
+    private func trayPosition(at index: Int) -> ShellTableRowView.TrayPosition {
+        func inTray(_ index: Int) -> Bool {
+            guard rows.indices.contains(index), case .session(let record, _) = rows[index] else { return false }
+            return trayKeys.contains(record.key)
+        }
+        guard inTray(index) else { return .none }
+        switch (inTray(index - 1), inTray(index + 1)) {
+        case (false, false): return .single
+        case (false, true): return .top
+        case (true, true): return .middle
+        case (true, false): return .bottom
+        }
+    }
 
     /// 唯一写视图的地方。每一处写入都先比较，因为调用它的频率不由这里决定。
     private func render(_ state: SidebarState) {
@@ -305,6 +322,20 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
                            || previous?.language != state.language)
             if searchMode, let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
                 table.selectRowIndexes([index], byExtendingSelection: false)
+            }
+        }
+        if previous?.rows != state.rows || previous?.openOrder != state.openOrder {
+            trayKeys = Set(state.openOrder)
+            table.enumerateAvailableRowViews { rowView, row in
+                (rowView as? ShellTableRowView)?.trayPosition = trayPosition(at: row)
+            }
+            table.trayRuns = rows.indices.reduce(into: []) { runs, index in
+                switch trayPosition(at: index) {
+                case .single: runs.append(index...index)
+                case .top: runs.append(index...index)
+                case .middle, .bottom: if let last = runs.popLast() { runs.append(last.lowerBound...index) }
+                case .none: break
+                }
             }
         }
         introduction.isHidden = !state.showsIntroduction
@@ -641,6 +672,10 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         default: return reusableRowView(in: tableView, id: "shell-row") { ShellTableRowView() }
         }
     }
+    /// 复用的行视图会带着上一个位置的托，进表时按当前行重设。
+    func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
+        (rowView as? ShellTableRowView)?.trayPosition = trayPosition(at: row)
+    }
     /// row view 与 cell 一样走 `makeView` 复用：每行新建会带上 tracking area、
     /// 光标安装和 layer，滚动起手一次建十几行时这是可观的一笔。
     private func reusableRowView<T: NSTableRowView>(
@@ -916,6 +951,27 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         ShellMenuPopover.present(from: anchor, items: items)
     }
 
+}
+
+/// 开着的会话连成的凹托画在表格背景上：行与行之间隔着 `listRowGap`，每行各画一截会在
+/// 空隙处断开。行视图透明，hover / 选中照常叠在托上。挪行动画期间托直接到终态，行滑进滑出。
+private final class SessionTrayTableView: NSTableView {
+    /// 每段托覆盖的行号区间（含首尾）。
+    var trayRuns: [ClosedRange<Int>] = [] {
+        didSet { if trayRuns != oldValue { needsDisplay = true } }
+    }
+
+    override func drawBackground(inClipRect clipRect: NSRect) {
+        super.drawBackground(inClipRect: clipRect)
+        let radius = ShellTableRowView.trayCornerRadius
+        ShellStyle.trayFill.setFill()
+        for run in trayRuns where run.upperBound < numberOfRows {
+            let rect = rect(ofRow: run.lowerBound).union(rect(ofRow: run.upperBound))
+                .insetBy(dx: ShellTableRowView.trayInset, dy: ShellTableRowView.trayInset)
+            guard rect.intersects(clipRect) else { continue }
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        }
+    }
 }
 
 private final class SessionListCell: NSTableCellView, SidebarRowActionContent {
