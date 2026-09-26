@@ -257,6 +257,10 @@ final class PaneView: NSView {
             self.onClose?(self)
         }
         terminal.onCommandFinished = { [weak self] date in self?.shellCommandFinished(at: date) }
+        terminal.onSubmit = { [weak self] in
+            guard let self else { return }
+            self.sessionLibrary.noteSubmit(in: self.dragIdentifier)
+        }
         terminal.onWorkingDirectoryChange = { [weak self] directory in
             guard let self else { return }
             self.sessionLibrary.updateDirectory(directory, for: self.dragIdentifier)

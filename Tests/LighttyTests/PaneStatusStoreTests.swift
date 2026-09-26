@@ -145,17 +145,22 @@ final class PaneStatusStoreTests: XCTestCase {
         attach(pane)
 
         store.noteCodexFallbackTitle(settled, in: pane)
-        XCTAssertNil(store.status(for: pane), "起步时的空闲标题不算完成，还没跑过回合")
+        XCTAssertNil(store.status(for: pane), "起步时的空闲标题什么都不是")
+        // 还没提交过输入时的转圈是加载模型、起 MCP：什么都不标
         store.noteCodexFallbackTitle(busy, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+        store.noteCodexFallbackTitle(settled, in: pane)
+        XCTAssertNil(store.status(for: pane))
+        // 提交之后的转圈立刻算思考中；转完回到空闲，不能留下「已完成」
+        store.noteCodexSubmit(in: pane)
+        store.noteCodexFallbackTitle(busy, in: pane)
         XCTAssertEqual(store.status(for: pane)?.agent, "codex")
+        store.noteCodexFallbackTitle(settled, in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .idle)
+        XCTAssertNil(store.unreadActivity(for: pane), "标题不判完成")
         store.noteCodexFallbackTitle(attention, in: pane)
         XCTAssertEqual(store.unreadActivity(for: pane), .attention)
         store.noteCodexFallbackTitle(settled, in: pane)
-        XCTAssertEqual(store.unreadActivity(for: pane), .done)
-        store.markRead(pane)
-        store.noteCodexFallbackTitle(settled, in: pane)
-        XCTAssertEqual(store.status(for: pane)?.state, .idle, "读过之后停在提示符上不再算完成")
+        XCTAssertEqual(store.status(for: pane)?.state, .idle)
 
         store.noteCodexFallbackNotification("Approval requested: rm -rf build", in: pane)
         XCTAssertEqual(store.unreadActivity(for: pane), .attention)
@@ -178,7 +183,30 @@ final class PaneStatusStoreTests: XCTestCase {
         try waitUntil("session ended") { self.store.status(for: pane)?.event == "SessionEnd" }
         store.noteCodexFallbackTitle(busy, in: pane)
         XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+        // Codex 退出后下一个起来前的转圈又是加载，要重新提交才算
+        store.forgetCodexSubmit(in: pane)
+        store.noteCodexFallbackTitle(settled, in: pane)
+        store.noteCodexFallbackTitle(busy, in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .idle)
         XCTAssertEqual(store.status(for: pane)?.event, PaneStatusStore.fallbackEvent)
+    }
+
+    /// pane 有了 Codex 会话路由，hook 那条路就通了：兜底停用，已经推上去的兜底状态清掉。
+    /// SessionStart 要等第一条消息，只看「有没有 hook 状态」挡不住启动时的加载转圈。
+    func testARoutedPaneIgnoresTerminalSignals() throws {
+        let pane = UUID()
+        attach(pane)
+        store.noteCodexSubmit(in: pane)
+        store.noteCodexFallbackTitle(AgentTerminalTitle(phase: .busy, body: "t"), in: pane)
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+        store.setCodexRouted(true, pane: pane)
+        XCTAssertNil(store.status(for: pane))
+        store.noteCodexFallbackTitle(AgentTerminalTitle(phase: .busy, body: "t"), in: pane)
+        store.noteCodexFallbackNotification("Agent turn complete", in: pane)
+        XCTAssertNil(store.status(for: pane))
+        store.setCodexRouted(false, pane: pane)
+        store.noteCodexFallbackNotification("Agent turn complete", in: pane)
+        XCTAssertEqual(store.unreadActivity(for: pane), .done)
     }
 
     /// 分发是**定向**的：通知必须说清是哪个 pane 变了，否则呈现层只能全量重扫。

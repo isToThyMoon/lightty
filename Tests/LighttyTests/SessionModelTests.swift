@@ -290,6 +290,13 @@ struct SessionModelTests {
         let f = try SessionModelFixture()
         defer { f.close() }
         let codex = f.pane(), claude = f.pane()
+        // 在 shell 里敲 codex 的那次回车：还没认出 Codex，随后的加载转圈不算回合
+        f.library.noteSubmit(in: codex)
+        f.library.noteTerminalTitle("⠋ codex | florian", in: codex)
+        #expect(f.statuses.status(for: codex) == nil)
+        f.library.noteTerminalTitle("codex | florian", in: codex)
+        // 认出 Codex 之后提交输入，转圈就是回合
+        f.library.noteSubmit(in: codex)
         f.library.noteTerminalTitle("⠋ 回应问候 | florian", in: codex)
         #expect(f.statuses.status(for: codex)?.state == .thinking)
         f.library.noteDesktopNotification("你好！有什么我可以帮忙的？", in: codex)

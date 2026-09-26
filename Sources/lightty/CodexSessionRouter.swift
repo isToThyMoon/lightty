@@ -168,15 +168,19 @@ final class CodexSessionRouter {
             try route.write(sessionID: id, in: runDirectory)
             routes[id] = (pane, client)
             unresolved.removeValue(forKey: id)
+            library.setCodexRouted(true, pane: pane)
         } catch {
             NSLog("codex session route write failed: \(error)")
         }
     }
 
     private func drop(_ id: String) {
-        routes.removeValue(forKey: id)
+        let pane = routes.removeValue(forKey: id)?.pane
         unresolved.removeValue(forKey: id)
         AgentSessionRoute.remove(sessionID: id, in: runDirectory)
+        if let pane, !routes.values.contains(where: { $0.pane == pane }) {
+            library.setCodexRouted(false, pane: pane)
+        }
     }
 
     /// 界面上显示的会话才有 pane。后台进程还会自己建会话，目录与界面相同、也会宣布

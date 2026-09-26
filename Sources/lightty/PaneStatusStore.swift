@@ -295,6 +295,8 @@ final class PaneStatusStore {
         assertMain()
         attached.remove(paneID)
         readAttention.remove(paneID)
+        routedPanes.remove(paneID)
+        submittedPanes.remove(paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
         if hadStatus { postChange(paneID) }
@@ -411,6 +413,42 @@ final class PaneStatusStore {
 
     // MARK: - 兜底（仅 Codex）
 
+    /// 有会话路由记录的 pane：hook 这条路是通的，兜底停用。不能只看「有没有 hook 状态」——
+    /// Codex 的 SessionStart 要等第一条消息才来，界面启动时标题上加载模型、起 MCP 的转圈
+    /// 会被兜底当成一个回合（实测：刚进会话就显示思考中、随后已完成）。
+    private var routedPanes: Set<UUID> = []
+    /// Codex 启动之后用户在这个 pane 里按过回车（提交过输入）。转圈只在这之后才算思考中：
+    /// 界面启动时加载模型、起 MCP 也转圈，那发生在第一次提交之前。Codex 退出时清掉。
+    private var submittedPanes: Set<UUID> = []
+
+    /// 用户在已认出 Codex 的 pane 里按了回车（`SessionLibrary.noteSubmit`）。
+    func noteCodexSubmit(in paneID: UUID) {
+        assertMain()
+        guard attached.contains(paneID) else { return }
+        submittedPanes.insert(paneID)
+    }
+
+    /// Codex 退出（前台回到 shell）：下一个 Codex 起来前的转圈又是加载，不算。
+    func forgetCodexSubmit(in paneID: UUID) {
+        assertMain()
+        submittedPanes.remove(paneID)
+    }
+
+    /// `CodexSessionRouter` 写上 / 撤掉这个 pane 的路由时调用。写上时清掉已经推上去的兜底状态。
+    func setCodexRouted(_ routed: Bool, pane paneID: UUID) {
+        assertMain()
+        if routed {
+            guard routedPanes.insert(paneID).inserted else { return }
+            if statuses[paneID]?.event == Self.fallbackEvent {
+                statuses.removeValue(forKey: paneID)
+                readAttention.remove(paneID)
+                postChange(paneID)
+            }
+        } else {
+            routedPanes.remove(paneID)
+        }
+    }
+
     /// 兜底状态的事件名。hook 报文永远不会用它，据此区分「hook 在管」还是「兜底在管」。
     static let fallbackEvent = "TerminalSignal"
 
@@ -420,7 +458,7 @@ final class PaneStatusStore {
     /// 没有状态、上一段会话已结束、或者当前就是兜底状态；hook 报文一到就以 hook 为准。
     /// 兜底只有状态，没有会话身份，也做不了 handoff 注入。Claude 不走这里。
     private func acceptsFallback(_ paneID: UUID) -> Bool {
-        guard attached.contains(paneID) else { return false }
+        guard attached.contains(paneID), !routedPanes.contains(paneID) else { return false }
         guard let current = statuses[paneID] else { return true }
         return current.event == Self.fallbackEvent || current.event == "SessionEnd"
     }
@@ -434,24 +472,28 @@ final class PaneStatusStore {
         postChange(paneID)
     }
 
-    /// 标题：旋转字符 → 思考中；`Action Required` → 等你；从这两样回到没有前缀的标题 → 完成。
-    /// 起步时的空闲标题不算完成——那时还没跑过回合。
+    /// 标题：用户提交过输入之后的旋转字符 → 思考中；`Action Required` → 等你；
+    /// 从这两样回到没有前缀的标题 → 空闲。
+    /// 标题不判完成：界面启动时加载模型、起 MCP 也会转圈，转完回到空闲标题和回合结束分不开。
+    /// 完成只认 OSC 9 的回合完成通知（见下）。
     func noteCodexFallbackTitle(_ title: AgentTerminalTitle, in paneID: UUID) {
         assertMain()
         guard acceptsFallback(paneID) else { return }
         let current = statuses[paneID]
         switch title.phase {
-        case .busy: setFallback(.thinking, in: paneID)
+        case .busy:
+            guard submittedPanes.contains(paneID) else { return }
+            setFallback(.thinking, in: paneID)
         case .attention: setFallback(.attention, in: paneID)
         case .settled:
             guard current?.event == Self.fallbackEvent,
                   current?.state == .thinking || current?.state == .attention else { return }
-            setFallback(.done, in: paneID)
+            setFallback(.idle, in: paneID)
         }
     }
 
     /// 桌面通知（OSC 9）：「要你处理」那几类 → 等你；其余是回合完成 → 完成。
-    /// Codex 只在终端没有焦点时发，所以它是标题之外的第二道，不是唯一一道。
+    /// Codex 只在终端没有焦点时发——正好是需要完成提醒的时候；看着的 pane 不需要。
     func noteCodexFallbackNotification(_ text: String, in paneID: UUID) {
         assertMain()
         guard acceptsFallback(paneID) else { return }

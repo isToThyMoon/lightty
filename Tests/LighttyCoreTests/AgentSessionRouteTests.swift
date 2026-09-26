@@ -35,8 +35,10 @@ final class AgentSessionRouteTests: XCTestCase {
 
     /// 写记录的 lightty 或界面进程不在了，记录就作废：hook 不再照它发，清理时删掉。
     func testRecordsFromExitedProcessesAreStale() throws {
+        // 活到读完身份再退出：`/usr/bin/true` 可能在读之前就没了
         let finished = Process()
-        finished.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        finished.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        finished.arguments = ["0.2"]
         try finished.run()
         let exited = try XCTUnwrap(AgentProcessIdentity.read(finished.processIdentifier))
         finished.waitUntilExit()

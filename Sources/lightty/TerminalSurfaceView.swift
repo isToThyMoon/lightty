@@ -105,6 +105,8 @@ final class TerminalSurfaceView: NSView {
     /// Viewing is a user event, not a focus-state transition: clicking/typing in an
     /// already-focused terminal must acknowledge a completion received since then.
     var onInteraction: (() -> Void)?
+    /// 用户按了回车提交输入（不含按住重复、不含输入法组字时用来上屏的回车）。
+    var onSubmit: (() -> Void)?
     /// 程序经 OSC 0 写的标题变了。agent 用它推送忙/闲前缀和会话标题，见 `AgentTerminalTitle`。
     var onTitleChange: ((String) -> Void)?
     var onWorkingDirectoryChange: ((String?) -> Void)?
@@ -462,6 +464,10 @@ final class TerminalSurfaceView: NSView {
 
     override func keyDown(with event: NSEvent) {
         onInteraction?()
+        // 36 主键盘回车、76 小键盘回车
+        if !event.isARepeat, event.keyCode == 36 || event.keyCode == 76, markedText.length == 0 {
+            onSubmit?()
+        }
         guard let surface else {
             interpretKeyEvents([event])
             return

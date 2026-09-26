@@ -128,6 +128,19 @@ final class SessionLibrary {
         }
         return .unknown
     }
+    /// 用户在这个 pane 里按了回车。只有此刻已认出在跑 Codex 才记：在 shell 里敲
+    /// `codex` 那一下发生在认出之前，不能把随后的加载转圈当成回合。
+    func noteSubmit(in id: UUID) {
+        guard runtime.inputs[id]?.titleAgent == .codex else { return }
+        statusStore.noteCodexSubmit(in: id)
+    }
+
+    /// 这个 pane 有没有 Codex 会话路由（`CodexSessionRouter`）。有就说明 hook 那条路通着，
+    /// 终端信号兜底停用。
+    func setCodexRouted(_ routed: Bool, pane id: UUID) {
+        statusStore.setCodexRouted(routed, pane: id)
+    }
+
     /// 这个 pane 的终端发来桌面通知（OSC 9 / 777）。在跑 Codex 时交给兜底：hook 全失效时
     /// 它和标题一起推状态（见 `PaneStatusStore.noteCodexFallbackNotification`）。
     func noteDesktopNotification(_ text: String, in id: UUID) {
@@ -248,6 +261,7 @@ final class SessionLibrary {
     func commandFinished(in id: UUID, at date: Date) {
         // 前台命令回到了 shell：agent 已退出，它写的标题不再算数，pane 名回来
         forgetAgentTitle(in: id)
+        statusStore.forgetCodexSubmit(in: id)
         guard let input = runtime.inputs[id], date >= input.associatedAt,
               statusStore.commandFinished(for: id, at: date) else { reconcilePane(id); return }
         runtime.inputs[id]?.intent = .none
