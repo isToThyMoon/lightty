@@ -187,6 +187,20 @@ final class LeafTabRowTests: XCTestCase {
         let rowView = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: false))
         let icons = ([rowView] + descendants(rowView)).compactMap { $0 as? NSImageView }
         XCTAssertTrue(icons.contains { $0.image === prompt && !$0.isHidden }, "\(icons.map(\.image))")
+
+        // 新 pane 的 shell 还没报目录时，第二行照样占一行高，目录到了图标也不挪。
+        // 回归：清空所有标签页后新建一个，第二行塌掉，「>」顶到第一行的标题上。
+        func promptFrame(directory: String?) throws -> NSRect {
+            pane.sessionLibrary.updateDirectory(directory, for: pane.dragIdentifier)
+            try drainMainQueue()
+            layout()
+            let row = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: false))
+            row.layoutSubtreeIfNeeded()
+            let icon = try XCTUnwrap(([row] + descendants(row)).compactMap { $0 as? NSImageView }
+                .first { $0.image === prompt })
+            return icon.convert(icon.bounds, to: row)
+        }
+        XCTAssertEqual(try promptFrame(directory: nil), try promptFrame(directory: directory.path))
     }
 
     func testSinglePaneTabShowsPaneTitleWithoutContainerRow() throws {

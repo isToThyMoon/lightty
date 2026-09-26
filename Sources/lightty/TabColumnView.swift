@@ -1527,6 +1527,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             secondaryStack.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -Self.textTrailingInset),
             secondaryStack.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: ShellStyle.textLineGap),
+            // 第二行没有文字时（新 pane 的 shell 还没报目录）也占住一行高：两个标签都隐藏时
+            // stack 会塌成 0，按它居中的 agent 图标就顶到第一行上，目录一到又跳回来。
+            secondaryStack.heightAnchor.constraint(
+                greaterThanOrEqualToConstant: directoryLabel.intrinsicContentSize.height),
             secondaryStack.bottomAnchor.constraint(
                 lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
