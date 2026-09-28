@@ -29,7 +29,8 @@ final class CodexSessionRouter {
     private let library: SessionLibrary
     private let socketPath: String
     private let runDirectory: URL
-    private var channel: CodexDaemonChannel?
+    private let connect: (AgentHelperProcess) throws -> CodexDaemonConnection
+    private var channel: CodexDaemonConnection?
     /// 当前连接握手完成没有。没完成就断了算一次失败。
     private var initialized = false
     private var lastAttempt = Date.distantPast
@@ -41,12 +42,18 @@ final class CodexSessionRouter {
     /// 暂时对不上的会话，上次尝试的时间：状态广播很密，别每条都扫一遍进程表。
     private var unresolved: [String: Date] = [:]
     private let scanQueue = DispatchQueue(label: "lightty.codex-session-router", qos: .utility)
+    /// 上次看到的在跑 Codex 的 pane：多出来一个就是有新界面起来了。
+    private var codexPanes: Set<UUID> = []
+    private var lastProbe = Date.distantPast
 
+    /// - Parameter connect: 起一条旁听连接。默认经 `codex app-server proxy`，测试换成替身。
     init(library: SessionLibrary, socketPath: String,
-         runDirectory: URL = PaneRuntimeDirectory.runDirectory) {
+         runDirectory: URL = PaneRuntimeDirectory.runDirectory,
+         connect: @escaping (AgentHelperProcess) throws -> CodexDaemonConnection = { try CodexDaemonChannel($0) }) {
         self.library = library
         self.socketPath = socketPath
         self.runDirectory = runDirectory
+        self.connect = connect
     }
 
     func start() {
@@ -66,10 +73,38 @@ final class CodexSessionRouter {
     }
 
     /// pane 关了就撤掉指向它的记录；有 pane 开始跑 Codex 而还没连上，就去连。
+    /// 连着的时候，两种迹象说明广播可能没在来，各探一次（见 `probe`）：
+    /// - 有新的 Codex 界面起来了——正是要靠广播给它的会话对 pane 的时候；
+    /// - 有 Codex pane 在靠终端信号兜底——hook 那条路没接上。这一条最多 30 秒探一次，
+    ///   兜底状态每个回合都在变。
     @objc private func libraryDidChange() {
         let registered = library.registeredPaneIDs
         for (id, route) in routes where !registered.contains(route.pane) { drop(id) }
-        if channel == nil, library.hasCodexPane { connectIfNeeded() }
+        let running = library.codexPaneIDs
+        let started = !running.subtracting(codexPanes).isEmpty
+        codexPanes = running
+        guard channel != nil else {
+            if !running.isEmpty { connectIfNeeded() }
+            return
+        }
+        if started || (!library.codexFallbackPaneIDs.isEmpty && Date().timeIntervalSince(lastProbe) > 30) {
+            probe()
+        }
+    }
+
+    /// 往连接里写一次：补查已加载的会话。连接活着，错过的会话顺带对上 pane；后台进程已经
+    /// 换过（`proxy` 读不到结尾，见 `CodexDaemonChannel`），这一写让 `proxy` 报错退出，
+    /// 连接随之关闭并重连。只在上面两种时机探，平时不发任何东西。
+    private func probe() {
+        guard let channel, initialized else { return }
+        lastProbe = Date()
+        catchUp(on: channel)
+    }
+
+    private func catchUp(on channel: CodexDaemonConnection) {
+        channel.request("thread/loaded/list", params: [:]) { [weak self] loaded in
+            for id in (loaded?["data"] as? [String]) ?? [] { self?.lookUp(id) }
+        }
     }
 
     // MARK: - 连接
@@ -83,13 +118,17 @@ final class CodexSessionRouter {
         lastAttempt = Date()
         initialized = false
         let spec = AgentHelperProcess.agentCLI(source, arguments: ["app-server", "proxy"], directory: source.root)
-        guard let channel = try? CodexDaemonChannel(spec) else { return }
+        guard let channel = try? connect(spec) else { return }
         self.channel = channel
         channel.onNotification = { [weak self] method, params in self?.handle(method, params) }
         channel.onClose = { [weak self, weak channel] in
             guard let self, self.channel === channel else { return }
             self.channel = nil
-            if !self.initialized { self.failures += 1 }
+            guard self.initialized else { self.failures += 1; return }
+            // 用着的连接断了（后台进程重启、Codex 升级）：马上重连，别等下一个 Codex 界面。
+            // 重连后按惯例补查，已经在跑的会话重新对上 pane。
+            self.lastAttempt = .distantPast
+            if !self.library.codexPaneIDs.isEmpty { self.connectIfNeeded() }
         }
         // 握手卡住（`proxy` 起了却没有回应）也要断开，否则永远不再重试。
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self, weak channel] in
@@ -105,9 +144,7 @@ final class CodexSessionRouter {
             self.failures = 0
             channel.notify("initialized")
             // 连上之前就在跑的会话：广播错过了，挨个补查。
-            channel.request("thread/loaded/list") { [weak self] loaded in
-                for id in (loaded?["data"] as? [String]) ?? [] { self?.lookUp(id) }
-            }
+            self.catchUp(on: channel)
         }
     }
 

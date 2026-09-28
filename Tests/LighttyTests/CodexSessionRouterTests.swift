@@ -1,4 +1,5 @@
 import XCTest
+import Testing
 import LighttyCore
 @testable import lightty
 
@@ -110,5 +111,71 @@ final class CodexSessionRouterTests: XCTestCase {
         XCTAssertEqual(try decoder.next(), .text(Data(#"{"b":2}"#.utf8)))
         decoder.append(Data([0x88, 0]))
         XCTAssertEqual(try decoder.next(), .close)
+    }
+}
+
+/// 旁听连接的替身。`dead` 模拟后台进程已经换过：`proxy` 读不到结尾、不退出，
+/// 直到下一次往里写才报错退出（上游 `stdio-to-uds` 的 `try_join!`）。
+private final class FakeDaemonConnection: CodexDaemonConnection {
+    var onNotification: ((String, [String: Any]) -> Void)?
+    var onClose: (() -> Void)?
+    var dead = false
+    private(set) var requests: [String] = []
+    private var closed = false
+    private let loaded: () -> [String]
+
+    init(loaded: @escaping () -> [String]) { self.loaded = loaded }
+
+    func request(_ method: String, params: [String: Any], completion: @escaping ([String: Any]?) -> Void) {
+        requests.append(method)
+        guard !dead else { completion(nil); close(); return }
+        let result: [String: Any]?
+        switch method {
+        case "initialize": result = [:]
+        case "thread/loaded/list": result = ["data": loaded()]
+        default: result = nil
+        }
+        DispatchQueue.main.async { completion(result) }
+    }
+
+    func notify(_ method: String) {}
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        DispatchQueue.main.async { [onClose] in onClose?() }
+    }
+}
+
+@MainActor
+struct CodexDaemonReconnectTests {
+    /// Codex 升级会让后台进程重启，旁听连接却不会自己断（见 `CodexDaemonChannel`）。回归：
+    /// 0.158 升级后连接一直挂着，之后新开的会话一条广播都收不到，标题回不到 pane 上。
+    /// 平时不探；有新的 Codex 界面起来时往里写一次，死连接就此暴露，马上重连并补查。
+    @Test func aNewCodexPaneExposesADeadConnectionAndReconnects() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record("thread-after-restart")
+        try await f.load([record])
+        let runDirectory = f.root.appendingPathComponent("run")
+        var connections: [FakeDaemonConnection] = []
+        let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
+                                        runDirectory: runDirectory) { _ in
+            let connection = FakeDaemonConnection(loaded: { [record.key.nativeID] })
+            connections.append(connection)
+            return connection
+        }
+        router.start()
+        defer { router.stop() }
+        try await f.wait { connections.first?.requests.contains("thread/loaded/list") == true }
+        let first = try #require(connections.first)
+        let requestsWhileIdle = first.requests.count
+        await awaitMainQueue(hops: 3)
+        #expect(first.requests.count == requestsWhileIdle, "没有新迹象时不往连接里写")
+
+        first.dead = true
+        f.library.associate(.attached(f.association(record)), with: f.pane())
+        try await f.wait { connections.count == 2 && connections[1].requests.contains("thread/loaded/list") }
+        #expect(first.requests.last == "thread/loaded/list", "死连接是被这一次补查写出来的")
     }
 }

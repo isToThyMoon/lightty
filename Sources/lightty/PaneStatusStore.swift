@@ -452,6 +452,12 @@ final class PaneStatusStore {
     /// 兜底状态的事件名。hook 报文永远不会用它，据此区分「hook 在管」还是「兜底在管」。
     static let fallbackEvent = "TerminalSignal"
 
+    /// 当前由兜底在管的 pane。写上路由时兜底状态就被清掉，所以这里都是没有路由的。
+    var fallbackPaneIDs: Set<UUID> {
+        assertMain()
+        return Set(statuses.compactMap { $0.value.event == Self.fallbackEvent ? $0.key : nil })
+    }
+
     /// Codex 的 hook 全失效时（后台进程里的会话没对上 pane，见 hooks 文档「Codex 共享后台进程」），
     /// 用 Codex 写进本 pane 的终端信号推状态：标题（OSC 0）和桌面通知（OSC 9）。
     /// 它们天然属于这个 pane，不会送错。只在这个 pane 没有 hook 在管时生效——

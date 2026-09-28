@@ -1,6 +1,16 @@
 import Foundation
 import Darwin
 
+/// `CodexSessionRouter` 用到的那部分旁听连接。生产环境是 `CodexDaemonChannel`，测试换成替身。
+/// 回调都在主线程。
+protocol CodexDaemonConnection: AnyObject {
+    var onNotification: ((String, [String: Any]) -> Void)? { get set }
+    var onClose: (() -> Void)? { get set }
+    func request(_ method: String, params: [String: Any], completion: @escaping ([String: Any]?) -> Void)
+    func notify(_ method: String)
+    func close()
+}
+
 /// 连到 Codex 共享后台进程（本机 app-server daemon）的一条客户端连接，只为听它的广播。
 ///
 /// 入口是官方的 `codex app-server proxy`：它把标准输入输出原样转到后台进程的控制 socket，
@@ -11,7 +21,12 @@ import Darwin
 ///
 /// 和 `CodexAppServer`（lightty 自己起的独立 app-server，列会话和插件用）不是一回事：
 /// 那个进程里没有别人的会话，这里连的是终端里的 `codex` 共用的那一个。
-final class CodexDaemonChannel: @unchecked Sendable {
+///
+/// 后台进程重启（Codex 升级时就会）不会让这条连接自己断开：`proxy` 里两个方向的转发要
+/// 都结束才退出（上游 `stdio-to-uds` 的 `try_join!`），后台进程那头读到结尾只结束了一个方向，
+/// 另一个还在等标准输入，标准输出也不关——这边读不到结尾，以为还连着。它只在下一次往里写
+/// 时写不进死掉的 socket、报错退出。所以断线要靠写一次才发现，见 `CodexSessionRouter.probe`。
+final class CodexDaemonChannel: CodexDaemonConnection, @unchecked Sendable {
     /// 广播与请求结果都在主线程回调。
     var onNotification: ((String, [String: Any]) -> Void)?
     var onClose: (() -> Void)?

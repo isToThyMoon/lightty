@@ -161,13 +161,16 @@ final class SessionLibrary {
 
     var registeredPaneIDs: Set<UUID> { Set(runtime.inputs.keys) }
 
-    /// 有没有哪个 pane 此刻在跑 Codex（按终端标题认出，或已绑定 / 声明了 Codex 会话）。
-    var hasCodexPane: Bool {
-        runtime.inputs.contains { pane, input in
+    /// 此刻在跑 Codex 的 pane（按终端标题认出，或已绑定 / 声明了 Codex 会话）。
+    var codexPaneIDs: Set<UUID> {
+        Set(runtime.inputs.compactMap { pane, input in
             input.titleAgent == .codex || input.intent.association?.key.agent == .codex
-                || runtime.panes[pane]?.sessionKey?.agent == .codex
-        }
+                || runtime.panes[pane]?.sessionKey?.agent == .codex ? pane : nil
+        })
     }
+
+    /// 正靠终端信号兜底推状态的 Codex pane：它的会话没对上 pane，hook 那条路没接上。
+    var codexFallbackPaneIDs: Set<UUID> { statusStore.fallbackPaneIDs }
 
     func openPaneIDs(for key: AgentSessionKey) -> Set<UUID> {
         Set(runtime.openedPaneIDs.filter { runtime.panes[$0]?.sessionKey == key })
