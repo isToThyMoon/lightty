@@ -224,30 +224,60 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
     func menuNeedsUpdate(_ menu: NSMenu) { rebuildMenu() }
 
+    /// 菜单按「要不要你处理」分组，不按窗口 / 标签页：等你的、跑完没看的在最上面，
+    /// 其次是在跑的，空闲的收进「其他 N 个终端」子菜单。以前按标签页平铺，「标签页 5」
+    /// 这类标题几乎不带信息却占了一半行数，要找的那一行只多一个小圆点，得逐行扫。
+    private enum MenuGroup { case attention, done, running, other }
+
+    private static func group(of state: PaneActivity?) -> MenuGroup {
+        switch state {
+        case .attention: return .attention
+        case .done: return .done
+        case .thinking, .tool: return .running
+        case .idle, nil: return .other
+        }
+    }
+
     private func rebuildMenu() {
         menu.removeAllItems()
 
-        let controllers = AppState.shared?.windowControllers ?? []
-        let multiWindow = controllers.count > 1
-        var listed = 0
+        let store = PaneStatusStore.shared
+        // 窗口 → 标签页 → pane 的自然顺序；在跑的和空闲的保持这个顺序。
+        let panes = (AppState.shared?.windowControllers ?? []).flatMap { $0.tabOverview().flatMap(\.panes) }
+        var grouped: [MenuGroup: [(pane: PaneView, status: PaneStatus?)]] = [:]
+        for pane in panes {
+            let status = store.status(for: pane.dragIdentifier)
+            grouped[Self.group(of: status?.state), default: []].append((pane, status))
+        }
+        // 要你处理的最近变化的在前：刚跑完、刚问你的，最可能是你正要找的。
+        for key in [MenuGroup.attention, .done] {
+            grouped[key]?.sort { ($0.status?.ts ?? .distantPast) > ($1.status?.ts ?? .distantPast) }
+        }
 
-        for (windowIndex, controller) in controllers.enumerated() {
-            let overview = controller.tabOverview().filter { !$0.panes.isEmpty }
-            guard !overview.isEmpty else { continue }
-            if multiWindow { addSectionHeader(L("Window %d", windowIndex + 1)) }
-            // 菜单栏空间更紧：单标签页时仍直接平铺；侧栏则始终保留可折叠容器行。
-            let showTabs = overview.count > 1
-            for entry in overview {
-                if showTabs { addSectionHeader(entry.title) }
-                let indent = (multiWindow ? 1 : 0) + (showTabs ? 1 : 0)
-                for pane in entry.panes {
-                    menu.addItem(paneItem(for: pane, indent: indent))
-                    listed += 1
-                }
+        var listedGroup = false
+        for (key, title) in [(MenuGroup.attention, L("Needs you")), (.done, L("Finished")), (.running, L("In progress"))] {
+            guard let entries = grouped[key], !entries.isEmpty else { continue }
+            // 「待处理」「已完成」是一类，挨着放；和在跑的之间隔一条线。
+            if key == .running && listedGroup { menu.addItem(.separator()) }
+            addSectionHeader(title)
+            for entry in entries { menu.addItem(paneItem(for: entry.pane, status: entry.status)) }
+            listedGroup = true
+        }
+        if let others = grouped[.other], !others.isEmpty {
+            if listedGroup {
+                menu.addItem(.separator())
+                let item = NSMenuItem(title: L("%d other panes", others.count), action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+                for entry in others { submenu.addItem(paneItem(for: entry.pane, status: entry.status)) }
+                item.submenu = submenu
+                menu.addItem(item)
+            } else {
+                // 全都空闲：没有更要紧的，直接列出来，不让人多点一层。
+                for entry in others { menu.addItem(paneItem(for: entry.pane, status: entry.status)) }
             }
         }
 
-        if listed == 0 {
+        if panes.isEmpty {
             let empty = NSMenuItem(title: L("No panes"), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
@@ -284,31 +314,48 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// 沿用 `AppDelegate.makeItem` 的约定：**一律 `keyEquivalent: ""`**。
     /// 壳层菜单只是鼠标 adapter，按键必须直达 surface 交给 libghostty 的
     /// keybind 处理，菜单抢一个就少一个终端快捷键。
-    private func paneItem(for pane: PaneView, indent: Int) -> NSMenuItem {
-        let status = PaneStatusStore.shared.status(for: pane.dragIdentifier)
+    private func paneItem(for pane: PaneView, status: PaneStatus?) -> NSMenuItem {
         let bound = !(pane.boundTask?.name ?? "").isEmpty
         let item = NSMenuItem(title: "", action: #selector(focusPane(_:)), keyEquivalent: "")
         item.target = self
         // 存 UUID 而不是 PaneView：菜单不该让一个已经关掉的 pane 续命
         item.representedObject = pane.dragIdentifier
-        item.image = Self.dot(bound: bound, state: status?.state ?? .idle)
-        item.indentationLevel = indent
+        item.image = Self.marker(bound: bound, state: status?.state)
         item.attributedTitle = paneTitle(for: pane, status: status)
         // 完整信息（工具名 + detail）走 tooltip，与 pane 头同一份文案
         item.toolTip = TabPaneStatusPresentation.detailLine(for: status)
         return item
     }
 
+    /// 行首标记。要你处理的两档换成带色的问号 / 勾（与菜单栏图标同一组符号），比小圆点
+    /// 大一圈、形状也不同，扫一眼就能和别的行分开；其余仍是与侧栏同色的圆点。
+    private static func marker(bound: Bool, state: PaneActivity?) -> NSImage {
+        let name: String
+        switch state {
+        case .attention: name = "questionmark.circle.fill"
+        case .done: name = "checkmark.circle.fill"
+        default: return dot(bound: bound, state: state ?? .idle)
+        }
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            .applying(.init(paletteColors: [ShellStyle.statusColor(for: state ?? .idle)]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return dot(bound: bound, state: state ?? .idle) }
+        image.isTemplate = false
+        return image
+    }
+
+    /// 分组标题已经说了状态，行里不再重复状态词。要你处理的行标题加粗，行尾写多久之前
+    /// ——同时有几条时，靠它分辨哪条是刚才那个。
     private func paneTitle(for pane: PaneView, status: PaneStatus?) -> NSAttributedString {
         let font = NSFont.menuFont(ofSize: 0)
+        let urgent = status?.state == .attention || status?.state == .done
         let name = pane.header.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = NSMutableAttributedString(
-            string: name.isEmpty ? L("Pane") : name, attributes: [.font: font])
-        // 状态文字与侧栏同一套三档文案；上状态色而不是灰，与圆点互为呼应，
-        // 也和后面灰色的任务名拉开层次。
-        if let status, let text = TabPaneStatusPresentation.text(for: status) {
+            string: name.isEmpty ? L("Pane") : name,
+            attributes: [.font: urgent ? NSFont.boldSystemFont(ofSize: font.pointSize) : font])
+        if urgent, let status {
             title.append(NSAttributedString(
-                string: "  \(text)",
+                string: "  \(Self.elapsed(since: status.ts))",
                 attributes: [
                     .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
                     .foregroundColor: ShellStyle.statusColor(for: status.state),
@@ -320,6 +367,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
         }
         return title
+    }
+
+    /// 与会话列表同一种写法（界面语种、短格式）；一分钟内说「刚刚」。
+    private static func elapsed(since date: Date) -> String {
+        guard Date().timeIntervalSince(date) >= 60 else { return L("just now") }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = LanguagePreference.current().locale
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     // MARK: - actions

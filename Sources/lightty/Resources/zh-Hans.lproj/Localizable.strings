@@ -220,6 +220,8 @@
 "Working" = "工作中";
 "Needs you" = "待处理";
 "Finished" = "已完成";
+"In progress" = "进行中";
+"%d other panes" = "其他 %d 个终端";
 
 /* 设置页 */
 "Settings…" = "设置…";

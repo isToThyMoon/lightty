@@ -216,6 +216,8 @@
 "Working" = "Working";
 "Needs you" = "Needs you";
 "Finished" = "Finished";
+"In progress" = "In progress";
+"%d other panes" = "%d other panes";
 
 /* 设置页 */
 "Settings…" = "Settings…";
