@@ -882,6 +882,33 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
 /// 侧栏里可作为合并落点的行（标签页行 + pane 行）。手动拖拽循环（见 ReorderDrag）
 /// 据此给合并目标描边，与任务列表同一套跟手机件。
+/// 行尾 ⋯ / ✕ 浮在标题上（标题铺到行尾、在按钮下渐隐），可标题视图后加入、先被命中：
+/// 点在按钮上半截会落到标题上、再转交给行，变成切换到这一行。显示着的按钮优先。
+private func rowActionHit(_ point: NSPoint, in row: NSView, buttons: [NSButton]) -> NSView? {
+    let local = row.convert(point, from: row.superview)
+    guard row.bounds.contains(local) else { return nil }
+    return buttons.first { !$0.isHidden && $0.frame.contains(local) }
+}
+
+/// 贴行尾的 ✕：点击区一直延伸到行的右缘，字形仍画在原来那个 `listActionSize` 槽位的中心
+/// （槽位右边原本留 `edgeInset`）。只放大可点范围，外观不变。
+private final class RowEdgeActionButton: NSButton {
+    static let edgeInset: CGFloat = 6
+
+    override class var cellClass: AnyClass? {
+        get { Cell.self }
+        set {}
+    }
+
+    private final class Cell: NSButtonCell {
+        override func imageRect(forBounds rect: NSRect) -> NSRect {
+            var slot = rect
+            slot.size.width -= RowEdgeActionButton.edgeInset
+            return super.imageRect(forBounds: slot)
+        }
+    }
+}
+
 private protocol SidebarPaneDropRow: NSView {
     func setDropHighlighted(_ on: Bool)
 }
@@ -956,7 +983,7 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow, NST
     private let disclosureButton = NSButton()
     private let countLabel = NSTextField(labelWithString: "")
     private let menuButton = NSButton()
-    private let closeButton = NSButton()
+    private let closeButton = RowEdgeActionButton()
     private var tracking: NSTrackingArea?
     /// 当前字形的身份；未变化时不重设 image——`NSButtonCell.setImage` 会让整套
     /// 按钮样式失效重算，而 `configure` 每次复用都会走到这里。
@@ -1048,14 +1075,16 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow, NST
                 lessThanOrEqualTo: countLabel.leadingAnchor, constant: -6),
             countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            // 点击区占满行高、✕ 一直到行右缘（见 `RowEdgeActionButton`），字形位置不变。
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
-            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            closeButton.widthAnchor.constraint(
+                equalToConstant: ShellStyle.listActionSize + RowEdgeActionButton.edgeInset),
+            closeButton.heightAnchor.constraint(equalTo: heightAnchor),
             menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
-            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.heightAnchor.constraint(equalTo: heightAnchor),
         ])
         applyFill()
     }
@@ -1242,6 +1271,10 @@ private final class TabRowView: NSView, SidebarPaneDropRow, SidebarHoverRow, NST
     override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
     override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        rowActionHit(point, in: self, buttons: [closeButton, menuButton]) ?? super.hitTest(point)
+    }
+
     /// 与 pane 行同款 click/drag 分流：3pt 内是点击，超出启动标签页拖拽。
     /// 选中因此落在 mouseUp（与 pane 行一致），双击仍直接改名。
     override func mouseDown(with event: NSEvent) {
@@ -1364,7 +1397,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     /// 子行缩进到子级位（26）。文字统一在标记列右侧 5pt 处起。
     private let markerLeading: CGFloat
     private let dotView = NSView()
-    private let closeButton = NSButton()
+    private let closeButton = RowEdgeActionButton()
     private let menuButton = NSButton()
     private var menuButtonWidth: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
@@ -1494,15 +1527,18 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
 
             // 热区用列表行的操作尺寸：两行高的行与第一侧栏同一密度，18pt 点不准。
             // 字形不变，只放大可点范围；分组行同尺寸同右距，⋯ / ✕ 在整列上下对齐。
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            // 点击区还占满行高、✕ 一直到行右缘：以前按钮只有 26pt 高，42pt 的行上下各剩
+            // 8pt、右边剩 6pt 是行本身，点偏一点就成了切换到这个 pane。
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
-            closeButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            closeButton.widthAnchor.constraint(
+                equalToConstant: ShellStyle.listActionSize + RowEdgeActionButton.edgeInset),
+            closeButton.heightAnchor.constraint(equalTo: heightAnchor),
             // ⋯ 槽位只在装了菜单（叶子行）时占宽，普通 pane 行不为它让出标题空间。
             menuButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor),
             menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             menuButtonWidth,
-            menuButton.heightAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.heightAnchor.constraint(equalTo: heightAnchor),
 
             // agent 图标领第二行：第一行本来就挤（标题 + 状态词），第二行只有一条路径，
             // 空着大半。挪下来之后标题多出 14pt，两个图标上下同列，起点仍是一条直线。
@@ -1776,6 +1812,10 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
 
     // MARK: - 拖拽（源 + 落点）
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        rowActionHit(point, in: self, buttons: [closeButton, menuButton]) ?? super.hitTest(point)
+    }
 
     /// 与 PaneHeaderView 同款 click/drag 分流：3pt 内是点击，超出启动 pane 拖拽。
     override func mouseDown(with event: NSEvent) {
