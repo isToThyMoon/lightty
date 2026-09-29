@@ -128,6 +128,27 @@ hook 查不到就静默：宁可暂时没有状态，也不送进别人的 pane�
 会话；已经死了，`proxy` 退出，lightty 马上重连并补查。平时不发任何东西。记录随 lightty 退出撤掉；
 写它的 lightty 或界面进程不在了，记录自动作废。
 
+### Claude agent view 的后台会话
+
+Claude Code 2.1.28x 的 agent view（官方文档 agent-view）：空输入框按 ←、或 `/bg`，把前台会话转到
+后台并打开后台会话列表；列表里回车连上一段，再按 ← 回到列表；shell 里 `claude attach <id>` 直接连上。
+后台会话由 supervisor 托管，跑在它自己的伪终端里，环境继承自第一个拉起 supervisor 的终端（官方只额外
+转发 `PATH` 与服务商设置）。所以哪个 pane 转出来的后台会话，hook 都带着那一个 pane 的
+`LIGHTTY_PANE_ID`；agent view 预建的备用会话一建出来就发 `SessionStart`（`source: startup`）。按继承的
+环境发，会把那个 pane 顶成一段空会话，别的 pane 的后台会话状态也会落到它上面（2026-09-28 实测）。
+
+hook 因此多一条判断（两家都适用）：**agent 所在的终端必须是这个 lightty 开的**——开终端的进程（组长往上
+第一个不在这个终端上的，见 `AgentProcessIdentity.foregroundJobLeader(in:)`）要是 `LIGHTTY_SOCK` 名字
+`<pid>.sock` 里的那个 lightty。pane 里的 agent 往上是 shell、login，再往上就是 lightty；后台会话往上是
+supervisor 的伪终端宿主。不成立就只认路由记录，查不到就隐形。在 pane 里套 tmux 这类自己开终端的程序时，
+里面的 agent 同样按这条隐形——它们的环境同样来自第一个拉起它们的终端，按它发也会发错。
+
+路由记录由 `ClaudeAgentView` 写，它只看两样公开的东西：pane 的终端标题（列表时是 `claude agents`，连上
+一段后台会话时是那段会话的 `<前缀> <会话名>`，和前台会话同一种形状），以及 `claude agents --json`（后台
+会话名字不重复，按名字查到会话 ID）。认出 pane 连上了哪段，就写记录、把 pane 关联到它；换成了另一段对话
+（名字不同）就解绑 pane 上的 handoff 任务，← 转后台再连回来是同一段对话，任务留着。回到列表时撤记录，
+pane 暂不关联会话。前台会话的标题不触发任何查询；转圈时同一个名字只查一次。
+
 ### 兜底：Codex 写进本 pane 的终端信号
 
 以上都失效时（对不上 pane、`proxy` 不可用、hook 没装或没信任），状态退回 Codex 界面自己

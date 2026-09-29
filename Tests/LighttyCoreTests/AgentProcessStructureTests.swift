@@ -10,18 +10,23 @@ final class AgentProcessStructureTests: XCTestCase {
     private typealias Facts = AgentProcessIdentity.TerminalFacts
 
     /// 终端上的前台作业组长：自己一组，且这组正占着终端。
-    private func leader(_ pid: Int32) -> Facts {
-        Facts(pid: pid, processGroup: pid, foregroundGroup: pid, hasControllingTerminal: true)
+    private func leader(_ pid: Int32, on terminal: Int32 = 1) -> Facts {
+        Facts(pid: pid, processGroup: pid, foregroundGroup: pid, terminal: terminal)
     }
 
     /// 组长起的、仍在终端上的子进程（npm 版 codex 的原生进程、包装脚本里的子 shell）。
-    private func onTerminal(_ pid: Int32, group: Int32) -> Facts {
-        Facts(pid: pid, processGroup: group, foregroundGroup: group, hasControllingTerminal: true)
+    private func onTerminal(_ pid: Int32, group: Int32, terminal: Int32 = 1) -> Facts {
+        Facts(pid: pid, processGroup: group, foregroundGroup: group, terminal: terminal)
+    }
+
+    /// 同一终端上的后台组成员（组长上面的 shell、login）：在终端上，但前台组不是自己。
+    private func behind(_ pid: Int32, foreground: Int32, terminal: Int32 = 1) -> Facts {
+        Facts(pid: pid, processGroup: pid, foregroundGroup: foreground, terminal: terminal)
     }
 
     /// 脱离终端的进程：两家的工具子进程、以及它们里面起的子会话。前台组读出来是 0。
     private func offTerminal(_ pid: Int32, group: Int32) -> Facts {
-        Facts(pid: pid, processGroup: group, foregroundGroup: 0, hasControllingTerminal: false)
+        Facts(pid: pid, processGroup: group, foregroundGroup: 0, terminal: nil)
     }
 
     func testTheLeaderAndNestingComeOnlyFromTheTerminalStructure() {
@@ -58,6 +63,36 @@ final class AgentProcessStructureTests: XCTestCase {
             XCTAssertEqual(found.leader?.pid, c.leader, c.name)
             XCTAssertEqual(found.isNested, c.nested, c.name)
         }
+    }
+
+    /// 开 agent 所在终端的是谁：hook 据此判断这个 agent 是不是跑在 lightty 开的 pane 终端里。
+    /// 链取自 2026-09-28 实测（Claude Code 2.1.284，lightty pid 5385）。
+    func testTheTerminalOwnerIsTheFirstProcessOffTheAgentsTerminal() {
+        let lightty = offTerminal(5385, group: 5385)
+        let cases: [(name: String, chain: [Facts], owner: Int32?)] = [
+            // pane 里的 Claude：claude → zsh → login 都在 pane 的终端上，再往上就是 lightty。
+            ("agent in a pane",
+             [leader(9020), behind(5445, foreground: 9020), behind(5427, foreground: 9020), lightty], 5385),
+            // agent view 托管的后台会话：跑在 supervisor 的伪终端（另一个设备号）里，往上是
+            // 没有终端的伪终端宿主、supervisor，最后才绕回 pane 里拉起 supervisor 的那个界面。
+            // 开终端的是伪终端宿主，不是 lightty——继承来的 pane 身份不可信。
+            ("agent view background session",
+             [leader(7242, on: 5), offTerminal(7237, group: 7237), offTerminal(7229, group: 7229),
+              leader(9020), behind(5445, foreground: 9020), lightty], 7237),
+            // debug 版 lightty 从别的终端里启动时自己也有控制终端：比的是「是不是同一个终端」，
+            // 不是「有没有终端」，归属照样是 lightty。
+            ("lightty launched from another terminal",
+             [leader(9020), behind(5445, foreground: 9020), behind(5427, foreground: 9020),
+              behind(5385, foreground: 777, terminal: 9), behind(700, foreground: 777, terminal: 9)], 5385),
+            // 链在走出终端之前就断了（超出上限、祖先已退出）：说不清，交给调用方按「在」处理。
+            ("chain ends on the terminal", [leader(9020), behind(5445, foreground: 9020)], nil),
+            ("no leader", [offTerminal(600, group: 600)], nil),
+        ]
+        for c in cases {
+            XCTAssertEqual(AgentProcessIdentity.foregroundJobLeader(in: c.chain).terminalOwner, c.owner, c.name)
+        }
+        XCTAssertEqual(PaneRuntimeDirectory.ownerPID(ofSocket: "/Users/x/.lightty/run/5385.sock"), 5385)
+        XCTAssertNil(PaneRuntimeDirectory.ownerPID(ofSocket: "/tmp/lt-test.sock"), "测试的临时 socket 不在约定里")
     }
 
     /// 采集层只有一件事会静默出错：`kinfo_proc` 的字段取错位置，读出一堆看似合理的垃圾，

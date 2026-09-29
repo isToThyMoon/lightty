@@ -66,8 +66,10 @@ extension AgentProcessIdentity {
         let processGroup: Int32
         /// `e_tpgid`：控制终端当前的前台进程组；没有控制终端时无意义。
         let foregroundGroup: Int32
-        /// `e_tdev != NODEV`。
-        let hasControllingTerminal: Bool
+        /// `e_tdev`：控制终端的设备号，没有控制终端（`NODEV`）时为 nil。
+        let terminal: Int32?
+
+        var hasControllingTerminal: Bool { terminal != nil }
 
         /// 终端的前台作业组长：自己就是组，且这个组正占着控制终端。
         var isForegroundJobLeader: Bool {
@@ -88,11 +90,18 @@ extension AgentProcessIdentity {
     ///   组长就是最外层的包装进程，监视它退出与监视里面那个原生进程等价。
     ///   `isNested` 表示走到组长之前经过了脱离终端的进程——那就是别的会话从工具里
     ///   拉起的子会话（`claude -p`），它的事件必须丢掉，否则会顶掉主会话的状态与绑定。
-    ///   链上找不到组长（hook 跑在没有 pty 的环境里）时返回 `(nil, false)`：
+    ///   `terminalOwner` 是开这个终端的进程：组长往上第一个不在这个终端上的进程。pane 里的
+    ///   agent 往上是 shell、login，都在 pane 的终端上，再往上就是 lightty；Claude supervisor
+    ///   托管的后台会话（agent view）跑在 supervisor 自己的伪终端里，往上是伪终端宿主。
+    ///   链在走出终端之前就断了时为 nil。
+    ///   链上找不到组长（hook 跑在没有 pty 的环境里）时返回 `(nil, false, nil)`：
     ///   **不按嵌套处理**，宁可多报一发状态，也不能把主会话的事件丢了。
-    static func foregroundJobLeader(in chain: [TerminalFacts]) -> (leader: TerminalFacts?, isNested: Bool) {
-        guard let index = chain.firstIndex(where: \.isForegroundJobLeader) else { return (nil, false) }
-        return (chain[index], chain[..<index].contains { !$0.hasControllingTerminal })
+    static func foregroundJobLeader(in chain: [TerminalFacts])
+        -> (leader: TerminalFacts?, isNested: Bool, terminalOwner: Int32?) {
+        guard let index = chain.firstIndex(where: \.isForegroundJobLeader) else { return (nil, false, nil) }
+        let leader = chain[index]
+        return (leader, chain[..<index].contains { !$0.hasControllingTerminal },
+                chain[(index + 1)...].first { $0.terminal != leader.terminal }?.pid)
     }
 
     /// 结构判定的结果：agent 进程的运行时身份（找不到组长时为 nil）＋ 是不是子会话
@@ -100,14 +109,17 @@ extension AgentProcessIdentity {
     public struct Ancestry: Equatable, Sendable {
         public let process: AgentProcessIdentity?
         public let isNested: Bool
+        /// 开 agent 所在终端的进程（见 `foregroundJobLeader(in:)`）。
+        public let terminalOwner: Int32?
         /// 一个都没有，说明 hook 根本不在哪个终端里：典型是 Codex 被系统收养的共享后台进程
         /// （PPID 1、无控制终端）。这时继承来的 `LIGHTTY_PANE_ID` 属于当初拉起后台进程的终端，
         /// 按它发只会发错 pane。
         public let inTerminal: Bool
 
-        public init(process: AgentProcessIdentity?, isNested: Bool, inTerminal: Bool) {
+        public init(process: AgentProcessIdentity?, isNested: Bool, terminalOwner: Int32?, inTerminal: Bool) {
             self.process = process
             self.isNested = isNested
+            self.terminalOwner = terminalOwner
             self.inTerminal = inTerminal
         }
     }
@@ -132,7 +144,7 @@ extension AgentProcessIdentity {
         let chain = terminalChain(startingAt: pid, limit: limit)
         let found = foregroundJobLeader(in: chain)
         return Ancestry(process: found.leader.flatMap { read($0.pid) }, isNested: found.isNested,
-                        inTerminal: chain.contains(where: \.hasControllingTerminal))
+                        terminalOwner: found.terminalOwner, inTerminal: chain.contains(where: \.hasControllingTerminal))
     }
 
     /// `proc_bsdinfo` 里没有控制终端的前台进程组，只能另读一次 `kinfo_proc`。
@@ -146,7 +158,7 @@ extension AgentProcessIdentity {
         let facts = TerminalFacts(
             pid: pid, processGroup: process.e_pgid, foregroundGroup: process.e_tpgid,
             // NODEV 是 `(dev_t)(-1)`，带强制转换的宏 Swift 导不进来
-            hasControllingTerminal: process.e_tdev != dev_t(-1))
+            terminal: process.e_tdev == dev_t(-1) ? nil : process.e_tdev)
         return (facts, process.e_ppid)
     }
 }

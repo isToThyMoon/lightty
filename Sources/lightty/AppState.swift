@@ -21,6 +21,9 @@ final class AppState {
     /// Codex 共享后台进程里的会话 → pane，写成 hook 读得到的路由记录。
     private(set) lazy var codexSessionRouter = CodexSessionRouter(
         library: sessionLibrary, socketPath: sessionLibrary.statusSocketPath.path)
+    /// Claude agent view：pane 正在显示哪段后台会话，写成 hook 读得到的路由记录。
+    private(set) lazy var claudeAgentView = ClaudeAgentView(
+        library: sessionLibrary, taskBindings: taskBindings, socketPath: sessionLibrary.statusSocketPath.path)
 
     /// - Parameter taskFolderChanges: 任务目录变更源，测试注入手动触发的替身；默认是真实监听。
     init(taskDirectory: URL? = nil, sweepStalePanes: Bool = true,

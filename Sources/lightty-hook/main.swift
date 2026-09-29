@@ -183,14 +183,21 @@ let isCodex = agentName == SessionAgent.codex.rawValue
 // 查到就以它为准：pane 来自记录，agent 进程是 pane 里的界面进程。查不到时，父进程链上
 // 一个带终端的进程都没有（被系统收养的后台进程）说明继承的 pane 不可信，隐形。
 //
+// **agent 所在的终端必须是这个 lightty 开的**（两家都适用）：开终端的进程（组长往上第一个
+// 不在这个终端上的，见 `foregroundJobLeader(in:)`）要是 `LIGHTTY_SOCK` 名字里的那个
+// lightty。Claude agent view 的后台会话跑在 supervisor 的伪终端里，环境继承自第一个拉起
+// supervisor 的终端——哪个 pane 转出来的后台会话都带着那一个 pane 的身份，备用会话一建出来
+// 就发 SessionStart。这时同样只认路由记录（lightty 从 pane 的终端标题认出它正显示哪段后台
+// 会话时写下，见 `ClaudeAgentView`），查不到就隐形。
+//
 // paneID 必须解析成 UUID：它既是报文的路由字段，又会拼进 handoff 指针的文件路径。
 // 值来自 lightty 自己，但 hook 是用户配置里的一条命令行，环境变量随时可能被手工
 // 改成别的东西——UUID 解析同时兜住了「路由不认识」和「路径穿越」两种脏值。
 let paneUUID: UUID
 let socketPath: String
 let agentProcess: AgentProcessIdentity?
-if isCodex, let sessionID = string(payload["session_id"]),
-   let route = AgentSessionRoute.read(sessionID: sessionID) {
+let sessionID = string(payload["session_id"])
+if isCodex, let sessionID, let route = AgentSessionRoute.read(sessionID: sessionID) {
     paneUUID = route.pane
     socketPath = route.socket
     agentProcess = route.client
@@ -200,9 +207,20 @@ if isCodex, let sessionID = string(payload["session_id"]),
     else { exit(0) }
     let ancestry = AgentProcessIdentity.ancestry(startingAt: getppid())
     if ancestry.isNested || (isCodex && !ancestry.inTerminal) { exit(0) }
-    paneUUID = inherited
-    socketPath = inheritedSocket
-    agentProcess = ancestry.process
+    // 开终端的进程和 socket 的宿主有一个说不清（链断了、测试用的临时 socket）就按「在」处理。
+    let lightty = PaneRuntimeDirectory.ownerPID(ofSocket: inheritedSocket)
+    let inPaneTerminal = ancestry.terminalOwner == nil || lightty == nil || ancestry.terminalOwner == lightty
+    if inPaneTerminal {
+        paneUUID = inherited
+        socketPath = inheritedSocket
+        agentProcess = ancestry.process
+    } else if let sessionID, let route = AgentSessionRoute.read(sessionID: sessionID) {
+        paneUUID = route.pane
+        socketPath = route.socket
+        agentProcess = route.client
+    } else {
+        exit(0)
+    }
 }
 let paneID = paneUUID.uuidString
 
@@ -214,7 +232,7 @@ let status = PaneStatus(
     ts: Date(),
     state: state,
     agent: agentName,
-    sessionID: string(payload["session_id"]),
+    sessionID: sessionID,
     sourceRoot: sourceRoot,
     sourceConfiguration: agentName.flatMap(SessionAgent.init(rawValue:)).map {
         SessionConfigurationLocation.resolve(agent: $0, environment: environment)

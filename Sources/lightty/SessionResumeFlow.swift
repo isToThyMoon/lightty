@@ -27,7 +27,7 @@ enum SessionResumeFlow {
                 guard let window = controller.window else { return }
                 let alert = AppBranding.makeAlert()
                 alert.messageText = L("This session is already open in another terminal.")
-                alert.informativeText = L("Continue in the original terminal, or exit the Agent there before resuming here. lightty will not stop it or remove its lock.") + "\nPID: \(pid)"
+                alert.informativeText = L("Continue in the original terminal, or exit the Agent there before resuming here. lightty will not stop it or remove its lock.") + (pid.map { "\nPID: \($0)" } ?? "")
                 alert.beginSheetModal(for: window)
             case .unavailable(let error):
                 showError(error, in: controller.window)

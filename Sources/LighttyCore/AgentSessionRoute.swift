@@ -10,7 +10,8 @@ import Darwin
 ///
 /// 所以由 lightty 在知道「会话 X 显示在 pane B、由界面进程 P 承载」的那一刻写下这条记录，
 /// hook 按 `session_id` 读回来，之后发状态、找任务、写注入标记全走原来那条按 pane 的路。
-/// 谁写、何时写见 `CodexSessionRouter`。
+/// 谁写、何时写见 `CodexSessionRouter`；Claude agent view 的后台会话同理（supervisor 的环境来自
+/// 第一个拉起它的终端），见 `ClaudeAgentView`。
 public struct AgentSessionRoute: Codable, Equatable, Sendable {
     public let pane: UUID
     /// 写这条记录的 lightty 实例的状态 socket。后台进程的环境里那一份可能属于别的实例或旧实例。

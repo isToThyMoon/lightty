@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Codex 0.157 的会话跑在共享后台进程里，hook 靠路由记录找回自己的 pane。
         // 在恢复 pane 之前起：恢复出来的 `codex resume` 一连上就能对上。
         AppState.shared.codexSessionRouter.start()
+        AppState.shared.claudeAgentView.start()
         // 会话恢复：上次关窗/退出时的窗口、标签页、pane（含命名、cwd、任务绑定、
         // agent --resume）。没有快照或快照为空才开默认窗口。
         let restored = WorkspaceStore.shared.load().map(WorkspaceRestorer.restore) ?? []
@@ -143,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PaneStatusStore.shared.stop()
         // 本实例写的会话路由记录随实例一起撤掉；断开对共享后台进程的旁听连接。
         AppState.shared.codexSessionRouter.stop()
+        AppState.shared.claudeAgentView.stop()
         // 常驻的 codex app-server：关 stdin，让它自己收尾退出。
         CodexAppServer.shutdownAll()
     }

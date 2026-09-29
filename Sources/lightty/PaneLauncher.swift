@@ -59,7 +59,7 @@ enum TerminalLaunchRefusal {
     /// 会话没有可用的工作目录，得让用户选一个再重新请求。
     case needsWorkingDirectory(message: String)
     /// 会话正开在别的终端里。
-    case occupied(pid: Int32)
+    case occupied(pid: Int32?)
     /// CLI、配置来源或会话身份不可用，拼不出命令。
     case unavailable(Error)
     /// 没有地方放：分屏 / 标签页缺宿主窗口，或宿主窗口在检查期间关掉了。

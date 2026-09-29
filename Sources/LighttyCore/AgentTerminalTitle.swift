@@ -25,13 +25,16 @@ public struct TerminalTitleShape: Equatable, Sendable {
     /// 不是它写的）；Codex 空闲时就是没前缀。以别的符号开头的标题**两家都不认**：那多半是
     /// 上游换了旋转字符，认成闲会把正在跑的回合显示成空闲，不认只是退回 hook。
     public let bareTitleIsSettled: Bool
+    /// 界面停在后台会话列表（Claude 的 agent view）时的整段标题；没有这种界面为 nil。
+    public let agentViewTitle: String?
 
     public init(busyPrefixes: Set<Character>, settledPrefixes: Set<Character>,
-                attentionPrefixes: [String], bareTitleIsSettled: Bool) {
+                attentionPrefixes: [String], bareTitleIsSettled: Bool, agentViewTitle: String? = nil) {
         self.busyPrefixes = busyPrefixes
         self.settledPrefixes = settledPrefixes
         self.attentionPrefixes = attentionPrefixes
         self.bareTitleIsSettled = bareTitleIsSettled
+        self.agentViewTitle = agentViewTitle
     }
 }
 

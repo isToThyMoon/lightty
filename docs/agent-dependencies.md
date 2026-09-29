@@ -37,6 +37,7 @@ lightty 与两家 CLI 的每一处接触点，按功能列出，每项写清两�
 | 判断装没装、版本对不对 | 读 `settings.json` 的 `extraKnownMarketplaces` / `enabledPlugins` | 读 `config.toml` 的 `[marketplaces.lightty]` / `[plugins."lightty@lightty"]` | 文件损坏：显示「无法读取」。版本串带内容哈希，不一致就要求重装（两家都是**拷贝**插件进缓存，改我们的文件不会自动生效） |
 | 插件里的 hook 定义 | `plugins/lightty/hooks/hooks.json`（目录约定） | `plugins/lightty/hooks.json`（清单指路） | 事件表不同：两家共有 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`SessionEnd`；Claude 另有 `PostToolUseFailure`、`Notification`（Claude 的 `Stop` 在用户中断时不触发，这两个是替代信号），Codex 另有 `PermissionRequest`、`Interrupt` |
 | hook 发回的状态 | `lightty-hook` 读 stdin 的 JSON（`hook_event_name`、`session_id`、`cwd`、`tool_name`、`tool_input`、`transcript_path`），经 socket 发给 lightty | 同一个二进制，Codex 沿用 Claude 兼容的载荷 | 任何一步失败静默 exit 0，agent 照跑。字段名变了：状态不更新，不崩 |
+| agent view 的后台会话在哪个 pane | agent view（2.1.28x，官方文档 agent-view）的后台会话跑在 supervisor 自己的伪终端里，环境继承自第一个拉起 supervisor 的终端，hook 带的 pane 身份不可信。hook 按终端归属（开 agent 所在终端的进程是不是 `LIGHTTY_SOCK` 名字里的 lightty）认出它，只认路由记录。记录由 `ClaudeAgentView` 写：pane 的终端标题停在 `claude agents` 是列表，连上一段后台会话时是 `<前缀> <会话名>`，按名字在 `claude agents --json` 里查到会话 ID（后台会话名字不重复） | — | 标题或 `claude agents --json` 的 `name` / `kind` 变了：pane 不再跟着 agent view 切换，后台会话的 hook 静默（不会送错 pane）；前台会话不受影响 |
 | 判断事件来自哪家 | 注册的命令行里就写着：`lightty-hook --agent claude` | `… --agent codex` | 这两份 hooks 文件是我们自己生成的，哪家读哪份是确定的。旧版插件没带这个参数，退回 `transcript_path` 形状 → 环境变量（`HookAgentDetection`，只作兼容）；认不出 agent 字段留空 |
 | 终端标题：Agent 识别、改名信号、Claude 中断补偿 | 终端标题（OSC 0）`<前缀> <会话标题>`：◐ ◑ 忙、✳ 闲；按 Esc 中断即变 ✳，`/rename` 即推送 | 终端标题（OSC 0，`tui.terminal_title` 默认项）：braille 旋转字符 + `线程名 \| 项目名` 忙、无前缀闲、`[ ! ] Action Required` 等处理 | 形状写在 `AgentSpec.terminalTitle`，解析见 `AgentTerminalTitle`。活动状态以 hook 为准；仅 Claude 明确的闲前缀可把 thinking / tool 收回 idle，不覆盖 done / attention。Codex 有 `Interrupt`，hook 在管时标题不改状态；hook 全失效时标题与桌面通知（OSC 9）兜底推状态，见 [hooks 文档](hooks.md#兜底codex-写进本-pane-的终端信号)。格式变了退回 hook，Claude 中断后可能停在「思考中」直到下次提问。Claude 另备有私有 OSC 21337 文字状态，2.1.274 未启用 |
 | 嵌套会话（工具里跑 `claude -p`） | 从 hook 的父进程往上走，到终端的前台作业组长之前经过了**脱离终端**的进程就算子会话，静默退出 | 同左 | 实测两家的工具子进程一律脱离终端（见 `docs/specs/pane-status.md` §2.1），不认进程名；找不到组长时**不按嵌套处理**，宁可多报一发状态。仅 Codex：链上一个带终端的进程都没有（被系统收养的共享后台进程）时静默，继承的 pane 不可信 |
@@ -95,7 +96,7 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 1. hook 载荷字段名、`hookSpecificOutput.additionalContext` 协议、插件目录约定 —— 状态、绑定、注入全没。
 2. `codex app-server` 的方法名与响应形状（官方仍标 experimental）—— Codex 会话列表与改名、插件清单（`plugin/installed`）。app-server 须常驻：它一启动就跑插件同步、git 市场升级检查等启动任务，问一句就关会砍断这些任务，留下孤儿 `git` 和 `~/.codex/.tmp/git-*`。
 3. `@anthropic-ai/claude-agent-sdk` 的 `listSessions` / `renameSession` / `deleteSession` —— Claude 会话列表；版本锁在 `scripts/claude-session-helper/package.json`。
-4. `claude agents --json` 的输出格式 —— 占用一律变成「问不出来」，删除时每次都弹确认。
+4. `claude agents --json` 的输出格式 —— 占用一律变成「问不出来」，删除时每次都弹确认；pane 不再跟着 agent view 切换会话。`pid`、`sessionId` 按官方文档是「有才给」（后台会话的进程被 supervisor 停掉后没有 `pid`），缺一个不算格式变了。
 5. `claude plugin …` / `codex plugin …` 子命令形状 —— hook 装不上，已装的照常工作。
 
 改了只是**功能变弱**的：终端标题的前缀格式（Claude 中断后停在「思考中」、改名延后）、Codex 终端界面的 `originator` 名（0.157 起的终端会话从会话列表消失，pane 标题退回 pane 名）、配置文件的键名（设置页显示不全）、CLI 在 PATH 上的位置（找不到 CLI）。

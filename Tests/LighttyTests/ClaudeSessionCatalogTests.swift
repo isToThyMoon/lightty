@@ -101,7 +101,7 @@ final class ClaudeSessionCatalogTests: XCTestCase {
     /// 于是一段正开着的会话会被当成可以删。
     func testClaudeLiveRegistryDecodesOrRefuses() {
         let id = "01a07a5f-6811-7f12-94c5-dc0f0f92f40a"
-        typealias Row = (pid: Int32, sessionID: String, cwd: String?)
+        typealias Row = (pid: Int32?, sessionID: String?, cwd: String?)
         let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
         let cases: [(name: String, text: String, expected: [Row]?)] = [
             // 正例：pid → 会话，cwd 也要读出来——官方开发包偶尔给不出会话目录，靠这张表补空
@@ -113,11 +113,18 @@ final class ClaudeSessionCatalogTests: XCTestCase {
             ("empty array", "[]", []),
             // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信
             ("missing cwd", "[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]", [(7, id, nil)]),
+            // agent view 的后台会话进程被 supervisor 停掉后仍在等人：没有 pid、照样列出。
+            // 回归：以前一行缺 pid 整张表作废，用了 agent view 占用检测就全变成「说不清」。
+            ("background session without a process", """
+             [{"cwd":"/w","kind":"background","id":"01a07a5f","sessionId":"\(id)","state":"blocked"}]
+             """, [(nil, id, "/w")]),
+            // sessionId 也是「设了才有」：没有的一行对不上任何会话，但不说明格式变了。
+            ("row without session id", "[{\"pid\":9,\"kind\":\"interactive\",\"cwd\":\"/w\"}]", [(9, nil, "/w")]),
             // 反例：八种坏输入都必须是 nil 而非空表
             ("empty", "", nil),
             ("not json", "not json", nil),
             ("object not array", "{\"pid\":1}", nil),
-            ("row without pid", "[{\"cwd\":\"/w\"}]", nil),
+            ("row without pid or session id", "[{\"cwd\":\"/w\"}]", nil),
             ("pid 0", "[{\"pid\":0,\"sessionId\":\"\(id)\"}]", nil),
             ("session id not a uuid", "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]", nil),
             ("pid as string", "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]", nil),
@@ -129,8 +136,8 @@ final class ClaudeSessionCatalogTests: XCTestCase {
                 XCTAssertNil(decoded, c.name)
                 continue
             }
-            let rows = decoded?.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }
-            XCTAssertEqual(rows, expected.map { [String($0.pid), $0.sessionID, $0.cwd ?? "<nil>"] }, c.name)
+            let rows = decoded?.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>", $0.cwd ?? "<nil>"] }
+            XCTAssertEqual(rows, expected.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>", $0.cwd ?? "<nil>"] }, c.name)
         }
     }
 

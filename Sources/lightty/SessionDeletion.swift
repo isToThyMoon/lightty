@@ -97,7 +97,7 @@ enum SessionDeletion {
                        known: [AgentProcessIdentity: AgentSessionKey] = [:]) throws {
         guard provider.source.owns(key) else { throw Failure.invalidSource }
         if case .inUse(let pid) = provider.occupancy(of: key) {
-            throw Failure.occupiedProcess(pid)
+            throw pid.map(Failure.occupiedProcess) ?? .occupied
         }
         do {
             do { try provider.checkDeletable(key, known: known) }

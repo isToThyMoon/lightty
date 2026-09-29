@@ -65,6 +65,14 @@ public enum PaneRuntimeDirectory {
         runDirectory.appendingPathComponent("\(pid).sock")
     }
 
+    /// `socketPath(for:)` 的反向：socket 文件名就是宿主 lightty 的 pid。
+    /// 不是 `<pid>.sock` 形状的路径不归这个约定管，返回 nil。
+    public static func ownerPID(ofSocket path: String) -> pid_t? {
+        let url = URL(fileURLWithPath: path)
+        guard url.pathExtension == "sock" else { return nil }
+        return pid_t(url.deletingPathExtension().lastPathComponent)
+    }
+
     // MARK: - 生命周期
 
     /// 建目录并落 owner.pid。pane 创建时调用；已存在则只刷新 pid。
@@ -119,7 +127,7 @@ public enum PaneRuntimeDirectory {
             at: runDirectory, includingPropertiesForKeys: nil) else { return }
 
         for file in entries where file.pathExtension == "sock" {
-            guard let pid = pid_t(file.deletingPathExtension().lastPathComponent) else {
+            guard let pid = ownerPID(ofSocket: file.path) else {
                 // 不是 <pid>.sock 形状的东西不归我们管，留着
                 continue
             }

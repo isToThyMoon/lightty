@@ -20,7 +20,9 @@ final class HookAgentEndToEndTests: XCTestCase {
         // sun_path 104 字节上限，别用 NSTemporaryDirectory
         let socketDirectory = URL(fileURLWithPath: "/tmp/lightty-agent-\(getpid())")
         try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
-        socketPath = socketDirectory.appendingPathComponent("\(getpid()).sock")
+        // 不用 lightty 的 `<pid>.sock` 命名：这里的 pty 由 `script` 开，按命名比对「开终端的是不是
+        // 这个 lightty」必然不成立。那条规则单独一个用例（`testAgentOutsideLighttysTerminals…`）。
+        socketPath = socketDirectory.appendingPathComponent("hooks.sock")
         store = PaneStatusStore(socketPath: socketPath)
         XCTAssertTrue(store.start(), "store 没能绑定 \(socketPath.path)")
         scratch = FileManager.default.temporaryDirectory.appendingPathComponent("lightty-agent-\(getpid())")
@@ -180,7 +182,7 @@ final class HookAgentEndToEndTests: XCTestCase {
         XCTAssertEqual(reported.status?.agentProcess, client)
     }
 
-    /// 路由记录只给 Codex 用。Claude 的会话哪怕碰上同名记录也照旧按继承的环境走。
+    /// 在 pane 自己的终端里跑的 Claude 不看路由记录，哪怕碰上同名记录也照旧按继承的环境走。
     func testClaudeIgnoresSessionRoutes() throws {
         let pane = UUID(), elsewhere = UUID()
         store.attach(pane)
@@ -192,6 +194,35 @@ final class HookAgentEndToEndTests: XCTestCase {
                          arguments: ["--agent", "claude"], environment: hookEnvironment(pane: pane))
         try waitUntil("datagram for the inherited pane") { [store] in store?.status(for: pane) != nil }
         XCTAssertEqual(store.status(for: pane)?.sessionID, session)
+    }
+
+    /// agent 所在的终端不是这个 lightty 开的：Claude agent view 的后台会话跑在 supervisor 的
+    /// 伪终端里，环境继承自第一个拉起 supervisor 的终端（2026-09-28 实测：新 pane 里转出来的
+    /// 后台会话、预建的备用会话，都带着终端 16 的 pane 身份）。这里 socket 按 lightty 的约定
+    /// 以测试进程命名，pty 却由 `script` 开，正是这个形状：没有路由记录就不发，有就只按记录送。
+    func testAgentOutsideLighttysTerminalsFollowsOnlyItsRoute() throws {
+        let lighttySocket = socketPath.deletingLastPathComponent().appendingPathComponent("\(getpid()).sock")
+        let lightty = PaneStatusStore(socketPath: lighttySocket)
+        XCTAssertTrue(lightty.start())
+        defer { lightty.stop() }
+        let inherited = UUID(), shown = UUID(), session = UUID().uuidString
+        lightty.attach(inherited)
+        lightty.attach(shown)
+        defer { lightty.detach(inherited); lightty.detach(shown) }
+        let env = ["LIGHTTY_PANE_ID": inherited.uuidString, "LIGHTTY_SOCK": lighttySocket.path, "PATH": "/usr/bin:/bin"]
+        let payload = #"{"hook_event_name":"UserPromptSubmit","session_id":"\#(session)","cwd":"/tmp"}"#
+
+        try launcher.run(payload: payload, arguments: ["--agent", "claude"], environment: env)
+        // hook 退出前就发完了；真发了的话，这段时间足够它到达
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(lightty.status(for: inherited), "继承来的 pane 身份不可信")
+
+        try AgentSessionRoute(pane: shown, socket: lighttySocket.path, client: nil).write(sessionID: session)
+        defer { AgentSessionRoute.remove(sessionID: session) }
+        try launcher.run(payload: payload, arguments: ["--agent", "claude"], environment: env)
+        try waitUntil("datagram for the pane showing the session") { lightty.status(for: shown) != nil }
+        XCTAssertEqual(lightty.status(for: shown)?.sessionID, session)
+        XCTAssertNil(lightty.status(for: inherited))
     }
 
     /// 主会话工具里拉起的子会话（组长 → 脱离终端的工具 shell → hook）不发状态，

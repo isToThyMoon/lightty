@@ -115,6 +115,9 @@ final class SessionLibrary {
         else { hydrateAssociatedSessions() }
     }
 
+    /// 每一条终端标题的旁听者（`ClaudeAgentView`）：它从标题里认出 pane 正在显示哪段会话。
+    var terminalTitleObserver: ((UUID, String) -> Void)?
+
     /// 每个 pane 上次从终端标题里读到的会话标题，只用来判断有没有变。
     private var terminalTitleNames: [UUID: String] = [:]
 
@@ -215,6 +218,7 @@ final class SessionLibrary {
     /// 这里只是把「什么时候该重读」提前到改名那一刻。
     func noteTerminalTitle(_ title: String, in id: UUID) {
         guard runtime.inputs[id] != nil else { return }
+        terminalTitleObserver?(id, title)
         let registered = statusStore.status(for: id)?.agent.flatMap(SessionAgent.init(rawValue:))
         let agent = registered ?? runtime.inputs[id]?.titleAgent
             ?? SessionAgent.allCases.first { AgentTerminalTitle.parse(title, shape: $0.spec.terminalTitle)?.recognizedByPrefix == true }

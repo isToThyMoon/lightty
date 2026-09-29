@@ -34,7 +34,8 @@ protocol AgentSessionProvider: SessionCatalogProvider {
 /// （`codex agents` 要先连上一个共用的后台服务，而 lightty 是直接在终端里跑 codex），
 /// 所以它恒为 `.unknown`，由 codex 自己的写锁在删除时拒绝。
 enum SessionOccupancy {
-    enum Result: Equatable { case inUse(pid: Int32), unknown }
+    /// `inUse` 的 pid 可能不知道：agent view 的后台会话进程被停掉后仍算在用。
+    enum Result: Equatable { case inUse(pid: Int32?), unknown }
 }
 
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。

@@ -116,20 +116,27 @@ struct ClaudeSessionProvider: AgentSessionProvider {
     /// 问不出来（命令不在、版本旧、输出改格式）就返回 nil：这两样都是锦上添花。
     func observeLiveSessions() -> LiveSessionObservation? {
         guard let live = Self.liveSessions(executable: source.executable, root: source.root.path) else { return nil }
+        let identified = live.compactMap { row in row.sessionID.map { (id: $0, row: row) } }
         return LiveSessionObservation(
-            processes: Dictionary(grouping: live, by: \.sessionID).mapValues { rows in
-                Set(rows.compactMap { AgentProcessIdentity.read($0.pid) })
+            processes: Dictionary(grouping: identified, by: \.id).mapValues { rows in
+                Set(rows.compactMap { $0.row.pid.flatMap(AgentProcessIdentity.read) })
             },
-            workingDirectories: Dictionary(live.compactMap { row in
-                row.cwd.map { (row.sessionID, $0) }
+            workingDirectories: Dictionary(identified.compactMap { entry in
+                entry.row.cwd.map { (entry.id, $0) }
             }, uniquingKeysWith: { first, _ in first }))
     }
 
-    /// `claude agents --json` 的一行。
+    /// `claude agents --json` 的一行。字段见官方文档 agent-view「Script against agent view」：
+    /// `pid` 只在进程活着时有——agent view 的后台会话被 supervisor 停掉进程后，只要还在跑
+    /// 或在等人，照样列出来、没有 pid；`sessionId`、`name` 设了才有。
     struct LiveSession: Equatable {
-        let pid: Int32
-        let sessionID: String
+        let pid: Int32?
+        let sessionID: String?
         let cwd: String?
+        /// `background` 是 agent view 托管的后台会话；终端里直接跑的是 `interactive`。
+        var isBackground = false
+        /// 后台会话的名字彼此不重复（重名时 Claude 自动编号），界面进程把它写进终端标题。
+        var name: String? = nil
     }
 
     /// Claude 当前活着的会话。命令失败或输出不认识时返回 nil（「问不出来」），
@@ -148,12 +155,21 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
         var live: [LiveSession] = []
         for row in rows {
-            // 少了 pid 或 sessionId 的一行说明这版输出和我们认识的不是一回事，
-            // 这时整张表都不能信——漏掉一条就等于把「有人在用」读成「没人用」。
-            guard let pid = row["pid"] as? Int, pid > 0, pid <= Int(Int32.max),
-                  let id = row["sessionId"] as? String, UUID(uuidString: id) != nil else { return nil }
+            // pid、sessionId 各自可以缺（见 `LiveSession`），但有就必须是认识的形状；两样都没有、
+            // 或者形状不对，说明这版输出和我们认识的不是一回事，整张表都不能信——
+            // 漏掉一条就等于把「有人在用」读成「没人用」。
+            let pid = row["pid"], id = row["sessionId"]
+            guard pid != nil || id != nil else { return nil }
+            var livePID: Int32?
+            if let pid {
+                guard let value = pid as? Int, value > 0, value <= Int(Int32.max) else { return nil }
+                livePID = Int32(value)
+            }
+            if let id { guard let text = id as? String, UUID(uuidString: text) != nil else { return nil } }
             // cwd 缺了不算致命：它只用来补目录，不参与占用判断。
-            live.append(LiveSession(pid: Int32(pid), sessionID: id, cwd: row["cwd"] as? String))
+            live.append(LiveSession(pid: livePID, sessionID: id as? String, cwd: row["cwd"] as? String,
+                                    isBackground: row["kind"] as? String == "background",
+                                    name: row["name"] as? String))
         }
         return live
     }
@@ -187,7 +203,7 @@ struct ClaudeSessionProvider: AgentSessionProvider {
             throw SessionDeletion.Failure.unknownOccupancy(nil)
         }
         if let row = live.first(where: { $0.sessionID == target.nativeID }) {
-            throw SessionDeletion.Failure.occupiedProcess(row.pid)
+            throw row.pid.map(SessionDeletion.Failure.occupiedProcess) ?? .occupied
         }
         // PID reuse must never inherit the previous process's session identity.
         // Native IDs alone are not enough: custom configuration roots are independent.
