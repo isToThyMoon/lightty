@@ -198,6 +198,11 @@ let socketPath: String
 let agentProcess: AgentProcessIdentity?
 let sessionID = string(payload["session_id"])
 if isCodex, let sessionID, let route = AgentSessionRoute.read(sessionID: sessionID) {
+    // 共享后台进程关一个会话循环就跑 SessionEnd（上游 `shutdown_session_runtime`），而新界面续接同一段
+    // 会话时正是先关掉旧的循环——lightty 重启恢复现场时，旧界面留下的 SessionEnd 会按刚写好的路由
+    // 落进新 pane，把续接的关联清掉（2026-09-29 实测）。它说明不了 pane 里的界面退出了没有；界面退出
+    // 看 shell 的命令结束信号。
+    if event == "SessionEnd" { exit(0) }
     paneUUID = route.pane
     socketPath = route.socket
     agentProcess = route.client

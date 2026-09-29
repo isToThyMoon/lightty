@@ -115,6 +115,10 @@ lightty ──codex app-server proxy──> 共享后台进程（官方入口，
   `thread_title`、`ephemeral` 的临时会话），配上去会挤掉真正会话的记录。
 - 一个界面同一时刻只显示一个会话，写新记录时撤掉它的旧记录。
 
+走路由记录送达的 `SessionEnd` 一律不发：共享后台进程关一个会话循环就跑它（上游 `shutdown_session_runtime`），
+新界面续接同一段会话时正是先关掉旧的循环。lightty 重启恢复现场时，旧界面留下的 `SessionEnd` 会按刚写好的
+路由落进新 pane，把续接的关联清掉。界面退出由 shell 的命令结束信号（OSC 133）判断，不靠它。
+
 对不上的会话（手敲 `codex resume` 的选择器或 `--last`、同目录一秒内起两个）不写记录，
 hook 查不到就静默：宁可暂时没有状态，也不送进别人的 pane。子会话、工具里的 `codex exec`
 从来不在界面上，也不会有记录。

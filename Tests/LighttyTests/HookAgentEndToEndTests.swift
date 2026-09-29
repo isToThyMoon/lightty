@@ -182,6 +182,33 @@ final class HookAgentEndToEndTests: XCTestCase {
         XCTAssertEqual(reported.status?.agentProcess, client)
     }
 
+    /// 共享后台进程关一个会话循环就发 SessionEnd，新界面续接同一段会话时也会先关掉旧的循环。回归：
+    /// lightty 重启恢复现场，旧界面留下的 SessionEnd 按新写的路由落进新 pane，续接的 Codex pane 丢了
+    /// 会话、标题退回 pane 名，现场也跟着存丢。走路由的 SessionEnd 不发，同一路由上的其他事件照常到达。
+    func testRoutedCodexSessionEndDoesNotEndThePanesSession() throws {
+        let pane = UUID()
+        store.attach(pane)
+        defer { store.detach(pane) }
+        let session = UUID().uuidString
+        try AgentSessionRoute(pane: pane, socket: socketPath.path, client: nil).write(sessionID: session)
+        defer { AgentSessionRoute.remove(sessionID: session) }
+        let env = hookEnvironment(pane: UUID())
+        let ended = try launcher.run(
+            .detached, payload: #"{"hook_event_name":"SessionEnd","session_id":"\#(session)","cwd":"/tmp"}"#,
+            arguments: ["--agent", "codex"], environment: env)
+        try waitUntil("orphan shell exits") { kill(ended.hookParent, 0) != 0 }
+        // hook 退出前就发完了；真发了的话，这段时间足够它到达
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(store.status(for: pane))
+
+        let prompted = try launcher.run(
+            .detached, payload: #"{"hook_event_name":"UserPromptSubmit","session_id":"\#(session)","cwd":"/tmp"}"#,
+            arguments: ["--agent", "codex"], environment: env)
+        try waitUntil("datagram through the route") { [store] in store?.status(for: pane) != nil }
+        try waitUntil("orphan shell exits") { kill(prompted.hookParent, 0) != 0 }
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+    }
+
     /// 在 pane 自己的终端里跑的 Claude 不看路由记录，哪怕碰上同名记录也照旧按继承的环境走。
     func testClaudeIgnoresSessionRoutes() throws {
         let pane = UUID(), elsewhere = UUID()
