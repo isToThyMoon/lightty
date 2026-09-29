@@ -112,7 +112,7 @@ final class ClaudeSessionCatalogTests: XCTestCase {
             // 空表是合法的「一个都没在跑」
             ("empty array", "[]", []),
             // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信
-            ("missing cwd", "[{\"pid\":7,\"sessionId\":\"\(id)\",\"status\":\"idle\"}]", [(7, id, nil)]),
+            ("missing cwd", "[{\"pid\":7,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", [(7, id, nil)]),
             // agent view 的后台会话进程被 supervisor 停掉后仍在等人：没有 pid、照样列出。
             // 回归：以前一行缺 pid 整张表作废，用了 agent view 占用检测就全变成「说不清」。
             ("background session without a process", """
@@ -120,15 +120,20 @@ final class ClaudeSessionCatalogTests: XCTestCase {
              """, [(nil, id, "/w")]),
             // sessionId 也是「设了才有」：没有的一行对不上任何会话，但不说明格式变了。
             ("row without session id", "[{\"pid\":9,\"kind\":\"interactive\",\"cwd\":\"/w\"}]", [(9, nil, "/w")]),
-            // 反例：八种坏输入都必须是 nil 而非空表
+            // 两样都没有的一行跳过，不连累整张表。
+            ("row with neither", """
+             [{"cwd":"/w","kind":"background","state":"working"},{"pid":3,"kind":"interactive","sessionId":"\(id)"}]
+             """, [(3, id, nil)]),
+            // 反例：坏输入都必须是 nil 而非空表
             ("empty", "", nil),
             ("not json", "not json", nil),
             ("object not array", "{\"pid\":1}", nil),
-            ("row without pid or session id", "[{\"cwd\":\"/w\"}]", nil),
-            ("pid 0", "[{\"pid\":0,\"sessionId\":\"\(id)\"}]", nil),
-            ("session id not a uuid", "[{\"pid\":1,\"sessionId\":\"not-a-uuid\"}]", nil),
-            ("pid as string", "[{\"pid\":\"1\",\"sessionId\":\"\(id)\"}]", nil),
-            ("one good row beside a bad one", "[{\"pid\":1,\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]", nil),
+            ("row without kind", "[{\"pid\":1,\"sessionId\":\"\(id)\"}]", nil),
+            ("pid 0", "[{\"pid\":0,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", nil),
+            ("session id not a uuid", "[{\"pid\":1,\"kind\":\"interactive\",\"sessionId\":\"not-a-uuid\"}]", nil),
+            ("pid as string", "[{\"pid\":\"1\",\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", nil),
+            ("one good row beside a bad one",
+             "[{\"pid\":1,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]", nil),
         ]
         for c in cases {
             let decoded = ClaudeSessionProvider.decodeLiveSessions(Data(c.text.utf8))

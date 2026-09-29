@@ -116,6 +116,7 @@ final class SessionLibrary {
     }
 
     /// 每一条终端标题的旁听者（`ClaudeAgentView`）：它从标题里认出 pane 正在显示哪段会话。
+    /// 在这里处理完标题之后才调用。
     var terminalTitleObserver: ((UUID, String) -> Void)?
 
     /// 每个 pane 上次从终端标题里读到的会话标题，只用来判断有没有变。
@@ -218,7 +219,8 @@ final class SessionLibrary {
     /// 这里只是把「什么时候该重读」提前到改名那一刻。
     func noteTerminalTitle(_ title: String, in id: UUID) {
         guard runtime.inputs[id] != nil else { return }
-        terminalTitleObserver?(id, title)
+        // 旁听者在这里处理完之后才听到：它会改这个 pane 的关联，不能插在处理中途。
+        defer { terminalTitleObserver?(id, title) }
         let registered = statusStore.status(for: id)?.agent.flatMap(SessionAgent.init(rawValue:))
         let agent = registered ?? runtime.inputs[id]?.titleAgent
             ?? SessionAgent.allCases.first { AgentTerminalTitle.parse(title, shape: $0.spec.terminalTitle)?.recognizedByPrefix == true }

@@ -155,17 +155,19 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
         var live: [LiveSession] = []
         for row in rows {
-            // pid、sessionId 各自可以缺（见 `LiveSession`），但有就必须是认识的形状；两样都没有、
-            // 或者形状不对，说明这版输出和我们认识的不是一回事，整张表都不能信——
+            // 官方文档里每行都有 `kind`；pid、sessionId 各自可以缺（见 `LiveSession`），但有就必须是
+            // 认识的形状。没有 `kind` 或形状不对，说明这版输出和我们认识的不是一回事，整张表都不能信——
             // 漏掉一条就等于把「有人在用」读成「没人用」。
+            guard row["kind"] is String else { return nil }
             let pid = row["pid"], id = row["sessionId"]
-            guard pid != nil || id != nil else { return nil }
             var livePID: Int32?
             if let pid {
                 guard let value = pid as? Int, value > 0, value <= Int(Int32.max) else { return nil }
                 livePID = Int32(value)
             }
             if let id { guard let text = id as? String, UUID(uuidString: text) != nil else { return nil } }
+            // 两样都没有的一行对不上任何会话，也没有进程可看。
+            guard livePID != nil || id != nil else { continue }
             // cwd 缺了不算致命：它只用来补目录，不参与占用判断。
             live.append(LiveSession(pid: livePID, sessionID: id as? String, cwd: row["cwd"] as? String,
                                     isBackground: row["kind"] as? String == "background",

@@ -15,19 +15,35 @@ import LighttyCore
 /// 查到就写路由记录（hook 从此把那段会话的状态送进这个 pane）、把 pane 关联到它；换成了另一段
 /// 对话就解绑 pane 上的 handoff 任务——任务跟的是原来那段对话。
 ///
-/// 全 app 只有这里知道 agent view。
+/// 跟不跟只由标题决定：见过列表标题之后的前缀标题才算连着后台会话，前台会话（装没装 hook 都一样）
+/// 的标题从不触发查询。shell 里直接 `claude attach <id>` 连上的，那一段标题和前台会话分不开，
+/// 要等第一次按 ← 回到列表之后才开始跟。
+///
+/// 全 app 只有这里据 agent view 行动；`ClaudeSessionProvider` 只把官方输出里的 `kind`、`name` 读出来。
 final class ClaudeAgentView {
     /// 一个 pane 在 agent view 里的样子。只记在跑 Claude 的 pane。
     private struct Display {
-        /// 标题停在后台会话列表上
-        var inList = false
+        enum Mode {
+            /// 前台会话：标题是它自己的，只记下对话名
+            case foreground
+            /// 停在后台会话列表上
+            case list
+            /// 从列表连上了一段后台会话（列表本身不写带前缀的标题，所以列表之后的前缀标题就是连上了）
+            case attached
+        }
+        var mode = Mode.foreground
         /// 已写路由记录的后台会话 ID
         var shown: String?
-        /// 最近一次按名字查过的会话名：转圈时标题每秒都在变，同一个名字只查一次
+        /// 最近一次按名字查的会话名：转圈时标题每秒都在变，同一个名字只查一次
         var lookedUp: String?
-        /// 这个 pane 上一段对话的名字（进列表之前最后一个标题正文），判断换没换对话
+        /// 上次按 `lookedUp` 没查到的时刻：刚派出的会话可能还没进列表，隔一会儿再查
+        var missedAt: Date?
+        /// 这个 pane 上一段对话的名字，判断换没换对话
         var conversation: String?
     }
+
+    /// 没查到的名字隔多久再查：`claude agents --json` 要起一个进程，转圈的标题每秒一条。
+    private static let retryInterval: TimeInterval = 10
 
     typealias LiveSessions = (SessionCatalogSource) -> [ClaudeSessionProvider.LiveSession]?
 
@@ -74,26 +90,32 @@ final class ClaudeAgentView {
         guard let parsed = AgentTerminalTitle.parse(title, shape: shape), parsed.recognizedByPrefix,
               !parsed.body.isEmpty else { return }
         var display = displays[pane] ?? Display()
-        // 前台会话自己的标题：记下对话名，别的都不做——绝大多数标题走这里，不查任何东西。
-        let followsBackground = display.inList || display.shown != nil || library.paneState(for: pane)?.sessionKey == nil
-        guard followsBackground else {
+        switch display.mode {
+        case .foreground:
+            // 前台会话自己的标题：记下对话名，别的都不做——绝大多数标题走这里，不查任何东西。
             display.conversation = parsed.body
             displays[pane] = display
             return
+        case .list:
+            display.mode = .attached
+        case .attached:
+            break
         }
-        guard display.lookedUp != parsed.body else { return }
+        let retry = display.missedAt.map { Date().timeIntervalSince($0) >= Self.retryInterval } ?? false
+        guard display.lookedUp != parsed.body || retry else { displays[pane] = display; return }
         display.lookedUp = parsed.body
+        display.missedAt = nil
         displays[pane] = display
         lookUp(parsed.body, for: pane)
     }
 
     /// 列表：这个 pane 不再显示哪段会话。前台会话被 ← 转到后台时也走这里——它还在跑，只是
-    /// 不在这个 pane 上了。
+    /// 不在这个 pane 上了。还没回来的查询跟着作废（`lookedUp` 清掉）。
     private func enterList(_ pane: UUID) {
         var display = displays[pane] ?? Display()
-        guard !display.inList else { return }
-        display.inList = true
+        display.mode = .list
         display.lookedUp = nil
+        display.missedAt = nil
         if let shown = display.shown { AgentSessionRoute.remove(sessionID: shown, in: runDirectory) }
         display.shown = nil
         displays[pane] = display
@@ -106,9 +128,12 @@ final class ClaudeAgentView {
         queryQueue.async { [weak self] in
             let rows = liveSessions(source)
             DispatchQueue.main.async {
-                guard let self, self.displays[pane]?.lookedUp == name,
-                      let row = rows?.first(where: { $0.isBackground && $0.name == name }),
-                      let session = row.sessionID else { return }
+                guard let self, self.displays[pane]?.lookedUp == name else { return }
+                guard let row = rows?.first(where: { $0.isBackground && $0.name == name }),
+                      let session = row.sessionID else {
+                    self.displays[pane]?.missedAt = Date()
+                    return
+                }
                 self.show(session, named: name, directory: row.cwd, source: source, in: pane)
             }
         }
@@ -116,11 +141,17 @@ final class ClaudeAgentView {
 
     private func show(_ session: String, named name: String, directory: String?,
                       source: SessionCatalogSource, in pane: UUID) {
-        guard var display = displays[pane], display.shown != session else { return }
+        guard var display = displays[pane] else { return }
+        guard display.shown != session else {
+            // 连着的会话改了名（`/rename`、自动起名）：还是同一段对话。
+            displays[pane]?.conversation = name
+            return
+        }
         if let previous = display.shown { AgentSessionRoute.remove(sessionID: previous, in: runDirectory) }
-        // 一段会话的状态只能送进一个 pane：两个 pane 连着同一段时，后连上的为准。
+        // 一段会话的状态只能送进一个 pane：两个 pane 连着同一段时，后连上的为准，前一个不再关联它。
         for (other, candidate) in displays where other != pane && candidate.shown == session {
             displays[other]?.shown = nil
+            if library.paneState(for: other)?.sessionKey?.nativeID == session { library.associate(.none, with: other) }
         }
         do {
             try AgentSessionRoute(pane: pane, socket: socketPath, client: nil)
@@ -131,7 +162,6 @@ final class ClaudeAgentView {
         }
         // ← 转到后台再连回来是同一段对话（名字随会话带走），任务留着；换成别的对话才解绑。
         if display.conversation != name, taskBindings.task(for: pane) != nil { taskBindings.unbind(pane) }
-        display.inList = false
         display.shown = session
         display.conversation = name
         displays[pane] = display

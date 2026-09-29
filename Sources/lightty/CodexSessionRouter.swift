@@ -57,7 +57,6 @@ final class CodexSessionRouter {
     }
 
     func start() {
-        AgentSessionRoute.sweepStale(in: runDirectory)
         NotificationCenter.default.addObserver(self, selector: #selector(libraryDidChange),
                                                name: .lighttySessionLibraryDidChange, object: library)
         connectIfNeeded()
@@ -98,12 +97,18 @@ final class CodexSessionRouter {
     private func probe() {
         guard let channel, initialized else { return }
         lastProbe = Date()
-        catchUp(on: channel)
+        catchUp(on: channel, retryingUnresolved: false)
     }
 
-    private func catchUp(on channel: CodexDaemonConnection) {
+    /// 补查后台进程里已加载的会话。`retryingUnresolved` 为 false 时跳过试过、没对上的：
+    /// 后台进程里总挂着界面早已退出的残留会话，每次探测都重对一遍就是每次一轮全量进程扫描；
+    /// 它们真有了新动静，状态广播会再触发 `lookUp`。
+    private func catchUp(on channel: CodexDaemonConnection, retryingUnresolved: Bool = true) {
         channel.request("thread/loaded/list", params: [:]) { [weak self] loaded in
-            for id in (loaded?["data"] as? [String]) ?? [] { self?.lookUp(id) }
+            guard let self else { return }
+            for id in (loaded?["data"] as? [String]) ?? [] where retryingUnresolved || self.unresolved[id] == nil {
+                self.lookUp(id)
+            }
         }
     }
 
