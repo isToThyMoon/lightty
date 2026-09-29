@@ -138,7 +138,7 @@ enum ShellStyle {
     static let browserDetailBackground = raisedSurface
     /// 浮卡里连续几行共用的凹托（Sessions 的已打开会话）：比 `raisedSurface` 暗一档，
     /// 明暗两套都是往下沉，hover / 选中仍按原色画在托里。取壳层底色，读作「卡上挖出的一块」。
-    static let trayFill = NSColor.shellDynamic(light: 0xF6F3F2, dark: 0x26242B)
+    static let trayFill = sidebarBackground
     static let hoverFill = NSColor.shellDynamic(light: 0xF0ECEA, dark: 0x312F36)
     static let selectionFill = NSColor.shellDynamic(light: 0xE9E5E3, dark: 0x3B3841)
     static let sidebarScrollThumb = NSColor.shellDynamic(light: 0xCCC9C8, dark: 0x625F68)

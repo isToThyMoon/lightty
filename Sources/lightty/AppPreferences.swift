@@ -82,6 +82,14 @@ enum LanguagePreference: String, CaseIterable {
     /// 日期等格式化用的地区：与界面文字同一种语言，否则会出现中文界面里的「1 week ago」。
     var locale: Locale { self == .system ? .current : Locale(identifier: rawValue) }
 
+    /// 界面里写「多久之前」的唯一写法：界面语种、短格式。会话列表、启动浮层、菜单栏共用。
+    static func relativeDateFormatter() -> RelativeDateTimeFormatter {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = current().locale
+        formatter.unitsStyle = .short
+        return formatter
+    }
+
     static func set(_ value: LanguagePreference, in defaults: PreferenceStorage = FilePreferences.shared) {
         defaults.set(value.rawValue, forKey: defaultsKey)
         bundle = resolveBundle(for: value)

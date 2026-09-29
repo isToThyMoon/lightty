@@ -445,10 +445,9 @@ final class LaunchComposerController: NSViewController, NSTextFieldDelegate, NSP
         title.maximumNumberOfLines = 3
 
         // 与会话行同一种写法（语种、短格式），浮层里的时间和点的那一行对得上。
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = LanguagePreference.current().locale
-        formatter.unitsStyle = .short
-        let updated = session.updatedAt.map { formatter.localizedString(for: $0, relativeTo: Date()) }
+        let updated = session.updatedAt.map {
+            LanguagePreference.relativeDateFormatter().localizedString(for: $0, relativeTo: Date())
+        }
         let meta = NSTextField(labelWithString: [session.key.agent.sourceName, updated]
             .compactMap { $0 }.joined(separator: " · "))
         meta.font = .systemFont(ofSize: 11)

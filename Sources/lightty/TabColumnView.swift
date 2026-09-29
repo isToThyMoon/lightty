@@ -880,8 +880,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
 }
 
-/// 侧栏里可作为合并落点的行（标签页行 + pane 行）。手动拖拽循环（见 ReorderDrag）
-/// 据此给合并目标描边，与任务列表同一套跟手机件。
 /// 行尾 ⋯ / ✕ 浮在标题上（标题铺到行尾、在按钮下渐隐），可标题视图后加入、先被命中：
 /// 点在按钮上半截会落到标题上、再转交给行，变成切换到这一行。显示着的按钮优先。
 private func rowActionHit(_ point: NSPoint, in row: NSView, buttons: [NSButton]) -> NSView? {
@@ -909,6 +907,8 @@ private final class RowEdgeActionButton: NSButton {
     }
 }
 
+/// 侧栏里可作为合并落点的行（标签页行 + pane 行）。手动拖拽循环（见 ReorderDrag）
+/// 据此给合并目标描边，与任务列表同一套跟手机件。
 private protocol SidebarPaneDropRow: NSView {
     func setDropHighlighted(_ on: Bool)
 }

@@ -143,7 +143,6 @@
 
 /* agent 状态：菜单栏与通知 */
 "Pane status" = "Pane 状态";
-"Window %d" = "窗口 %d";
 "No panes" = "没有 pane";
 "Mark All as Read" = "全部标记为已读";
 "Show in Menu Bar" = "在菜单栏显示";

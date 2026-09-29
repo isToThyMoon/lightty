@@ -369,13 +369,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return title
     }
 
-    /// 与会话列表同一种写法（界面语种、短格式）；一分钟内说「刚刚」。
+    /// 与会话列表同一种写法；一分钟内说「刚刚」。
     private static func elapsed(since date: Date) -> String {
         guard Date().timeIntervalSince(date) >= 60 else { return L("just now") }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = LanguagePreference.current().locale
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return LanguagePreference.relativeDateFormatter().localizedString(for: date, relativeTo: Date())
     }
 
     // MARK: - actions

@@ -45,7 +45,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
     private var sortByTitle = false
     private var moreHeight: NSLayoutConstraint!
     private var renderedProjectNames: [UUID: String] = [:]
-    private let relativeDateFormatter = RelativeDateTimeFormatter()
+    private var relativeDateFormatter = LanguagePreference.relativeDateFormatter()
     private var sectionDisclosureRequested = false
     private var synchronizingSelection = false
     private var relativeDateTimer: Timer?
@@ -306,8 +306,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
         renderedState = state
 
         if previous?.language != state.language {
-            relativeDateFormatter.locale = LanguagePreference.current().locale
-            relativeDateFormatter.unitsStyle = .short
+            relativeDateFormatter = LanguagePreference.relativeDateFormatter()
         }
         // 表格：行的增删由稳定标识差异驱动；项目名或语种变了要让已建单元格重排一遍，
         // 因为这两样都参与单元格内容却不在 `Row` 里。
@@ -331,8 +330,7 @@ final class SessionsSidebarContent: NSView, NSTableViewDataSource, NSTableViewDe
             }
             table.trayRuns = rows.indices.reduce(into: []) { runs, index in
                 switch trayPosition(at: index) {
-                case .single: runs.append(index...index)
-                case .top: runs.append(index...index)
+                case .single, .top: runs.append(index...index)
                 case .middle, .bottom: if let last = runs.popLast() { runs.append(last.lowerBound...index) }
                 case .none: break
                 }

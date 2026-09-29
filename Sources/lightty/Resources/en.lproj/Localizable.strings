@@ -143,7 +143,6 @@
 
 /* agent 状态：菜单栏与通知 */
 "Pane status" = "Pane status";
-"Window %d" = "Window %d";
 "No panes" = "No panes";
 "Mark All as Read" = "Mark All as Read";
 "Show in Menu Bar" = "Show in Menu Bar";
