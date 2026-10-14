@@ -19,6 +19,11 @@ final class SessionLibrary {
     var statusSocketPath: URL { statusStore.socketPath }
     private var runtime = SessionRuntime()
     private var recordIndex: [AgentSessionKey: AgentSession] = [:]
+    /// pane 关联着、列表却不列的会话（见 `SessionCatalogProvider.unlistedSession`）。只给 pane 派生
+    /// 标题，不进 `records`：会话列表里，它已经由接替它的那段会话代表了。
+    private var unlisted: [AgentSessionKey: AgentSession] = [:]
+    /// 这一轮目录读取里已经按 ID 问过的会话：每轮只问一次，查不到也不反复问。
+    private var unlistedLookups = Set<AgentSessionKey>()
     private var started = false
     private var pendingChange = SessionChange()
     private lazy var notifications = Coalescer(.nextTick) { [weak self] in
@@ -364,6 +369,7 @@ final class SessionLibrary {
         generation += 1
         cancellation = CatalogCancellation()
         cursors = [:]; seen = [:]; visited = [:]
+        unlistedLookups = []
         activeRequests = 0
         errors = [:]
         let sources = SessionAgent.allCases.compactMap { source(for: $0) }
@@ -495,7 +501,10 @@ final class SessionLibrary {
     }
 
     private func publish() {
-        let next = Dictionary(records.map { ($0.key, $0) }, uniquingKeysWith: { _, new in new })
+        var next = Dictionary(records.map { ($0.key, $0) }, uniquingKeysWith: { _, new in new })
+        let associated = Set(runtime.panes.values.compactMap(\.sessionKey))
+        unlisted = unlisted.filter { associated.contains($0.key) && next[$0.key] == nil }
+        next.merge(unlisted) { listed, _ in listed }
         let changed = Set(recordIndex.keys).union(next.keys).filter { recordIndex[$0] != next[$0] }
         recordIndex = next
         observeSourceProcesses()
@@ -576,6 +585,31 @@ final class SessionLibrary {
             }
         }
         if activeRequests > 0 { loading = true; publish() }
+        // 整份列表都读完了还找不到 pane 关联的会话：按 ID 问一次。
+        lookUpUnlisted(missing.filter { key in
+            agents.contains(key.agent) && runtime.panes.values.contains { $0.sessionKey == key }
+                && [false, true].allSatisfy { archived in
+                    let query = Query(agent: key.agent, archived: archived)
+                    return seen[query] != nil && cursors[query] == nil
+                }
+        })
+    }
+
+    private func lookUpUnlisted(_ keys: Set<AgentSessionKey>) {
+        guard let token = cancellation else { return }
+        let current = generation
+        for key in keys where unlistedLookups.insert(key).inserted {
+            guard let provider = activeProviders.first(where: { $0.source.agent == key.agent }) else { continue }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                // 补标题是锦上添花：问不出来就还是 pane 名，不报错。
+                let session = try? provider.unlistedSession(key, cancelled: { token.cancelled })
+                DispatchQueue.main.async {
+                    guard let self, self.generation == current, let session else { return }
+                    self.unlisted[key] = session
+                    self.publish()
+                }
+            }
+        }
     }
 
     private func settleMetadataRequests() {

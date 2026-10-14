@@ -9,12 +9,20 @@ final class SessionModelCatalog: CatalogOnlyProvider {
     let pageSize: Int
     private let lock = NSLock()
     private var values: [AgentSession] = []
+    private var hidden: [AgentSession] = []
     private var reads = 0
+    private var lookups = 0
     var records: [AgentSession] {
         get { lock.lock(); defer { lock.unlock() }; return values }
         set { lock.lock(); defer { lock.unlock() }; values = newValue }
     }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
+    /// 列表不列、按 ID 查得到的会话（Claude 藏起已被接替的会话）。
+    var unlisted: [AgentSession] {
+        get { lock.lock(); defer { lock.unlock() }; return hidden }
+        set { lock.lock(); defer { lock.unlock() }; hidden = newValue }
+    }
+    var unlistedRequestCount: Int { lock.lock(); defer { lock.unlock() }; return lookups }
     init(root: URL, pageSize: Int = 100, agent: SessionAgent = .codex) {
         source = .init(agent: agent, root: root, executable: "/bin/echo", configuration: .custom(root.path))
         self.pageSize = pageSize
@@ -27,6 +35,11 @@ final class SessionModelCatalog: CatalogOnlyProvider {
         let page = Array(records.dropFirst(offset).prefix(pageSize))
         let next = offset + page.count
         return .init(sessions: page, nextCursor: next < records.count ? String(next) : nil)
+    }
+    func unlistedSession(_ key: AgentSessionKey, cancelled: () -> Bool) throws -> AgentSession? {
+        lock.lock(); defer { lock.unlock() }
+        lookups += 1
+        return hidden.first { $0.key == key }
     }
 }
 
@@ -210,6 +223,26 @@ struct SessionModelTests {
         f.library.invalidateMetadata(for: target.key)
         try await f.wait { f.library.paneState(for: id)?.session == changed && !f.library.loading }
         #expect(f.catalog.requestCount == 6, "Re-read the target page, then stop before unrelated older pages")
+    }
+
+    /// pane 关联着的会话列表里没有时，读完整份列表后按 ID 再问一次：标题不掉回 pane 名，
+    /// 它也不因此出现在会话列表里（列表里由接替它的那段会话代表）。
+    /// 回归：Claude 把被 ← 转到后台的旧会话（换了会话 ID 接着跑）从 `listSessions` 里藏起来，
+    /// 还关联着它的 pane 标题就成了「终端 83」。
+    @Test func anAssociatedSessionTheCatalogHidesStillTitlesItsPane() async throws {
+        let f = try SessionModelFixture(pageSize: 1)
+        defer { f.close() }
+        let hidden = f.record("hidden", title: "Photo order"), id = f.pane(name: "Terminal 83")
+        f.catalog.unlisted = [hidden]
+        f.catalog.records = [f.record("first"), f.record("second")]
+        f.library.associate(.restoring(f.association(hidden)), with: id)
+        f.library.start()
+        try await f.wait { f.library.paneState(for: id)?.title == "Photo order" && !f.library.loading }
+        #expect(!f.library.records.contains { $0.key == hidden.key })
+        // 别的变化再触发补读时不重复问：一轮目录读取只问一次。
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: f.pane(), record: f.record("first"))
+        await awaitMainQueue(hops: 2)
+        #expect(f.catalog.unlistedRequestCount == 1)
     }
 
     /// 用户自己在终端里敲 `/rename` 不触发任何钩子，Claude 也没有改名订阅接口。

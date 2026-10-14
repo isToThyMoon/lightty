@@ -25,16 +25,32 @@ public struct TerminalTitleShape: Equatable, Sendable {
     /// 不是它写的）；Codex 空闲时就是没前缀。以别的符号开头的标题**两家都不认**：那多半是
     /// 上游换了旋转字符，认成闲会把正在跑的回合显示成空闲，不认只是退回 hook。
     public let bareTitleIsSettled: Bool
-    /// 界面停在后台会话列表（Claude 的 agent view）时的整段标题；没有这种界面为 nil。
+    /// 界面停在后台会话列表（Claude 的 agent view）时标题里必有的那一段；没有这种界面为 nil。
     public let agentViewTitle: String?
+    /// 列表标题里各段之间的分隔：列表还会在 `agentViewTitle` 前后附带别的段（等输入的个数）。
+    public let agentViewSeparator: String?
 
     public init(busyPrefixes: Set<Character>, settledPrefixes: Set<Character>,
-                attentionPrefixes: [String], bareTitleIsSettled: Bool, agentViewTitle: String? = nil) {
+                attentionPrefixes: [String], bareTitleIsSettled: Bool,
+                agentViewTitle: String? = nil, agentViewSeparator: String? = nil) {
         self.busyPrefixes = busyPrefixes
         self.settledPrefixes = settledPrefixes
         self.attentionPrefixes = attentionPrefixes
         self.bareTitleIsSettled = bareTitleIsSettled
         self.agentViewTitle = agentViewTitle
+        self.agentViewSeparator = agentViewSeparator
+    }
+
+    /// 是不是后台会话列表的标题：整段就是 `agentViewTitle`，或按分隔切开后有一段是它。
+    /// 不要求整段相等——列表标题会附带随时变的段，精确匹配漏掉一次，pane 就跟不上了。
+    /// 带会话前缀的标题先当会话标题解析（见 `AgentTerminalTitle.parse`），不走这里。
+    public func isAgentViewList(_ title: String) -> Bool {
+        guard let list = agentViewTitle else { return false }
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        if trimmed == list { return true }
+        guard let separator = agentViewSeparator else { return false }
+        return trimmed.components(separatedBy: separator)
+            .contains { $0.trimmingCharacters(in: .whitespaces) == list }
     }
 }
 

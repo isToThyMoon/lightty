@@ -77,6 +77,11 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         }
         let named = try session([["type": "ai-title", "aiTitle": "okr 内容"]])
         let prompted = try session([["type": "last-prompt", "lastPrompt": "你好"]])
+        // 被 ← 转到后台、换了会话 ID 接着跑的旧会话：官方列表可以不列它，pane 却还关联着它，
+        // 按 ID 读（`getSessionInfo`）仍要拿到标题。回归：这时 pane 标题掉回了「终端 83」。
+        let continued = try session([["type": "ai-title", "aiTitle": "拍照代下单"],
+            ["type": "continued-in", "timestamp": "2026-10-14T09:56:21.721Z",
+             "continuedInSessionId": UUID().uuidString.lowercased()]])
 
         let source = SessionCatalogSource(agent: .claude, root: root, executable: "/missing/claude", configuration: .custom(root.path))
         let provider = ClaudeSessionProvider(source: source, helperDirectory: helper)
@@ -87,6 +92,11 @@ final class ClaudeSessionCatalogTests: XCTestCase {
         XCTAssertTrue(settled.titleSettled)
         XCTAssertEqual(unsettled.title, "你好")
         XCTAssertFalse(unsettled.titleSettled)
+        let moved = try XCTUnwrap(provider.unlistedSession(
+            .init(agent: .claude, sourceRoot: root.path, nativeID: continued), cancelled: { false }))
+        XCTAssertEqual(moved.title, "拍照代下单")
+        XCTAssertNil(try provider.unlistedSession(
+            .init(agent: .claude, sourceRoot: root.path, nativeID: UUID().uuidString.lowercased()), cancelled: { false }))
     }
 
     func testMissingHelperDoesNotFallBackToUserNodeOrPrivateParser() {

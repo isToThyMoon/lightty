@@ -27,6 +27,30 @@ final class AgentTerminalTitleTests: XCTestCase {
         }
     }
 
+    /// agent view 停在后台会话列表时的标题。官方文档 agent-view 写明了两种：
+    /// `claude agents`，以及有会话等输入时的 `2 awaiting input · claude agents`。
+    /// 回归：以前只认前一种，有会话等输入时按 ← 转到后台，pane 永远跟不上新会话。
+    func testClaudeAgentViewListTitlesMatchEveryDocumentedForm() {
+        let shape = SessionAgent.claude.spec.terminalTitle
+        let cases: [(title: String, isList: Bool)] = [
+            ("claude agents", true),
+            ("  claude agents ", true),
+            ("2 awaiting input · claude agents", true),
+            ("1 awaiting input · claude agents", true),
+            // 附带的段换了说法、换了位置也认：这一段才是列表的标志
+            ("claude agents · 3 done", true),
+            // 会话名里碰巧有这几个字不算
+            ("claude agents demo", false),
+            ("✳ claude agents", false),
+            ("my claude agents notes", false),
+            ("", false),
+        ]
+        for c in cases {
+            XCTAssertEqual(shape.isAgentViewList(c.title), c.isList, c.title)
+        }
+        XCTAssertFalse(SessionAgent.codex.spec.terminalTitle.isAgentViewList("claude agents"))
+    }
+
     func testCodexTitlesUseTheSpinnerActionRequiredAndBareShapes() {
         let shape = SessionAgent.codex.spec.terminalTitle
         let cases: [(title: String, expected: AgentTerminalTitle?)] = [

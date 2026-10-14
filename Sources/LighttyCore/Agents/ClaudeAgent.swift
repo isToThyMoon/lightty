@@ -35,12 +35,14 @@ public enum ClaudeAgent {
         // 来源：Claude Code 2.1.274 二进制里渲染标题的组件（搜 `SET_TITLE_AND_ICON` 附近的
         // `["\u25D0","\u25D1"]` 与 `"\u2733"`），无公开文档。上游换了字符只改这里，
         // 解析不出来就退回只靠 hook。
-        // agent view（2.1.28x）：停在后台会话列表时标题是 `claude agents`；连上一段后台会话后
-        // 是那段会话的 `<前缀> <会话名>`，形状同上（2026-09-29 用 `claude attach` 实测）。
+        // agent view：停在后台会话列表时标题是 `claude agents`，有会话等输入时是
+        // `2 awaiting input · claude agents`（官方文档 agent-view 写明了这两种；2.1.295 起实测）；
+        // 连上一段后台会话后是那段会话的 `<前缀> <会话名>`，形状同上（2026-09-29 用 `claude attach` 实测）。
         terminalTitle: TerminalTitleShape(
             busyPrefixes: ["\u{25D0}", "\u{25D1}"],
             settledPrefixes: ["\u{2733}"],
             attentionPrefixes: [],
             bareTitleIsSettled: false,
-            agentViewTitle: "claude agents"))
+            agentViewTitle: "claude agents",
+            agentViewSeparator: " \u{00B7} "))
 }

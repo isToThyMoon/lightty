@@ -1,11 +1,15 @@
 // One bounded page per process. No Agent execution, credentials, or transcript mutations.
 // stdout is a versioned protocol; never forward SDK diagnostics or message bodies.
-import { listSessions } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import { closeSync, existsSync, openSync, readdirSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
-const offset = Number(process.argv[2]);
+// `list-sessions.mjs <offset>` 列一页；`list-sessions.mjs --id <uuid>` 按 ID 读一段，同一种输出。
+// 后者给列表不列的会话用：会话被 ← 转到后台、换了会话 ID 接着跑之后，官方 `listSessions` 把旧的
+// 那段当作已被接替、不再列出，而 pane 可能还关联着它（`getSessionInfo` 仍查得到）。
+const byID = process.argv[2] === '--id' ? process.argv[3] : null;
+const offset = byID === null ? Number(process.argv[2]) : 0;
 const limit = 100;
 const text = (value, max) => typeof value === 'string'
   ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : null;
@@ -87,10 +91,13 @@ function fillMissingDirectories(sessions, root) {
 
 try {
   const root = process.env.CLAUDE_CONFIG_DIR;
-  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= 50000 || !root?.startsWith('/')) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= 50000 || !root?.startsWith('/')
+      || (byID !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(byID ?? ''))) {
     throw new Error('invalid request');
   }
-  const rows = await listSessions({ limit, offset, includeProgrammatic: false });
+  const rows = byID === null
+    ? await listSessions({ limit, offset, includeProgrammatic: false })
+    : [await getSessionInfo(byID)].filter(Boolean);
   const sessions = rows.map(row => ({
     id: row.sessionId,
     title: text(row.customTitle || row.summary, 240) || '',
@@ -101,7 +108,7 @@ try {
   }));
   fillMissingDirectories(sessions, root);
   process.stdout.write(JSON.stringify({ version: 1, sessions,
-    nextCursor: rows.length === limit ? String(offset + limit) : null }));
+    nextCursor: byID === null && rows.length === limit ? String(offset + limit) : null }));
 } catch {
   process.stdout.write(JSON.stringify({ version: 1, error: 'catalog_unavailable' }));
   process.exitCode = 1;

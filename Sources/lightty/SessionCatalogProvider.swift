@@ -31,9 +31,15 @@ protocol SessionCatalogProvider {
     var source: SessionCatalogSource { get }
     /// One bounded page, off the main thread. No Agent execution or transcript mutation.
     func page(archived: Bool, cursor: String?, cancelled: () -> Bool) throws -> SessionCatalogPage
+    /// 列表不列、按 ID 却查得到的一段会话；查不到返回 nil。只给 pane 补标题用，不进会话列表。
+    /// Claude 会把已被接替的会话（← 转到后台时换了会话 ID）从列表里藏起来，pane 却可能还关联着它。
+    func unlistedSession(_ key: AgentSessionKey, cancelled: () -> Bool) throws -> AgentSession?
 }
 
 extension SessionCatalogProvider {
+    /// 没有按 ID 读的官方接口：列表就是全部。
+    func unlistedSession(_ key: AgentSessionKey, cancelled: () -> Bool) throws -> AgentSession? { nil }
+
     // Complete reads are for fixtures, not the UI's incremental loading path.
     func sessions(archived: Bool, cancelled: () -> Bool) throws -> [AgentSession] {
         var records: [AgentSession] = []

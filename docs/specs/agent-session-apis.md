@@ -22,6 +22,8 @@
 | 要做的事 | Codex | Claude |
 | --- | --- | --- |
 | 列出会话 | 常驻 `codex app-server` 的 `thread/list`（`CodexSessionProvider` → `CodexAppServer`） | 开发包的 `listSessions`（`scripts/claude-session-helper/list-sessions.mjs`） |
+| 读列表不列的会话（只给 pane 补标题） | 没有，列表就是全部 | 开发包的 `getSessionInfo`（`list-sessions.mjs --id <uuid>`，`ClaudeSessionProvider.unlistedSession`）：← 转后台换了会话 ID 之后，`listSessions` 把被接替的旧会话藏起来，pane 却可能还关联着它 |
+| pane 正显示哪段后台会话 | 不适用 | `claude agents --json` + 终端标题（`ClaudeAgentView`，见 hooks 文档） |
 | 删除会话 | `codex delete --force <id>`（`SessionDeletion`） | 开发包的 `deleteSession`（`delete-session.mjs`） |
 | 改名（会话没开） | `thread/name/set`（`SessionRename`） | 开发包的 `renameSession`（`rename-session.mjs`） |
 | 改名（会话开着） | 把 `/rename` 敲进那个终端（`AgentCommand.rename`） | 同左 |
@@ -88,9 +90,16 @@ lightty 现在不是这么跑的，所以要用这条得先改启动方式。这
 | --- | --- |
 | `tagSession(id, tag)` | 给会话打一个标签，传 `null` 清掉 |
 | `forkSession(id, { upToMessageId, title })` | 分叉出一段新会话，可以只截到某条消息为止 |
-| `getSessionInfo(id)` | 单独读一段会话的元数据（标题、首条提问、目录、分支、时间） |
+| `getSessionInfo(id)` | 单独读一段会话的元数据（标题、首条提问、目录、分支、时间）。已用于列表不列的会话，见上表 |
 
 要做「给会话打标签 / 分叉」的时候直接用，不用自己写。都在已经打包的那个版本里，不新增依赖。
+
+### 契约检查
+
+用到的官方接口逐项写在 `Tests/LighttyTests/AgentContractTests.swift` 的表里：Codex 的 app-server 方法、
+广播、字段、枚举值（对着本机 `codex app-server generate-json-schema` 的输出核），以及 `claude agents --json`
+能否解码。升级 Claude Code / Codex 之后跑 `swift test --filter AgentContractTests`；代码里新用到一项就加进表。
+Claude 开发包的行为（含被接替的会话按 ID 仍读得到）由 `ClaudeSessionCatalogTests` 用合成转录核对。
 
 ### 生成协议定义
 

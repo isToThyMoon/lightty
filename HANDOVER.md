@@ -28,7 +28,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - PaneLauncher：由 lightty 发起的新终端（启动浮层、续接会话、原生会话选择器、任务开始处理、重启恢复）都构造启动请求交给它；删除互斥、已打开则聚焦、占用检查、会话关联、任务绑定、放置都在这里，结果交回调用方决定怎么提示。原生 CLI 恢复，目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
 - SessionResumeFlow：续接与原生选择器的呈现层，只按启动器的结果弹目录面板、占用提示和错误框。
 - CodexSessionRouter / CodexDaemonChannel：Codex 0.157 起会话和 hook 跑在多终端共用的后台进程里，hook 继承的 pane 不对。它经官方 `codex app-server proxy` 旁听后台进程的会话广播，把会话对到 pane，写 `~/.lightty/run/sessions/<session_id>`（`AgentSessionRoute`），hook 先查这条记录，其余照旧走 pane。对 pane 用的是进程事实（`ProcessInspector`：前台作业组长、启动参数、继承的 `LIGHTTY_PANE_ID`、工作目录）——这是上面「不读进程表反推」的唯一例外：要回答的是「这个界面进程在哪个 lightty pane」，pane ID 是 lightty 自己注入的，Codex 没有也不会有这个接口；会话本身的事实仍只问官方广播。规则与边界见 [hooks 文档](docs/hooks.md#codex-共享后台进程)。
-- ClaudeAgentView：Claude agent view（2.1.28x）的后台会话由 supervisor 托管，hook 继承的 pane 身份属于第一个拉起 supervisor 的终端。hook 按终端归属认出不在 lightty 所开终端里的 agent，只认路由记录；ClaudeAgentView 从 pane 的终端标题（`claude agents` / `<前缀> <会话名>`）和 `claude agents --json` 认出 pane 正显示哪段后台会话，写记录、改关联，换了对话就解绑任务。全 app 只有它据 agent view 行动（`ClaudeSessionProvider` 只负责把官方输出里的 `kind`、`name` 读出来）。见 [hooks 文档](docs/hooks.md#claude-agent-view-的后台会话)。
+- ClaudeAgentView：Claude agent view（2.1.28x）的后台会话由 supervisor 托管，hook 继承的 pane 身份属于第一个拉起 supervisor 的终端。hook 按终端归属认出不在 lightty 所开终端里的 agent，只认路由记录；ClaudeAgentView 以 pane 的终端标题（列表 / `<前缀> <会话名>`）为时机、每次按 `claude agents --json` 从头核对 pane 正显示哪段后台会话，写记录、改关联，换了对话就解绑任务。全 app 只有它据 agent view 行动（`ClaudeSessionProvider` 只负责把官方输出里的 `kind`、`name` 读出来）。见 [hooks 文档](docs/hooks.md#claude-agent-view-的后台会话)。
 - TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 PathWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
 - PaneView / TerminalSurfaceView：终端视图与 libghostty surface；任务绑定只读查询 TaskBindings。
 - WorkspaceSnapshot / WorkspaceStore：窗口现场保存与重启恢复；不是全量 Agent 会话目录。
@@ -51,6 +51,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - 测试的粒度：一条测试守一个不变量或一个用户场景，不是一个小功能一条。修 bug 时优先给已有的场景测试加一步或加一个 case，不新开一条只复现这一个 bug 的测试；同一个纯函数/映射的多个输入写成一张表（XCTest 数组循环、Swift Testing `@Test(arguments:)`），每行带回归背景注释。不用单元测试钉外观决定（颜色、字号、间距、某控件存不存在、图标形态）：改设计就挂、抓不到功能回归；要看外观走 `LIGHTTY_UI_SNAPSHOT_DIR` 截图。全套测试已按这个口径审过一遍（见 afce3a4、1d1ee6d）。
 - 测试窗口不上屏：要窗口成为 key 或参与布局时用 `makeKeyAndOrderFrontInvisibly()` / `orderFrontInvisibly()`（`InvisibleWindowTestSupport.swift`），不要 `makeKeyAndOrderFront(nil)`；只有 `LIGHTTY_UI_SNAPSHOT_DIR` 截图那条分支例外。
 - 跑真实 `lightty-hook` 的测试一律经 `HookLauncher`（`Tests/LighttyTests/HookLaunchTestSupport.swift`）用 `script -q /dev/null` 造自己的 pty：hook 每一发都先判「是不是工具里拉起的子会话」，判据是祖先链的终端结构，直接 `Process` 起的话形状取决于谁在跑 `swift test`——在某个 agent 的 Bash 工具里跑，测试进程本身就是工具子进程，hook 会正确地静默，用例跟着时灵时不灵。
+- 升级 Claude Code / Codex 之后跑 `swift test --filter AgentContractTests`：lightty 用到的官方接口逐项对着本机版本核，哪项没了直接点名（本机没装那一家就跳过）。代码里新用到 app-server 的方法、字段、枚举值，加进那张表。
 - `scripts/check-config-parity.sh` 会启动 lightty 二进制，入口会先对真实 `~/.lightty` 跑数据迁移，HOME 覆盖无效，先退出正在使用的 lightty 再跑。
 发布打包：scripts/package-app.sh。
 

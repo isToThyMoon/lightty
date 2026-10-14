@@ -57,6 +57,15 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         return annotatingLiveSessions(try Self.decode(data, source: source, offset: value))
     }
 
+    /// 官方开发包的 `getSessionInfo`：列表把已被接替的会话藏起来之后，pane 关联着的那段仍能读到标题。
+    func unlistedSession(_ key: AgentSessionKey, cancelled: () -> Bool) throws -> AgentSession? {
+        guard key.agent == .claude, UUID(uuidString: key.nativeID) != nil else { return nil }
+        let data = try script("list-sessions.mjs", arguments: ["--id", key.nativeID]).output(cancelled: cancelled)
+        let page = try Self.decode(data, source: source, offset: 0)
+        guard page.nextCursor == nil, page.sessions.count <= 1 else { throw SessionCatalogError.protocolFailure }
+        return page.sessions.first { $0.key.nativeID == key.nativeID }
+    }
+
     static func decode(_ data: Data, source: SessionCatalogSource, offset: Int) throws -> SessionCatalogPage {
         struct Record: Decodable {
             let id: String; let title: String; let cwd: String?; let updatedAt: Double

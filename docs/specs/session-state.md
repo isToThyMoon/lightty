@@ -21,7 +21,7 @@
 - pane 显示的标题同一时刻只有一个来源，来源之间不穿插，按这家的 hook 插件装没装
   （`HookInstaller.installedVersion`，lightty 自己的台账）分两条路：
   - 装了：标题只看 hook + 官方目录。agent 启动到第一发 hook 之间是 pane 名，绑定后是目录标题
-    （目录未读到时仍是 pane 名），`SessionEnd` 直接回 pane 名。agent 写的终端标题（OSC 0）在这条路上
+    （读完整份目录仍不列它时按 ID 再问一次，Claude 会把被接替的会话藏起来；仍读不到才是 pane 名），`SessionEnd` 直接回 pane 名。agent 写的终端标题（OSC 0）在这条路上
     只贡献三样：图标（启动阶段就认出是哪家，Codex 到第一句提交才跑 `SessionStart`）、忙/闲这条边、
     以及标题正文变了就催目录重读。
   - 没装：终端标题的形状看得出是哪家 agent 写的（`AgentSpec.terminalTitle` 里带前缀的形状）就照原文
