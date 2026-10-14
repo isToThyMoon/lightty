@@ -216,6 +216,18 @@ final class PaneStatusStore {
             if let old = previous.agentProcess, let next = datagram.status.agentProcess,
                next.startedBefore(old) { return }
         }
+        if datagram.status.agent == "codex", let session = datagram.status.sessionID {
+            let settled = settledCodex[datagram.pane]
+            if datagram.status.event == "UserPromptSubmit" {
+                settledCodex.removeValue(forKey: datagram.pane)
+            } else if datagram.status.event == "Stop" || datagram.status.event == "Interrupt" {
+                if settled?.session == session, settled?.completed == true { return }
+                settledCodex[datagram.pane] = (session, true)
+            } else if settled?.session == session,
+                      [.thinking, .tool, .attention].contains(datagram.status.state) {
+                return // A late tool hook cannot reopen a turn the daemon has closed.
+            }
+        }
         if statuses[datagram.pane] != datagram.status { readAttention.remove(datagram.pane) }
         statuses[datagram.pane] = datagram.status
         watchProcess(for: datagram.pane)
@@ -296,6 +308,7 @@ final class PaneStatusStore {
         attached.remove(paneID)
         readAttention.remove(paneID)
         routedPanes.remove(paneID)
+        settledCodex.removeValue(forKey: paneID)
         submittedPanes.remove(paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
@@ -411,6 +424,62 @@ final class PaneStatusStore {
         postChange(paneID)
     }
 
+    // MARK: - Codex daemon lifecycle
+
+    enum CodexActivity { case active, waiting, idle, completed, interrupted, failed }
+    /// Hooks add tool details; the daemon decides whether a turn is still running.
+    /// Keep completion acknowledgement across the following idle event and late hooks.
+    private var settledCodex: [UUID: (session: String, completed: Bool)] = [:]
+
+    func noteCodexActivity(_ activity: CodexActivity, sessionID: String, in pane: UUID,
+                           association: PaneSessionAssociation? = nil) {
+        assertMain()
+        guard attached.contains(pane) else { return }
+        // A restored pane already has an exact identity, even if no hook has arrived.
+        // Daemon activity must not depend on a prior hook to create its state.
+        let initial = association.flatMap { association -> PaneStatus? in
+            guard association.key.agent == .codex, association.key.nativeID == sessionID else { return nil }
+            return PaneStatus(ts: .distantPast, state: .idle, agent: "codex", sessionID: sessionID,
+                sourceRoot: association.key.sourceRoot, sourceConfiguration: association.configuration,
+                cwd: association.workingDirectory, event: "CodexDaemon")
+        }
+        guard let current = statuses[pane] ?? initial,
+              current.agent == "codex", current.sessionID == sessionID,
+              current.event != "SessionEnd" else { return }
+        let settled = settledCodex[pane].flatMap { $0.session == sessionID ? $0 : nil }
+        let next: PaneActivity
+        switch activity {
+        case .active:
+            settledCodex.removeValue(forKey: pane)
+            // Do not replace a tool/permission detail with generic thinking. Attention the daemon
+            // raised is the daemon's to clear; a hook's attention is cleared by later hooks, so the
+            // two channels arriving out of order cannot flicker it.
+            guard current.state == .idle || current.state == .done
+                || (current.state == .attention && current.event == "CodexDaemon") else { return }
+            next = .thinking
+        case .waiting:
+            settledCodex.removeValue(forKey: pane)
+            next = .attention
+        case .idle:
+            settledCodex[pane] = settled ?? (sessionID, false)
+            guard settled?.completed != true,
+                  current.state == .thinking || current.state == .tool || current.state == .attention else { return }
+            next = .idle
+        case .completed, .interrupted, .failed:
+            guard settled?.completed != true else { return }
+            settledCodex[pane] = (sessionID, true)
+            switch activity {
+            case .completed: next = .done
+            case .failed: next = .attention
+            default: next = .idle
+            }
+        }
+        guard current.state != next else { return }
+        statuses[pane] = Self.restated(current, as: next, event: "CodexDaemon")
+        readAttention.remove(pane)
+        postChange(pane)
+    }
+
     // MARK: - 兜底（仅 Codex）
 
     /// 有会话路由记录的 pane：hook 这条路是通的，兜底停用。不能只看「有没有 hook 状态」——
@@ -446,6 +515,7 @@ final class PaneStatusStore {
             }
         } else {
             routedPanes.remove(paneID)
+            settledCodex.removeValue(forKey: paneID)
         }
     }
 
@@ -512,7 +582,7 @@ final class PaneStatusStore {
     private static func idled(_ status: PaneStatus) -> PaneStatus { restated(status, as: .idle) }
 
     /// 同一份状态换个 state，其余字段（会话、进程身份、原事件名）原样保留。
-    private static func restated(_ status: PaneStatus, as state: PaneActivity) -> PaneStatus {
+    private static func restated(_ status: PaneStatus, as state: PaneActivity, event: String? = nil) -> PaneStatus {
         PaneStatus(
             v: status.v,
             ts: status.ts,
@@ -525,7 +595,7 @@ final class PaneStatusStore {
             tool: status.tool,
             detail: status.detail,
             cwd: status.cwd,
-            event: status.event
+            event: event ?? status.event
         )
     }
 

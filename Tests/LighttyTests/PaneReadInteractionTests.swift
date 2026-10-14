@@ -105,7 +105,9 @@ extension SessionAssociationTests {
         #expect(f.statuses.unreadCount == 1)
         #expect(f.library.paneState(for: background)?.status?.state == .done,
                 "Reading this pane must not acknowledge another pane, even for the same conversation")
-        // Another completion remains unread until another interaction.
+        // Another completion remains unread until another interaction. A real next turn starts with a
+        // prompt; a bare repeated Stop for the same Codex turn is a duplicate and stays read.
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: pane.dragIdentifier, record: record)
         try await f.status(.done, event: "Stop", pane: pane.dragIdentifier, record: record)
         #expect(f.statuses.unreadCount == 2)
         window.makeFirstResponder(nil)

@@ -121,6 +121,7 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
     var onClose: (() -> Void)?
     var dead = false
     private(set) var requests: [String] = []
+    var threads: [String: [String: Any]] = [:]
     private var closed = false
     private let loaded: () -> [String]
 
@@ -133,6 +134,7 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
         switch method {
         case "initialize": result = [:]
         case "thread/loaded/list": result = ["data": loaded()]
+        case "thread/read": result = (params["threadId"] as? String).flatMap { threads[$0] }.map { ["thread": $0] }
         default: result = nil
         }
         DispatchQueue.main.async { completion(result) }
@@ -149,6 +151,105 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
 
 @MainActor
 struct CodexDaemonReconnectTests {
+    @Test(arguments: [false, true]) func restoredSessionReceivesDaemonActivityBeforeAnyHook(snapshot: Bool) async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record("restored-thread"), pane = f.pane()
+        try await f.load([record])
+        f.library.associate(.restoring(f.association(record)), with: pane)
+        let connection = FakeDaemonConnection(loaded: { snapshot ? [record.key.nativeID] : [] })
+        connection.threads[record.key.nativeID] = ["id": record.key.nativeID, "status": ["type": "active"]]
+        let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
+            runDirectory: f.root.appendingPathComponent("run")) { _ in connection }
+        router.start()
+        defer { router.stop() }
+        try await f.wait { connection.requests.contains("thread/loaded/list") }
+        if snapshot {
+            try await f.wait { connection.requests.contains("thread/read") }
+            await awaitMainQueue(hops: 2)
+        } else {
+            connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
+                "status": ["type": "active"]])
+        }
+        #expect(f.library.paneState(for: pane)?.status?.state == .thinking)
+        #expect(f.library.paneState(for: pane)?.acceptsInput == false)
+        // 回合中等用户（批准、回答提问——后者没有 hook）：等你；用户处理完回到思考中。
+        for flag in ["waitingOnApproval", "waitingOnUserInput"] {
+            connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
+                "status": ["type": "active", "activeFlags": [flag]]])
+            #expect(f.library.paneState(for: pane)?.status?.state == .attention, "\(flag)")
+            connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
+                "status": ["type": "active", "activeFlags": []]])
+            #expect(f.library.paneState(for: pane)?.status?.state == .thinking, "\(flag)")
+        }
+        connection.onNotification?("turn/completed", ["threadId": record.key.nativeID,
+            "turn": ["id": "restored-turn", "status": "completed"]])
+        #expect(f.library.paneState(for: pane)?.status?.state == .done)
+    }
+
+    @Test func daemonCompletionUnlocksInputWhenStopHookIsMissing() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record("completed-thread"), pane = f.pane()
+        try await f.load([record])
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
+        let connection = FakeDaemonConnection(loaded: { [] })
+        let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
+            runDirectory: f.root.appendingPathComponent("run")) { _ in connection }
+        router.start()
+        defer { router.stop() }
+        try await f.wait { connection.requests.contains("thread/loaded/list") }
+        #expect(f.library.paneState(for: pane)?.acceptsInput == false)
+        connection.onNotification?("turn/completed", ["threadId": record.key.nativeID,
+            "turn": ["id": "turn-1", "status": "completed"]])
+        #expect(f.library.paneState(for: pane)?.status?.state == .done)
+        #expect(f.library.paneState(for: pane)?.acceptsInput == true)
+        connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
+            "status": ["type": "idle"]])
+        #expect(f.library.paneState(for: pane)?.status?.state == .done,
+            "The idle notification must not consume the completion reminder")
+        f.library.markRead(pane)
+        connection.onNotification?("turn/completed", ["threadId": record.key.nativeID,
+            "turn": ["id": "turn-1", "status": "completed"]])
+        #expect(f.library.paneState(for: pane)?.status?.state == .idle,
+            "Duplicate completion must not recreate a read reminder")
+
+        // A late tool hook must not lock rename again. A second pane provides a
+        // socket queue barrier, so the assertion is after the hook was consumed.
+        let other = f.pane(), otherRecord = f.record("other-thread")
+        for event in ["PostToolUse", "Stop"] {
+            let state: PaneActivity = event == "Stop" ? .done : .thinking
+            _ = PaneStatusDatagram(pane: pane, status: PaneStatus(ts: Date(), state: state,
+                agent: "codex", sessionID: record.key.nativeID, event: event))
+                .send(to: f.statuses.socketPath)
+            try await f.status(.thinking, event: event, pane: other, record: otherRecord)
+            #expect(f.library.paneState(for: pane)?.status?.state == .idle)
+        }
+        // Idle snapshots repair a missed completion without inventing a reminder.
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
+        connection.onNotification?("thread/status/changed", ["threadId": "unknown-thread",
+            "status": ["type": "idle"]])
+        #expect(f.library.paneState(for: pane)?.acceptsInput == false)
+        connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
+            "status": ["type": "idle"]])
+        #expect(f.library.paneState(for: pane)?.acceptsInput == true)
+
+        // Hook completion first, followed by daemon completion: still one reminder.
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
+        try await f.status(.done, event: "Stop", pane: pane, record: record)
+        f.library.markRead(pane)
+        connection.onNotification?("turn/completed", ["threadId": record.key.nativeID,
+            "turn": ["id": "turn-3", "status": "completed"]])
+        #expect(f.library.paneState(for: pane)?.status?.state == .idle)
+        for outcome in ["interrupted", "failed"] {
+            try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
+            connection.onNotification?("turn/completed", ["threadId": record.key.nativeID,
+                "turn": ["id": outcome, "status": outcome]])
+            #expect(f.library.paneState(for: pane)?.acceptsInput == true)
+            #expect(f.library.paneState(for: pane)?.status?.state == (outcome == "failed" ? .attention : .idle))
+        }
+    }
+
     /// Codex 升级会让后台进程重启，旁听连接却不会自己断（见 `CodexDaemonChannel`）。回归：
     /// 0.158 升级后连接一直挂着，之后新开的会话一条广播都收不到，标题回不到 pane 上。
     /// 平时不探；有新的 Codex 界面起来时往里写一次，死连接就此暴露，马上重连并补查。

@@ -45,6 +45,8 @@ final class CodexSessionRouter {
     /// 上次看到的在跑 Codex 的 pane：多出来一个就是有新界面起来了。
     private var codexPanes: Set<UUID> = []
     private var lastProbe = Date.distantPast
+    // A response to thread/read must not overwrite a newer lifecycle notification.
+    private var activityRevisions: [String: UUID] = [:]
 
     /// - Parameter connect: 起一条旁听连接。默认经 `codex app-server proxy`，测试换成替身。
     init(library: SessionLibrary, socketPath: String,
@@ -69,6 +71,7 @@ final class CodexSessionRouter {
         channel = nil
         for id in routes.keys { AgentSessionRoute.remove(sessionID: id, in: runDirectory) }
         routes.removeAll()
+        activityRevisions.removeAll()
     }
 
     /// pane 关了就撤掉指向它的记录；有 pane 开始跑 Codex 而还没连上，就去连。
@@ -158,7 +161,20 @@ final class CodexSessionRouter {
         case "thread/started":
             if let thread = params["thread"] as? [String: Any] { consider(thread, announced: true) }
         case "thread/status/changed":
-            if let id = params["threadId"] as? String, routes[id] == nil { lookUp(id) }
+            guard let id = params["threadId"] as? String else { return }
+            activityRevisions[id] = UUID()
+            if routes[id] == nil { lookUp(id) }
+            applyStatus(params["status"] as? [String: Any], threadID: id)
+        case "turn/completed":
+            guard let id = params["threadId"] as? String,
+                  let turn = params["turn"] as? [String: Any] else { return }
+            activityRevisions[id] = UUID()
+            switch turn["status"] as? String {
+            case "completed": library.noteCodexActivity(.completed, threadID: id)
+            case "interrupted": library.noteCodexActivity(.interrupted, threadID: id)
+            case "failed": library.noteCodexActivity(.failed, threadID: id)
+            default: break
+            }
         case "thread/closed":
             if let id = params["threadId"] as? String { drop(id) }
         case "thread/name/updated":
@@ -169,11 +185,32 @@ final class CodexSessionRouter {
         }
     }
 
+    /// `ThreadStatus.active` 带着的 `activeFlags` 里表示「在等用户」的两项（app-server 协议的枚举，
+    /// 契约检查见 `AgentContractTests`）。没有 hook 能报 `waitingOnUserInput`。
+    private static let waitingFlags: Set<String> = ["waitingOnApproval", "waitingOnUserInput"]
+
+    private func applyStatus(_ status: [String: Any]?, threadID: String) {
+        switch status?["type"] as? String {
+        case "active":
+            let flags = Set(status?["activeFlags"] as? [String] ?? [])
+            library.noteCodexActivity(flags.isDisjoint(with: Self.waitingFlags) ? .active : .waiting,
+                                      threadID: threadID)
+        case "idle": library.noteCodexActivity(.idle, threadID: threadID)
+        default: break
+        }
+    }
+
     private func lookUp(_ id: String) {
         guard routes[id] == nil, Date().timeIntervalSince(unresolved[id] ?? .distantPast) > 5 else { return }
         unresolved[id] = Date()
+        let revision = activityRevisions[id]
         channel?.request("thread/read", params: ["threadId": id, "includeTurns": false]) { [weak self] result in
-            if let thread = result?["thread"] as? [String: Any] { self?.consider(thread, announced: false) }
+            guard let self, let thread = result?["thread"] as? [String: Any],
+                  Self.isShownInATerminal(thread) else { return }
+            if self.activityRevisions[id] == revision {
+                self.applyStatus(thread["status"] as? [String: Any], threadID: id)
+            }
+            self.consider(thread, announced: false)
         }
     }
 
@@ -220,6 +257,7 @@ final class CodexSessionRouter {
     }
 
     private func drop(_ id: String) {
+        activityRevisions.removeValue(forKey: id)
         let pane = routes.removeValue(forKey: id)?.pane
         unresolved.removeValue(forKey: id)
         AgentSessionRoute.remove(sessionID: id, in: runDirectory)

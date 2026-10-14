@@ -163,6 +163,13 @@ final class SessionLibrary {
         }
     }
 
+    func noteCodexActivity(_ activity: PaneStatusStore.CodexActivity, threadID: String) {
+        for pane in panes(forCodexThread: threadID) {
+            let association = runtime.inputs[pane]?.intent.association ?? runtime.panes[pane]?.binding.association
+            statusStore.noteCodexActivity(activity, sessionID: threadID, in: pane, association: association)
+        }
+    }
+
     var registeredPaneIDs: Set<UUID> { Set(runtime.inputs.keys) }
 
     /// 此刻在跑 Codex 的 pane（按终端标题认出，或已绑定 / 声明了 Codex 会话）。

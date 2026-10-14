@@ -88,13 +88,14 @@ app-server 后台进程里（`codex app-server --listen unix:// --managed-daemon
 后台进程自己的环境，`LIGHTTY_PANE_ID` 属于当初拉起后台进程的那个终端，和当前会话无关；
 后台进程的拉起者退出后它被系统收养，父进程链上没有终端。载荷里唯一可靠的身份是 `session_id`。
 
-lightty 不改 Codex 的运行方式，只补上断掉的那一环——「这段会话显示在哪个 pane」。
+lightty 不改 Codex 的运行方式，通过官方连接确定会话所属 pane，并接收回合状态。
 这一节只作用于 Codex，Claude 的 hook 不查路由记录：
 
 ```
-lightty ──codex app-server proxy──> 共享后台进程（官方入口，WebSocket + JSON-RPC，只听广播）
+lightty ──codex app-server proxy──> 共享后台进程（官方入口，WebSocket + JSON-RPC，广播与只读补查）
    thread/started：会话 ID、目录、创建时间、来源
    thread/status/changed：续接的会话没有 started，第一次状态变化时 thread/read 补查
+   turn/completed：按 completed / interrupted / failed 更新回合结果
    thread/closed：撤记录
    thread/name/updated：自动起名或 /rename 之后，重读官方目录里的标题
         ↓ 对 pane（CodexSessionRouter）
@@ -102,6 +103,13 @@ lightty ──codex app-server proxy──> 共享后台进程（官方入口，
         ↓ hook 先按 session_id 查这条记录，查到就用它的 pane 和界面进程
 之后发状态、找任务、注入 handoff，全走原来按 pane 的路
 ```
+
+已确认关联的会话直接接收 `thread/status/changed` 的 active / idle；active 带着 `activeFlags` 的
+`waitingOnApproval` / `waitingOnUserInput` 时是等你（后者没有 hook 能报），这样亮起的等你只由后台进程
+自己收回，hook 亮起的仍由后续 hook 收回，两条路先后错开也不闪；恢复后尚未收到 hook，
+也能建立活动状态。连接时通过 `thread/loaded/list` 和 `thread/read` 补查当前状态，补查结果
+不能覆盖请求之后收到的新状态事件。`turn/completed` 补足缺失的 Stop，后续 idle 或重复完成
+不重建已读提醒。hook 继续提供工具和权限细节。
 
 会话对 pane 靠进程事实：pane 里起的进程都继承了 `LIGHTTY_PANE_ID`，界面进程是 pane 终端
 的前台作业组长、启动参数是 `codex`（`ProcessInspector`）。规则见 `CodexSessionRouter.choose`：
