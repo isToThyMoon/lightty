@@ -234,7 +234,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         taskScrollView.borderType = .noBorder
         taskScrollView.hasHorizontalScroller = false
         taskScrollView.hasVerticalScroller = true
-        taskScrollView.autohidesScrollers = true
         taskScrollView.contentView.drawsBackground = false
         // 文档视图不能用约束钉在裁剪视图上：滚动改的是裁剪视图的 bounds，Auto Layout
         // 每次布局都会把文档顶边拽回裁剪视图顶边，滚起来一跳一跳。宽随裁剪视图，

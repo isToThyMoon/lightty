@@ -92,7 +92,6 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.delegate = self
         scroll.documentView = table
         scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
 
         for v in [sectionLabel, clearTabsButton, splitRightButton, splitDownButton, newTabButton, scroll] {

@@ -311,7 +311,8 @@ final class EdgeDragStrip: NSView {
         // would leave nowhere to grab the edge of a scrollable list.
         for sibling in superview?.subviews ?? [] where sibling !== self {
             for scroll in Self.scrollViews(under: sibling) {
-                guard let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor else { continue }
+                guard let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor,
+                      scroller.isEnabled else { continue }
                 let owned = scroller.scrollerStyle == .legacy ? scroller.bounds : scroller.rect(for: .knob)
                 if owned.contains(scroller.convert(point, from: superview)) { return nil }
             }

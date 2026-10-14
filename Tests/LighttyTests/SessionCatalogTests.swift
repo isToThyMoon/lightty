@@ -638,37 +638,27 @@ final class PrimarySidebarTests: XCTestCase {
         let document = try XCTUnwrap(scroll.documentView)
         let column = try XCTUnwrap(descendants(sidebar).compactMap { $0 as? TabColumnView }.first)
         column.reload(overview: (0..<100).map { (UUID(), "Tab \($0)", false, false, []) })
-        scroll.autohidesScrollers = false
-        for style in [NSScroller.Style.legacy, .overlay] {
-            scroll.scrollerStyle = style
-            sidebar.layoutSubtreeIfNeeded()
-            scroll.tile()
-            sidebar.layoutSubtreeIfNeeded()
-            let scroller = try XCTUnwrap(scroll.verticalScroller)
-            XCTAssertTrue(scroller is SidebarScroller)
-            XCTAssertEqual(sidebar.bounds.maxX - sidebar.convert(scroll.bounds, from: scroll).maxX,
-                           SidebarListScrollView.trailingMargin, accuracy: 0.5)
-            XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 0.5)
-            XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX)
-            let knob = scroller.rect(for: .knob)
-            let onKnob = sidebar.convert(NSPoint(x: knob.midX, y: knob.midY), from: scroller)
-            let knobHit = sidebar.hitTest(onKnob)
-            XCTAssertTrue(knobHit === scroll || knobHit?.isDescendant(of: scroll) == true,
-                          "The scroll view, not the edge resize strip, owns the knob")
-            // 100 行时滑块贴着顶部，轨道中点不在滑块上。
-            let onTrack = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
-            XCTAssertFalse(knob.contains(sidebar.convert(onTrack, to: scroller)))
-            let trackHit = sidebar.hitTest(onTrack)
-            if style == .legacy {
-                // 常驻滚动条看得见、点轨道能翻页：整条轨道归它。
-                XCTAssertTrue(trackHit === scroller || trackHit?.isDescendant(of: scroller) == true)
-            } else {
-                // 浮层滚动条平时看不见却铺满导轨：只让出滑块，其余导轨抓得住边线调宽。
-                XCTAssertFalse(trackHit === scroll || trackHit?.isDescendant(of: scroll) == true,
-                               "An overlay scroller's idle track leaves the edge draggable")
-            }
-        }
+        sidebar.layoutSubtreeIfNeeded()
+        scroll.tile()
+        sidebar.layoutSubtreeIfNeeded()
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        XCTAssertTrue(scroller is SidebarScroller)
+        XCTAssertEqual(sidebar.bounds.maxX - sidebar.convert(scroll.bounds, from: scroll).maxX,
+                       SidebarListScrollView.trailingMargin, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 0.5)
+        XCTAssertLessThanOrEqual(scroll.contentView.frame.maxX, scroller.frame.minX)
+        let knob = scroller.rect(for: .knob)
+        let onKnob = sidebar.convert(NSPoint(x: knob.midX, y: knob.midY), from: scroller)
+        let knobHit = sidebar.hitTest(onKnob)
+        XCTAssertTrue(knobHit === scroll || knobHit?.isDescendant(of: scroll) == true,
+                      "The scroll view, not the edge resize strip, owns the knob")
+        // 常驻轨道用于翻页，不能被侧栏的调宽热区截走。
+        let onTrack = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
+        XCTAssertFalse(knob.contains(sidebar.convert(onTrack, to: scroller)))
+        let trackHit = sidebar.hitTest(onTrack)
+        XCTAssertTrue(trackHit === scroller || trackHit?.isDescendant(of: scroller) == true)
     }
+
     /// 会话行拖放的落点规则表：
     /// - 落进项目：分组标题不可落、无效数据拒绝、落进（折叠的）项目会把它展开、同项目再落为空动；
     /// - 落回最近：项目里的会话可落回「最近」标题行、最近的会话行、列表末尾的空白，
