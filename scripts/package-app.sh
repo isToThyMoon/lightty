@@ -58,8 +58,10 @@ if [ "${USE_PREBUILT:-0}" != "1" ]; then
 else
     echo "▸ use prebuilt helper and Swift release products"
 fi
-BIN="$ROOT/.build/apple/Products/Release/lightty"
-[ -x "$BIN" ] || BIN="$ROOT/.build/release/lightty"
+# Ask the same SwiftPM invocation where it put its products. Historical build
+# directories may still contain valid executables, but are not this build's output.
+BIN_DIR="$(swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT" --show-bin-path)"
+BIN="$BIN_DIR/lightty"
 [ -x "$BIN" ] || { echo "build output not found"; exit 1; }
 
 # ── 组装 bundle ─────────────────────────────────────────────────────────────
