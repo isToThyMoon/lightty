@@ -1478,15 +1478,19 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
         taskLabel.font = ShellStyle.Font.captionStrong
         taskLabel.textColor = ShellStyle.secondaryText
         taskLabel.lineBreakMode = .byTruncatingTail
+        // 让位顺序：路径先缩到 `…/末级目录`，再截任务名，最后才截末级目录本身。
+        // 任务名的抗压缩曾低于路径，长路径会把任务名整个挤成 0 宽。
         taskLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(740), for: .horizontal)
+            NSLayoutConstraint.Priority(750), for: .horizontal)
 
         directoryLabel.font = ShellStyle.Font.caption
         directoryLabel.textColor = ShellStyle.tertiaryText
         directoryLabel.lineBreakMode = .byTruncatingHead
         directoryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         directoryLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(750), for: .horizontal)
+            NSLayoutConstraint.Priority(740), for: .horizontal)
+        directoryLabel.tailWidth.priority = NSLayoutConstraint.Priority(760)
+        directoryLabel.tailWidth.isActive = true
 
         [taskLabel, directoryLabel].forEach(secondaryStack.addArrangedSubview)
         secondaryStack.orientation = .horizontal
