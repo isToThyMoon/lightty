@@ -28,6 +28,7 @@
 | 改名（会话没开） | `thread/name/set`（`SessionRename`） | 开发包的 `renameSession`（`rename-session.mjs`） |
 | 改名（会话开着） | 把 `/rename` 敲进那个终端（`AgentCommand.rename`） | 同左 |
 | 恢复会话 / 打开选择器 | `codex resume [<id>]` | `claude --resume [<id>]` |
+| 连上后台托管的会话（重启恢复、从侧栏打开） | 不适用 | `claude attach <短 ID>`（`SessionAttachPlan`）：`claude agents --json` 里是 `background` 行的会话；对它 `--resume` 会被拒绝 |
 | 状态（思考中 / 工具 / 等你 / 完成） | 钩子（`HookInstaller`） | 钩子 |
 | 判断会话是否已在别处打开 | 没有官方接口，一律不判断（`CodexSessionProvider.occupancy` 恒为「问不出来」） | `claude agents --json`（`ClaudeSessionProvider.occupancy`） |
 

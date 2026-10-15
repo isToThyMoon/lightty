@@ -27,6 +27,7 @@ public enum CodexAgent {
         iconToolTip: "OpenAI Codex",
         iconAssetName: "openai",
         resumeShape: .subcommand("resume"),
+        attachSubcommand: nil,
         // codex 的选择器默认只列当前目录的会话，`--all` 才是全部。
         pickerArguments: ["--all"],
         bypassArguments: ["--yolo"],

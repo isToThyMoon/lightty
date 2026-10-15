@@ -92,6 +92,8 @@ final class PaneLauncher {
     private var deletingAgents = Set<SessionAgent>()
     /// 正在检查占用的会话。只是主线程上的请求合流，不是 Agent 锁；每次有界检查后释放。
     private var checking = Set<AgentSessionKey>()
+    /// 重启恢复一口气装好几个 pane：同一家的占用只问一次，短时间内复用。
+    private var restoredOccupancies: [SessionAgent: (at: Date, answer: (AgentSessionKey) -> SessionOccupancy.Result)] = [:]
 
     init(sessionLibrary: SessionLibrary, taskBindings: TaskBindings,
          runningPanes: @escaping () -> [RunningPane],
@@ -188,7 +190,7 @@ final class PaneLauncher {
         if let message = Self.folderPromptMessage(for: directory) {
             return completion(.notLaunched(.needsWorkingDirectory(message: message)))
         }
-        let assembly: Assembly
+        var assembly: Assembly
         do { assembly = try resuming(session, source: source, workingDirectory: directory, task: request.task) }
         catch { return completion(.notLaunched(.unavailable(error))) }
 
@@ -203,8 +205,12 @@ final class PaneLauncher {
                 guard let host, let window = host.window, window.isVisible else {
                     return completion(.notLaunched(.noPlacement))
                 }
-                if case .inUse(let pid) = occupancy {
-                    return completion(.notLaunched(.occupied(pid: pid)))
+                switch occupancy {
+                case .inUse(let pid): return completion(.notLaunched(.occupied(pid: pid)))
+                case .background(let job):
+                    do { assembly = try Self.attaching(assembly, jobID: job) }
+                    catch { return completion(.notLaunched(.unavailable(error))) }
+                case .unknown: break
                 }
                 // Absence of evidence is not a lock guarantee. The native CLI remains authoritative.
                 let pane = self.build(assembly)
@@ -310,6 +316,12 @@ final class PaneLauncher {
                let executable = locateExecutable(association.key.agent.rawValue),
                let plan = try? association.resumePlan(executable: executable) {
                 assembly.configuration.command = .resume(plan)
+                // 重启前这个 pane 连着的是一段后台托管的会话：它还在后台跑，连回去，不能 `--resume`。
+                if association.key.agent.spec.attachSubcommand != nil,
+                   case .background(let job) = restoredOccupancy(of: association.key),
+                   let attached = try? Self.attaching(assembly, jobID: job) {
+                    assembly = attached
+                }
                 intent = .restoring(association)
             } else {
                 intent = .unavailable(association)
@@ -323,6 +335,28 @@ final class PaneLauncher {
             }
         }
         return assembly
+    }
+
+    /// 后台托管的会话改成连上它：会话关联、目录、任务都不变，只换第一行命令。
+    private static func attaching(_ assembly: Assembly, jobID: String) throws -> Assembly {
+        guard case .resume(let plan) = assembly.configuration.command else { return assembly }
+        let context = plan.context
+        var attached = assembly
+        attached.configuration.command = .attach(try SessionAttachPlan(
+            agent: context.agent, sourceRoot: context.sourceRoot, executable: context.executable,
+            configuration: context.configuration, workingDirectory: context.workingDirectory, jobID: jobID))
+        return attached
+    }
+
+    /// 恢复时同步问：pane 要在装进窗口之前定下第一行命令。查询有界（Claude 3 秒），问不出来照常续接。
+    private func restoredOccupancy(of key: AgentSessionKey) -> SessionOccupancy.Result {
+        if let cached = restoredOccupancies[key.agent], Date().timeIntervalSince(cached.at) < 5 {
+            return cached.answer(key)
+        }
+        guard let provider = sessionLibrary.provider(for: key.agent) else { return .unknown }
+        let answer = provider.occupancies()
+        restoredOccupancies[key.agent] = (Date(), answer)
+        return answer(key)
     }
 
     /// 身份在装进窗口之前原子确立，任务绑定随后，二者互不影响。

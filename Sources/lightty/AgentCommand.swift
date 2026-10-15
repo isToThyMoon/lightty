@@ -18,6 +18,8 @@ enum AgentCommand {
     case start(LaunchAgent)
     /// 续接一段已存在的原生会话。
     case resume(SessionResumePlan)
+    /// 连上一段由 agent 后台托管的会话（`claude attach <id>`）。这种会话不能续接，见 `SessionAttachPlan`。
+    case attach(SessionAttachPlan)
     /// 打开 CLI 自带的会话选择器。不指向任何会话，所以计划里没有会话身份。
     case sessionPicker(SessionPickerPlan)
     /// 让 agent 自己改当前会话的名字。
@@ -53,6 +55,7 @@ enum AgentCommand {
         case .none: return nil
         case .start(let agent): return AgentLaunchPreference.initialInput(for: agent)
         case .resume(let plan): return plan.shellInput
+        case .attach(let plan): return plan.shellInput
         case .sessionPicker(let plan): return plan.shellInput
         case .rename(let name):
             // 一行一条命令：名字里的换行会把后面的部分变成发给模型的一句话。

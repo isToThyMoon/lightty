@@ -79,6 +79,37 @@ extension SessionAssociationTests {
         #expect(!f.launcher.isStarting(session.key), "检查结束就释放合流")
     }
 
+    /// agent view 的后台会话不能 `--resume`：Claude 拒绝并让你去 attach，pane 就回到了 shell。
+    /// 从侧栏打开、重启恢复都改成 `claude attach <短 ID>`，关联照旧指向这段会话。
+    @Test func launcherAttachesABackgroundSessionInsteadOfResumingIt() async throws {
+        let f = try LauncherFixture()
+        defer { f.close() }
+        f.provider.occupancyResult = .background(jobID: "cbcaa1d2")
+        let session = f.session()
+        var association: PaneSessionAssociation?
+        var result: TerminalLaunchOutcome?
+        f.launcher.launch(f.resume(session), in: f.controller) { outcome in
+            if case .launched(let pane) = outcome { association = pane.sessionAssociation }
+            result = outcome
+        }
+        try await awaitUntil("launch outcome") { result != nil }
+        guard case .launched(let pane) = try #require(result) else { Issue.record("expected launch"); return }
+        #expect(association?.key == session.key)
+        let input = try #require(pane.terminal.launchConfiguration.initialInput)
+        #expect(input.hasSuffix("'attach' 'cbcaa1d2'\n"))
+        #expect(!input.contains("--resume"))
+
+        // 重启恢复：pane 重启前连着这段后台会话，连回去；不再是后台会话就照常续接。
+        let snapshot = PaneSnapshot(name: "Terminal 83", agentCWD: f.workdir.path, agentAlive: true,
+                                    catalogSession: session.key, catalogConfiguration: .custom(f.root.path))
+        let restored = f.launcher.restoredPane(from: snapshot)
+        f.provider.occupancyResult = .unknown
+        let resumed = f.launcher.restoredPane(from: snapshot)
+        for pane in [restored, resumed] { f.controller.addTab(initialPane: pane, select: false, installPane: false) }
+        #expect(restored.terminal.launchConfiguration.initialInput?.hasSuffix("'attach' 'cbcaa1d2'\n") == true)
+        #expect(resumed.terminal.launchConfiguration.initialInput?.hasSuffix("'--resume' 'launcher-fixture'\n") == true)
+    }
+
     @Test func launcherFocusesATerminalAlreadyRunningTheSession() async throws {
         let f = try LauncherFixture()
         defer { f.close() }

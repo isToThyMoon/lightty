@@ -111,29 +111,30 @@ final class ClaudeSessionCatalogTests: XCTestCase {
     /// 于是一段正开着的会话会被当成可以删。
     func testClaudeLiveRegistryDecodesOrRefuses() {
         let id = "01a07a5f-6811-7f12-94c5-dc0f0f92f40a"
-        typealias Row = (pid: Int32?, sessionID: String?, cwd: String?)
+        typealias Row = (pid: Int32?, sessionID: String?, cwd: String?, job: String?)
         let other = "5b6ff2ba-3f6c-4d1e-9f70-2b1c0a4d8e11"
         let cases: [(name: String, text: String, expected: [Row]?)] = [
             // 正例：pid → 会话，cwd 也要读出来——官方开发包偶尔给不出会话目录，靠这张表补空
             ("two sessions", """
              [{"pid":51228,"cwd":"/w","kind":"interactive","sessionId":"\(id)","name":"a","status":"idle"},
               {"pid":51233,"cwd":"/w","kind":"interactive","sessionId":"\(other)","name":"b","status":"busy"}]
-             """, [(51228, id, "/w"), (51233, other, "/w")]),
+             """, [(51228, id, "/w", nil), (51233, other, "/w", nil)]),
             // 空表是合法的「一个都没在跑」
             ("empty array", "[]", []),
             // cwd 缺了不算致命——它只补目录，不参与占用判断，整张表仍然可信
-            ("missing cwd", "[{\"pid\":7,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", [(7, id, nil)]),
+            ("missing cwd", "[{\"pid\":7,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", [(7, id, nil, nil)]),
             // agent view 的后台会话进程被 supervisor 停掉后仍在等人：没有 pid、照样列出。
             // 回归：以前一行缺 pid 整张表作废，用了 agent view 占用检测就全变成「说不清」。
+            // 短 ID（`id`）要读出来：续接后台会话改用 `claude attach <id>`。
             ("background session without a process", """
              [{"cwd":"/w","kind":"background","id":"01a07a5f","sessionId":"\(id)","state":"blocked"}]
-             """, [(nil, id, "/w")]),
+             """, [(nil, id, "/w", "01a07a5f")]),
             // sessionId 也是「设了才有」：没有的一行对不上任何会话，但不说明格式变了。
-            ("row without session id", "[{\"pid\":9,\"kind\":\"interactive\",\"cwd\":\"/w\"}]", [(9, nil, "/w")]),
+            ("row without session id", "[{\"pid\":9,\"kind\":\"interactive\",\"cwd\":\"/w\"}]", [(9, nil, "/w", nil)]),
             // 两样都没有的一行跳过，不连累整张表。
             ("row with neither", """
              [{"cwd":"/w","kind":"background","state":"working"},{"pid":3,"kind":"interactive","sessionId":"\(id)"}]
-             """, [(3, id, nil)]),
+             """, [(3, id, nil, nil)]),
             // 反例：坏输入都必须是 nil 而非空表
             ("empty", "", nil),
             ("not json", "not json", nil),
@@ -141,6 +142,7 @@ final class ClaudeSessionCatalogTests: XCTestCase {
             ("row without kind", "[{\"pid\":1,\"sessionId\":\"\(id)\"}]", nil),
             ("pid 0", "[{\"pid\":0,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", nil),
             ("session id not a uuid", "[{\"pid\":1,\"kind\":\"interactive\",\"sessionId\":\"not-a-uuid\"}]", nil),
+            ("job id not a string", "[{\"kind\":\"background\",\"id\":7,\"sessionId\":\"\(id)\"}]", nil),
             ("pid as string", "[{\"pid\":\"1\",\"kind\":\"interactive\",\"sessionId\":\"\(id)\"}]", nil),
             ("one good row beside a bad one",
              "[{\"pid\":1,\"kind\":\"interactive\",\"sessionId\":\"\(id)\"},{\"cwd\":\"/w\"}]", nil),
@@ -151,8 +153,10 @@ final class ClaudeSessionCatalogTests: XCTestCase {
                 XCTAssertNil(decoded, c.name)
                 continue
             }
-            let rows = decoded?.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>", $0.cwd ?? "<nil>"] }
-            XCTAssertEqual(rows, expected.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>", $0.cwd ?? "<nil>"] }, c.name)
+            let rows = decoded?.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>", $0.cwd ?? "<nil>",
+                                       $0.jobID ?? "<nil>"] }
+            XCTAssertEqual(rows, expected.map { [$0.pid.map(String.init) ?? "<nil>", $0.sessionID ?? "<nil>",
+                                                 $0.cwd ?? "<nil>", $0.job ?? "<nil>"] }, c.name)
         }
     }
 

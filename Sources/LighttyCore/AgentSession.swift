@@ -266,10 +266,13 @@ public struct AgentLaunchContext: Equatable, Sendable {
         }
     }
 
-    func shellInput(tail: [String]) -> String {
+    func shellInput(tail: [String]) -> String { shellInput(arguments: arguments(tail: tail)) }
+
+    /// 原样的参数表，不经续接形状（`attach` 这类子命令自己就是整条命令）。
+    func shellInput(arguments: [String]) -> String {
         let env = environment.sorted { $0.key < $1.key }.map { Self.quote($0.key + "=" + $0.value) }
         let unset = unsetEnvironment.flatMap { ["-u", Self.quote($0)] }
-        return (["/usr/bin/env"] + unset + env + [Self.quote(executable)] + arguments(tail: tail).map(Self.quote))
+        return (["/usr/bin/env"] + unset + env + [Self.quote(executable)] + arguments.map(Self.quote))
             .joined(separator: " ") + "\n"
     }
 
@@ -311,6 +314,33 @@ public struct SessionResumePlan: Equatable, Sendable {
 
     public var arguments: [String] { context.arguments(tail: [nativeID]) }
     public var shellInput: String { context.shellInput(tail: [nativeID]) }
+}
+
+/// 在这个终端连上一段由 agent 后台托管的会话（Claude agent view 的 `claude attach <id>`）。
+///
+/// 这种会话已经在后台进程里跑着，`--resume` 会被 CLI 拒绝；连上它不新开进程写同一段会话。
+/// 不带启动参数：审批模式等是那段会话启动时定的，`attach` 也不接受它们。
+public struct SessionAttachPlan: Equatable, Sendable {
+    public let context: AgentLaunchContext
+    /// 后台会话的短 ID（`claude agents --json` 的 `id`），已校验，不会被 shell 或 CLI 当成选项。
+    public let jobID: String
+
+    public init(agent: SessionAgent, sourceRoot: String, executable: String,
+                configuration: SessionConfigurationLocation, workingDirectory: String, jobID: String) throws {
+        guard agent.spec.attachSubcommand != nil else { throw InvalidLaunchPlan.invalidValue }
+        guard !jobID.isEmpty, jobID.count <= 64, jobID.first != "-",
+              jobID.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+                      .contains($0)
+              }) else { throw InvalidLaunchPlan.invalidIdentifier }
+        context = try AgentLaunchContext(agent: agent, sourceRoot: sourceRoot, configuration: configuration,
+                                         executable: executable, workingDirectory: workingDirectory,
+                                         launchArguments: [])
+        self.jobID = jobID
+    }
+
+    public var arguments: [String] { [context.agent.spec.attachSubcommand ?? "", jobID] }
+    public var shellInput: String { context.shellInput(arguments: arguments) }
 }
 
 /// CLI 自带的会话选择器（`claude --resume`、`codex resume --all`）。

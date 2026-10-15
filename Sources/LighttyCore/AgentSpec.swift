@@ -56,6 +56,10 @@ public struct AgentSpec: Sendable {
     /// 续接命令的形状，见 `ResumeShape`。
     public let resumeShape: ResumeShape
 
+    /// 在当前终端连上一段由这家后台托管的会话的子命令（Claude 的 `claude attach <id>`）；
+    /// 没有后台托管会话的家为 nil。这种会话不能 `--resume`：CLI 会拒绝，让你去 attach。
+    public let attachSubcommand: String?
+
     /// 打开 CLI 自带会话选择器时补在命令尾部的参数。
     /// codex 默认只列当前目录的会话，`--all` 才是全部；claude 的选择器不带尾巴。
     public let pickerArguments: [String]
@@ -119,6 +123,7 @@ public struct AgentSpec: Sendable {
         iconToolTip: String,
         iconAssetName: String,
         resumeShape: ResumeShape,
+        attachSubcommand: String?,
         pickerArguments: [String],
         bypassArguments: [String],
         skillInvocationSigil: String,
@@ -142,6 +147,7 @@ public struct AgentSpec: Sendable {
         self.iconToolTip = iconToolTip
         self.iconAssetName = iconAssetName
         self.resumeShape = resumeShape
+        self.attachSubcommand = attachSubcommand
         self.pickerArguments = pickerArguments
         self.bypassArguments = bypassArguments
         self.skillInvocationSigil = skillInvocationSigil

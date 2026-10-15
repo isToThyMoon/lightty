@@ -96,8 +96,11 @@ enum SessionDeletion {
                        acceptingUnknownOccupancy: Bool = false,
                        known: [AgentProcessIdentity: AgentSessionKey] = [:]) throws {
         guard provider.source.owns(key) else { throw Failure.invalidSource }
-        if case .inUse(let pid) = provider.occupancy(of: key) {
-            throw pid.map(Failure.occupiedProcess) ?? .occupied
+        switch provider.occupancy(of: key) {
+        case .inUse(let pid): throw pid.map(Failure.occupiedProcess) ?? .occupied
+        // 后台托管的会话还在跑（或等着被唤醒），删掉就是从它脚下抽走转录。
+        case .background: throw Failure.occupied
+        case .unknown: break
         }
         do {
             do { try provider.checkDeletable(key, known: known) }

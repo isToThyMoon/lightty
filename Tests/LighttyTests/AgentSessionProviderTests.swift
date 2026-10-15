@@ -47,6 +47,15 @@ struct AgentSessionProviderTests {
             #expect(pid == 123)
         } catch { Issue.record("Unexpected \(error)") }
         #expect(provider.calls == [.occupancy(key(provider))])
+        // agent view 托管的后台会话也在用：它还在后台跑或等着被唤醒，删掉就抽走了它的转录。
+        let hosted = FakeSessionProvider()
+        hosted.occupancyResult = .background(jobID: "cbcaa1d2")
+        do {
+            try SessionDeletion.delete(key(hosted), provider: hosted, acceptingUnknownOccupancy: true)
+            Issue.record("A session agent view hosts must not be deleted")
+        } catch SessionDeletion.Failure.occupied {
+        } catch { Issue.record("Unexpected \(error)") }
+        #expect(hosted.calls == [.occupancy(key(hosted))])
     }
 
     /// 说不清谁在用：没同意就停，同意了只压掉这一种失败——确认有人在用的会话，

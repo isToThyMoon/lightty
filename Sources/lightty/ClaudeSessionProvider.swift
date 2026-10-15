@@ -108,10 +108,18 @@ struct ClaudeSessionProvider: AgentSessionProvider {
     // MARK: - 占用与存活进程
 
     /// 只问活会话表：表里有这段会话就是正面证据，问不出来或表里没有都只是「说不清」。
-    func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result {
-        guard let live = Self.liveSessions(executable: source.executable, root: key.sourceRoot),
-              let row = live.first(where: { $0.sessionID == key.nativeID }) else { return .unknown }
-        return .inUse(pid: row.pid)
+    func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result { occupancies()(key) }
+
+    /// 问一次活会话表，答所有会话。后台会话（agent view 托管）要 attach，其余在表里的是别处开着。
+    func occupancies() -> (AgentSessionKey) -> SessionOccupancy.Result {
+        let live = Self.liveSessions(executable: source.executable, root: source.root.path, timeout: 3)
+        let root = source.root.standardizedFileURL.path
+        return { key in
+            guard URL(fileURLWithPath: key.sourceRoot).standardizedFileURL.path == root, let live,
+                  let row = live.first(where: { $0.sessionID == key.nativeID }) else { return .unknown }
+            if row.isBackground, let job = row.jobID { return .background(jobID: job) }
+            return .inUse(pid: row.pid)
+        }
     }
 
     /// 问一次 Claude 的活会话表（`claude agents --json`），补两件事：
@@ -146,15 +154,17 @@ struct ClaudeSessionProvider: AgentSessionProvider {
         var isBackground = false
         /// 后台会话的名字彼此不重复（重名时 Claude 自动编号），界面进程把它写进终端标题。
         var name: String? = nil
+        /// 后台会话的短 ID（`id`），`claude attach` 用它。
+        var jobID: String? = nil
     }
 
     /// Claude 当前活着的会话。命令失败或输出不认识时返回 nil（「问不出来」），
     /// 绝不返回空表——空表会被读成「一个都没在跑」。
-    static func liveSessions(executable: String, root: String) -> [LiveSession]? {
+    static func liveSessions(executable: String, root: String, timeout: TimeInterval = 8) -> [LiveSession]? {
         guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
         guard let data = try? AgentHelperProcess.agentCLI(.claude, executable: executable, root: root,
             arguments: ["agents", "--json"], directory: URL(fileURLWithPath: NSHomeDirectory()))
-            .output(timeout: 8) else { return nil }
+            .output(timeout: timeout) else { return nil }
         return decodeLiveSessions(data)
     }
 
@@ -175,12 +185,14 @@ struct ClaudeSessionProvider: AgentSessionProvider {
                 livePID = Int32(value)
             }
             if let id { guard let text = id as? String, UUID(uuidString: text) != nil else { return nil } }
+            let job = row["id"]
+            if let job { guard job is String else { return nil } }
             // 两样都没有的一行对不上任何会话，也没有进程可看。
             guard livePID != nil || id != nil else { continue }
             // cwd 缺了不算致命：它只用来补目录，不参与占用判断。
             live.append(LiveSession(pid: livePID, sessionID: id as? String, cwd: row["cwd"] as? String,
                                     isBackground: row["kind"] as? String == "background",
-                                    name: row["name"] as? String))
+                                    name: row["name"] as? String, jobID: job as? String))
         }
         return live
     }

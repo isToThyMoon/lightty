@@ -11,6 +11,9 @@ public enum ClaudeAgent {
         iconToolTip: "Claude Code",
         iconAssetName: "claude",
         resumeShape: .flag("--resume"),
+        // agent view 的后台会话：`claude attach <id|name>`（官方文档 agent-view）。对这种会话
+        // `--resume` 会被拒绝（"That session is running in the background. Run `claude attach`…"）。
+        attachSubcommand: "attach",
         // `claude --resume` 不带尾巴就是它自己的选择器。
         pickerArguments: [],
         bypassArguments: ["--permission-mode", "bypassPermissions"],

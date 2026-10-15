@@ -46,6 +46,28 @@ final class AgentLaunchContextTests: XCTestCase {
         }
     }
 
+    /// 连上后台托管的会话：只有子命令和短 ID，不带启动参数（attach 不接受、审批模式在会话启动时已定）。
+    /// 回归：对 agent view 的后台会话 `--resume`，Claude 拒绝并让你去 attach，重启后 pane 回到 shell。
+    func testAttachShellInputIsVerbatimAndOnlyForAgentsThatHostSessions() throws {
+        let cases: [(SessionConfigurationLocation, String, String)] = [
+            (.standard, "cbcaa1d2", "/usr/bin/env -u 'CLAUDE_CONFIG_DIR' '/bin/claude' 'attach' 'cbcaa1d2'\n"),
+            (.custom("/cfg/claude"), "9b984b94",
+             "/usr/bin/env 'CLAUDE_CONFIG_DIR=/cfg/claude' '/bin/claude' 'attach' '9b984b94'\n"),
+        ]
+        for (configuration, job, expected) in cases {
+            let plan = try SessionAttachPlan(agent: .claude, sourceRoot: "/cfg/claude", executable: "/bin/claude",
+                                             configuration: configuration, workingDirectory: "/repo", jobID: job)
+            XCTAssertEqual(plan.shellInput, expected)
+        }
+        // 会被 shell 或 CLI 当成别的东西的 ID 一律拒绝
+        for job in ["", "-rf", "a b", "x;y", String(repeating: "a", count: 65)] {
+            XCTAssertThrowsError(try SessionAttachPlan(agent: .claude, sourceRoot: "/cfg/claude",
+                executable: "/bin/claude", configuration: .standard, workingDirectory: "/repo", jobID: job), job)
+        }
+        XCTAssertThrowsError(try SessionAttachPlan(agent: .codex, sourceRoot: "/cfg/codex", executable: "/bin/codex",
+            configuration: .standard, workingDirectory: "/repo", jobID: "abc"), "Codex 没有后台托管的会话")
+    }
+
     /// 来源目录在两种计划里都按标准化后的路径比对自定义来源：续接的会话身份构造时已标准化，
     /// 选择器由计划自己标准化。尾部斜杠不影响结果。
     func testSourceRootIsComparedStandardized() throws {

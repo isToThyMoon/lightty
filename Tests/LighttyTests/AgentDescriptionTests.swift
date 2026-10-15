@@ -12,8 +12,9 @@ struct AgentDescriptionTests {
     /// 用 `Mirror` 逐字段比而不是手写一张表：新加的字段自动进这条断言，
     /// 不必指望加字段的人记得来这里补一行。
     @Test func everySpecFieldIsFilledInAndDiffersBetweenTheAgents() {
-        // 合法为空的字段：claude 的原生选择器就是 `claude --resume`，不带尾巴。
-        let mayBeEmpty: Set<String> = ["pickerArguments"]
+        // 合法为空的字段：claude 的原生选择器就是 `claude --resume`，不带尾巴；
+        // codex 没有后台托管、要 attach 才连得上的会话。
+        let mayBeEmpty: Set<String> = ["pickerArguments", "attachSubcommand"]
         let claude = Array(Mirror(reflecting: SessionAgent.claude.spec).children)
         let codex = Array(Mirror(reflecting: SessionAgent.codex.spec).children)
         #expect(claude.count == codex.count)

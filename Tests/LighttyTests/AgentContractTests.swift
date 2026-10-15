@@ -87,13 +87,23 @@ struct AgentContractTests {
 
     static let claude = HookInstaller.locateExecutable(SessionAgent.claude.executableName)
 
-    /// `claude agents --json` 是官方说的「从 Claude Code 外面读会话状态」的正式途径：占用检测、
-    /// agent view 跟随都靠它。读的是本机真实的活会话表（只读）；认不出格式时解码返回 nil。
+    /// agent view 的两样官方接口：`claude agents --json` 是官方说的「从 Claude Code 外面读会话状态」的
+    /// 正式途径（占用检测、agent view 跟随都靠它），后台会话行带着短 ID；`claude attach <id>` 把后台
+    /// 会话连回终端（重启恢复、从侧栏打开后台会话都靠它）。读的是本机真实的活会话表（只读）。
     @Test(.enabled(if: claude != nil, "claude is not installed"))
-    func claudeAgentsJSONStillDecodes() throws {
+    func claudeAgentViewInterfacesStillWork() throws {
+        let executable = try #require(Self.claude)
         let root = SessionConfigurationLocation.standard
             .root(for: .claude, home: FileManager.default.homeDirectoryForCurrentUser).path
-        let rows = ClaudeSessionProvider.liveSessions(executable: try #require(Self.claude), root: root)
+        let rows = ClaudeSessionProvider.liveSessions(executable: executable, root: root)
         #expect(rows != nil, "`claude agents --json` output is no longer recognized")
+        for row in rows ?? [] where row.isBackground {
+            #expect(row.jobID != nil, "background row \(row.sessionID ?? "?") has no `id` for `claude attach`")
+        }
+        // 只看帮助。不认识的子命令也退出 0、打印总帮助（`Usage: claude [options]…`），只能看首行。
+        let help = try AgentHelperProcess.agentCLI(.claude, executable: executable, root: root,
+            arguments: ["attach", "--help"], directory: FileManager.default.homeDirectoryForCurrentUser)
+            .output(timeout: 15)
+        #expect(String(decoding: help, as: UTF8.self).hasPrefix("Usage: claude attach"), "`claude attach` is gone")
     }
 }

@@ -168,6 +168,11 @@ supervisor 的伪终端宿主。不成立就只认路由记录，查不到就隐
 列表」——2.1.295 起列表标题带上了等输入的个数，旧的精确匹配漏认一次，pane 就一直关联着被转走的旧会话，
 重启也好不了。没有关联任何会话的 pane（没装 hook）答不了「关联的还在不在前台」，只在看到列表之后才跟。
 
+续接一段会话前（重启恢复、从侧栏打开）也问 `claude agents --json`：它是后台会话就敲 `claude attach <短 ID>`
+连回去，不敲 `--resume`——对后台会话 `--resume` 会被 Claude 拒绝（"That session is running in the
+background. Run `claude attach`…"），pane 退回 shell。重启恢复是同步问的（pane 装进窗口前要定下第一行
+命令），同一家只问一次、3 秒为限，问不出来照常续接。删除时后台会话算「在用」。
+
 ### 兜底：Codex 写进本 pane 的终端信号
 
 以上都失效时（对不上 pane、`proxy` 不可用、hook 没装或没信任），状态退回 Codex 界面自己

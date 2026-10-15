@@ -18,6 +18,8 @@ protocol AgentSessionProvider: SessionCatalogProvider {
     func delete(_ key: AgentSessionKey) throws
     /// 是否有进程正在用这段会话。只报正面证据；`.unknown` 不代表空闲。
     func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result
+    /// `occupancy(of:)` 的批量版：问一次，答这家所有会话。一口气恢复好几个 pane 时用。
+    func occupancies() -> (AgentSessionKey) -> SessionOccupancy.Result
     /// 删除前这家 Agent 特有的额外核查。`known` 是本应用 pane 已核对过的进程身份。
     /// 能确认有人在用抛 `SessionDeletion.Failure.occupiedProcess`，说不清抛 `.unknownOccupancy`；
     /// 没有额外核查的 Agent 直接返回（原生接口自己的写锁拒绝仍然是权威）。
@@ -34,8 +36,14 @@ protocol AgentSessionProvider: SessionCatalogProvider {
 /// （`codex agents` 要先连上一个共用的后台服务，而 lightty 是直接在终端里跑 codex），
 /// 所以它恒为 `.unknown`，由 codex 自己的写锁在删除时拒绝。
 enum SessionOccupancy {
-    /// `inUse` 的 pid 可能不知道：agent view 的后台会话进程被停掉后仍算在用。
-    enum Result: Equatable { case inUse(pid: Int32?), unknown }
+    enum Result: Equatable {
+        /// 别的终端里开着。
+        case inUse(pid: Int32?)
+        /// 这家后台托管的会话（Claude agent view）：不在任何终端里，在这个终端 `attach` 连上它，
+        /// 不能 `--resume`。进程被 supervisor 停掉后仍算，attach 会把它唤醒。
+        case background(jobID: String)
+        case unknown
+    }
 }
 
 /// 一次观察的结果，按原生会话 ID 索引。只是读取时的证据，不是实时布尔值。
@@ -46,6 +54,9 @@ struct LiveSessionObservation: Equatable {
 }
 
 extension AgentSessionProvider {
+    /// 没有批量接口的家逐个问。
+    func occupancies() -> (AgentSessionKey) -> SessionOccupancy.Result { { occupancy(of: $0) } }
+
     /// 把存活进程观察补进一页。观察是锦上添花：问不出来就原样返回，不能让列表读不出来。
     /// 因此「没有标记」只意味着没有证据，不代表一定没开着。
     func annotatingLiveSessions(_ page: SessionCatalogPage) -> SessionCatalogPage {
