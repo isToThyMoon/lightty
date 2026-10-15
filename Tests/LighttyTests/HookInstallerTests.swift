@@ -153,11 +153,27 @@ final class HookInstallerTests: XCTestCase {
     }
 
     /// 逐行写入配置、只读探测，比对 State。`unreadable` 只比 case，另查 reason 带路径。
+    @MainActor
     private func checkStates(_ agent: HookAgent, _ cases: [StateCase]) throws {
+        // 重装 CLI 会清掉插件配置，但 lightty 自己的安装台账仍在。
+        try HookInstaller.install(agent, in: context())
+        let fixture = try SessionModelFixture(agent: agent.sessionAgent)
+        defer { fixture.close() }
+        let library = SessionLibrary(fileURL: dir.appendingPathComponent("organization.json"), providers: [],
+                                     statusStore: fixture.statuses,
+                                     hookInstalled: { [self] in HookInstaller.isPluginEnabled(for: HookAgent($0), in: context()) })
+        defer { library.cancelLoading() }
+        let title = agent == .claudeCode ? "✳ Conversation" : "⠋ Conversation"
         for c in cases {
             try? FileManager.default.removeItem(at: configs[agent]!)
             if let config = c.config { try write(agent, config) }
             let actual = state(agent)
+            let pane = UUID()
+            library.registerPane(pane, name: "Terminal 103", directory: nil)
+            library.noteTerminalTitle(title, in: pane)
+            XCTAssertEqual(library.paneState(for: pane)?.title,
+                           c.expected == .installed ? "Terminal 103" : title, c.name)
+            library.removePane(pane)
             if case .unreadable(let reason) = c.expected {
                 guard case .unreadable(let actualReason) = actual else {
                     XCTFail("\(c.name)：读不懂的配置应报 unreadable，实际 \(actual)")
@@ -171,7 +187,7 @@ final class HookInstallerTests: XCTestCase {
     }
 
     /// 同一 `state(.claudeCode)`，只差 settings.json 的内容。
-    func testClaudeConfigStateIsDetectedReadOnly() throws {
+    @MainActor func testClaudeConfigStateIsDetectedReadOnly() throws {
         try checkStates(.claudeCode, [
             // 装好后的真实形状
             StateCase(name: "installed is recognised", config: claudeInstalled, expected: .installed),
@@ -198,7 +214,7 @@ final class HookInstallerTests: XCTestCase {
     }
 
     /// 同一 `state(.codex)`，只差 config.toml 的内容。
-    func testCodexConfigStateIsDetectedReadOnly() throws {
+    @MainActor func testCodexConfigStateIsDetectedReadOnly() throws {
         try checkStates(.codex, [
             // 装好后的真实形状
             StateCase(name: "installed is recognised", config: codexInstalled, expected: .installed),

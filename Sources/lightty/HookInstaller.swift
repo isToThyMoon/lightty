@@ -367,6 +367,13 @@ enum HookInstaller {
         }
     }
 
+    /// 标题兜底只看当前配置。版本台账记录的是过去装过什么，CLI 重装或插件被外部卸载后仍会留下。
+    /// 不跑 CLI，也不生成 marketplace；标题动画每次推送都可能问到这里。
+    static func isPluginEnabled(for agent: HookAgent, in context: Context = .live) -> Bool {
+        guard let declaration = try? agent.readDeclaration(at: context.configFile(agent)) else { return false }
+        return declaration.marketplaceDeclared && declaration.pluginEnabled
+    }
+
     // MARK: - 版本台账
 
     /// 该 agent 的台账文件：`~/.lightty/hook-plugins/<agent>.version`，
