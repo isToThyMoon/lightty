@@ -72,7 +72,7 @@ final class SessionLibrary {
         refresh()
     }
 
-    /// 这家的 hook 插件是不是 lightty 装好的（版本台账）。装好了，pane 标题就走 hook + 官方目录
+    /// 这家的 hook 插件是否在当前配置中启用。启用了，pane 标题就走 hook + 官方目录
     /// 那条路，agent 写的终端标题只用来补 Claude 中断、催目录重读，不显示；没装的才把终端标题原样显示。
     /// Codex 装好之后还要用户批准一次信任，批没批准 lightty 看不到——没批准的表现就是「终端 N」
     /// 加图标一直不变，和今天一样。
@@ -81,7 +81,7 @@ final class SessionLibrary {
     init(fileURL: URL, providers: [AgentSessionProvider]? = nil,
          statusStore: PaneStatusStore = .shared, metadataRefreshDelay: TimeInterval = 1.5,
          hostProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
-         hookInstalled: @escaping (SessionAgent) -> Bool = { HookInstaller.installedVersion(of: HookAgent($0)) != nil }) {
+         hookInstalled: @escaping (SessionAgent) -> Bool = { HookInstaller.isPluginEnabled(for: HookAgent($0)) }) {
         self.hostProcessID = hostProcessID
         self.fileURL = fileURL
         self.providers = providers
