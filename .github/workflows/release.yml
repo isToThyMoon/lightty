@@ -106,8 +106,9 @@ jobs:
             .build/apple/Products/Release/lightty-hook
             .build/apple/Products/Release/lightty_lightty.bundle
             .build/apple/Products/Release/Sparkle.framework
+            .build/artifacts/sparkle
             .build/claude-session-helper
-          key: release-products-v1-macos26-${{ runner.arch }}-xcode${{ steps.toolchain.outputs.xcode }}-sdk${{ steps.toolchain.outputs.sdk }}-${{ hashFiles('Package.resolved', 'scripts/claude-session-helper/package-lock.json', 'scripts/prepare-claude-helper.mjs') }}-${{ github.sha }}
+          key: release-products-v2-macos26-${{ runner.arch }}-xcode${{ steps.toolchain.outputs.xcode }}-sdk${{ steps.toolchain.outputs.sdk }}-${{ hashFiles('Package.resolved', 'scripts/claude-session-helper/package-lock.json', 'scripts/prepare-claude-helper.mjs') }}-${{ github.sha }}
 
       - name: Prepare helper + Swift release products
         if: steps.release-products.outputs.cache-hit != 'true'
