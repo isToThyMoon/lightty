@@ -285,22 +285,27 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     @objc private func clearTabs() {
-        let activeTab = controller?.tabOverview().first(where: \.isActive)?.id
-        var items: [ShellMenuPopover.Item] = []
-        if let activeTab {
-            items.append(.action(L("New tab group"), symbol: ShellSymbol.project) { [weak self] in
-                self?.presentNewGroupEditor(for: activeTab, from: self?.clearTabsButton)
-            })
-            items.append(.separator)
-        }
-        items.append(
+        let items: [ShellMenuPopover.Item] = [
+            .action(L("New tab group"), symbol: ShellSymbol.project) { [weak self] in
+                self?.presentNewGroupEditor(from: self?.clearTabsButton)
+            },
+            .separator,
             .action(L("Close all tabs in this window"), destructive: true, symbol: ShellSymbol.close) { [weak self] in
                 self?.controller?.requestClearTabs()
-            })
+            },
+        ]
         ShellMenuPopover.present(from: clearTabsButton, items: items)
     }
 
-    private func presentNewGroupEditor(for tabID: UUID, from anchor: NSView?) {
+    private func presentNewGroupEditor(from anchor: NSView?) {
+        guard let anchor, let controller else { return }
+        NameEditorPopover.present(from: anchor, title: L("New tab group"), initial: "",
+                                  confirmLabel: L("Create")) { name in
+            controller.createSidebarGroup(named: name)
+        }
+    }
+
+    private func presentMoveToNewGroupEditor(for tabID: UUID, from anchor: NSView?) {
         guard let anchor, let controller else { return }
         NameEditorPopover.present(from: anchor, title: L("New tab group"), initial: "",
                                   confirmLabel: L("Create")) { name in
@@ -588,7 +593,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
         }
         items.append(.action(L("Move to new group"), symbol: ShellSymbol.project) { [weak self, weak anchor] in
-            self?.presentNewGroupEditor(for: tabID, from: anchor)
+            self?.presentMoveToNewGroupEditor(for: tabID, from: anchor)
         })
         if currentGroupID != nil {
             items.append(.action(L("Remove from group"), symbol: ShellSymbol.close) {

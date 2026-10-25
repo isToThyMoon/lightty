@@ -540,6 +540,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         commit(next)
     }
 
+    /// 顶部“新建标签页分组”是独立创建动作：新建标签页作为首个成员，不读取或移动当前页。
+    func createSidebarGroup(named title: String) {
+        let pane = PaneView()
+        install(pane: pane)
+        let tabID = UUID()
+        guard let withTab = arrangement.appendingTab(
+            tabID, layout: .pane(pane.dragIdentifier), title: .numbered(tabNumbering.upcoming),
+            select: true
+        ), let next = withTab.creatingGroup(UUID(), title: title, containing: tabID) else { return }
+        commit(next, incoming: [pane])
+    }
+
     func renameSidebarGroup(withID id: UUID, to title: String) {
         guard let next = arrangement.renamingGroup(id, to: title) else { return }
         commit(next)
