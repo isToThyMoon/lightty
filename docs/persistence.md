@@ -5,7 +5,7 @@ lightty 自有持久数据独立于应用包、安装路径、构建目录和版
 | 文件 | 所有权与内容 | `format` / `version` |
 | --- | --- | --- |
 | `preferences.json` | 外观、语言、重点色、主题开关、Agent 选择与启动命令、菜单栏开关、侧栏偏好、任务排序、引导提示状态 | `lightty.preferences` / `1` |
-| `workspace.json` | 窗口、标签页、分屏树及可恢复终端信息；不是运行进程备份 | `lightty.workspace` / `1` |
+| `workspace.json` | 窗口、标签页分组、标签页、分屏树及可恢复终端信息；不是运行进程备份 | `lightty.workspace` / `1` |
 | `organization.json` | 跨 Agent 项目、会话归属、排序、折叠及本地归档；不是对话正文或目录缓存 | `lightty.organization` / `1` |
 | `tasks/*.md`、`tasks/archive/*.md` | **已发布**的 Handoff 文档及其归档 | 原有 Markdown/frontmatter，见 task-format.md；不参与 JSON 迁移 |
 

@@ -523,3 +523,13 @@
 "No local sessions yet. Start a session with the toolbar; return here to continue it." = "还没有本地会话。从顶部新建会话，之后可在这里继续。";
 
 "Opened" = "已打开";
+"New tab group" = "新建标签页分组";
+"New tab in group" = "在分组中新建标签页";
+"Rename group" = "重命名分组";
+"Dissolve group" = "解散分组";
+"Move to group: %@" = "移到分组「%@」";
+"Move to new group" = "移到新分组";
+"Remove from group" = "移出分组";
+"Expand group" = "展开分组";
+"Collapse group" = "折叠分组";
+"Close tabs in group" = "关闭组内标签页";

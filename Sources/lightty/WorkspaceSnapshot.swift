@@ -21,9 +21,15 @@ struct WindowSnapshot: Codable, Equatable {
     var frame: CGRect?
     var activeTabIndex: Int
     var tabs: [TabSnapshot]
+    var sidebarGroups: [TabGroupSnapshot]? = nil
     var taskPanelOpen: Bool
     var tabSidebarOpen: Bool
     var primarySidebarMode: String? = nil
+}
+
+struct TabGroupSnapshot: Codable, Equatable {
+    var id: UUID
+    var title: String
 }
 
 struct TabSnapshot: Codable, Equatable {
@@ -34,6 +40,7 @@ struct TabSnapshot: Codable, Equatable {
     /// 默认名的序号；只有 `customTitle == false` 时才有。存序号而不是只存字符串，
     /// 切换语言后默认名仍认得出来。
     var titleNumber: Int? = nil
+    var groupID: UUID? = nil
     var root: SplitNodeSnapshot
 }
 

@@ -41,21 +41,35 @@ public enum TabTitle: Sendable, Equatable {
     }
 }
 
+/// 窗口内的标签页分组。它只组织标签页，不承载 pane 或会话状态。
+public struct TabGroup: Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public var title: String
+
+    public init(id: UUID, title: String) {
+        self.id = id
+        self.title = title
+    }
+}
+
 /// 窗口编排里的一个标签页：身份、pane 排布、标题、放大态、最近聚焦的 pane。
 public struct ArrangedTab: Sendable, Equatable {
     public let id: UUID
     public var layout: PaneLayout
     public var title: TabTitle
+    public var groupID: UUID?
     /// 放大中的 pane（toggle_split_zoom）。结构一变就失效。
     public var zoomedPane: UUID?
     /// 本标签页最近聚焦的 pane，只经 `WindowArrangement.focusing` 记录；pane 离开标签页即清掉。
     /// 标签页切走再切回来、first responder 暂时不在终端里时，焦点从这里找回。
     public internal(set) var focusedPane: UUID?
 
-    public init(id: UUID, layout: PaneLayout, title: TabTitle, zoomedPane: UUID? = nil) {
+    public init(id: UUID, layout: PaneLayout, title: TabTitle, groupID: UUID? = nil,
+                zoomedPane: UUID? = nil) {
         self.id = id
         self.layout = layout
         self.title = title
+        self.groupID = groupID
         self.zoomedPane = zoomedPane
     }
 
@@ -75,18 +89,21 @@ public struct ArrangedTab: Sendable, Equatable {
 /// - pane 离开标签页（关闭、移走、拆出、跨窗口移出）时，它不再是那个标签页的焦点。
 public struct WindowArrangement: Sendable, Equatable {
     public private(set) var tabs: [ArrangedTab]
+    public private(set) var groups: [TabGroup]
     public private(set) var activeTabID: UUID?
 
     /// `activeTabID` 不在 `tabs` 里时取第一个标签页。
-    public init(tabs: [ArrangedTab] = [], activeTabID: UUID? = nil) {
+    public init(tabs: [ArrangedTab] = [], groups: [TabGroup] = [], activeTabID: UUID? = nil) {
         self.tabs = tabs
+        let used = Set(tabs.compactMap(\.groupID))
+        self.groups = groups.filter { used.contains($0.id) }
         self.activeTabID = activeTabID.flatMap { id in tabs.contains { $0.id == id } ? id : nil } ?? tabs.first?.id
     }
 
     /// 快照恢复：当前标签页按位次给出，越界夹到两端。
-    public init(restoring tabs: [ArrangedTab], activeIndex: Int) {
+    public init(restoring tabs: [ArrangedTab], groups: [TabGroup] = [], activeIndex: Int) {
         let index = tabs.isEmpty ? nil : min(max(activeIndex, 0), tabs.count - 1)
-        self.init(tabs: tabs, activeTabID: index.map { tabs[$0].id })
+        self.init(tabs: tabs, groups: groups, activeTabID: index.map { tabs[$0].id })
     }
 
     // MARK: - 查询
@@ -97,6 +114,7 @@ public struct WindowArrangement: Sendable, Equatable {
     public var activeIndex: Int? { activeTabID.flatMap(index) }
 
     public func tab(_ id: UUID) -> ArrangedTab? { tabs.first { $0.id == id } }
+    public func group(_ id: UUID) -> TabGroup? { groups.first { $0.id == id } }
     public func index(of id: UUID) -> Int? { tabs.firstIndex { $0.id == id } }
     public func tabID(hosting pane: UUID) -> UUID? { tabs.first { $0.layout.contains(pane) }?.id }
 
@@ -110,6 +128,8 @@ public struct WindowArrangement: Sendable, Equatable {
     public var isWellFormed: Bool {
         let panes = self.panes
         return Set(tabs.map(\.id)).count == tabs.count
+            && Set(groups.map(\.id)).count == groups.count
+            && tabs.allSatisfy { tab in tab.groupID.map { group($0) != nil } ?? true }
             && Set(panes).count == panes.count
             && (tabs.isEmpty ? activeTabID == nil : activeTab != nil)
     }
@@ -155,10 +175,16 @@ public struct WindowArrangement: Sendable, Equatable {
 
     /// 追加一个标签页。`select` 为 false 时当前标签页不变（空窗口仍会选中它）。
     public func appendingTab(_ id: UUID, layout: PaneLayout, title: TabTitle,
-                             select: Bool) -> WindowArrangement? {
+                             groupID: UUID? = nil, select: Bool) -> WindowArrangement? {
         guard tab(id) == nil, layout.panes.allSatisfy({ tabID(hosting: $0) == nil }) else { return nil }
-        let layouts = tabLayouts + [TabLayout(id: id, layout: layout)]
-        return adopting(layouts, newTitles: [id: title], select: select ? id : nil)
+        guard groupID.map({ group($0) != nil }) ?? true else { return nil }
+        var layouts = tabLayouts
+        let insertion = groupID.flatMap { target in tabs.lastIndex { $0.groupID == target }.map { $0 + 1 } }
+            ?? layouts.count
+        layouts.insert(TabLayout(id: id, layout: layout), at: insertion)
+        let assignments = groupID.map { [id: $0] } ?? [:]
+        return adopting(layouts, newTitles: [id: title], groupAssignments: assignments,
+                        select: select ? id : nil)
     }
 
     /// core close_tab 的范围，相对当前标签页。关闭本身走 `removingPanes`。
@@ -199,14 +225,81 @@ public struct WindowArrangement: Sendable, Equatable {
         } else {
             destination = 0
         }
-        return TabArrangement.movingTab(from: from, to: destination, in: tabLayouts).flatMap { adopting($0) }
+        let destinationGroup = anchor.flatMap { tab($0)?.groupID }
+        let assignments = destinationGroup.map { [id: $0] } ?? [:]
+        let ungrouped: Set<UUID> = destinationGroup == nil ? [id] : []
+        return TabArrangement.movingTab(from: from, to: destination, in: tabLayouts)
+            .flatMap { adopting($0, groupAssignments: assignments, ungrouped: ungrouped) }
+    }
+
+    /// 把标签页移到分组末尾；`nil` 表示移出分组并放到窗口末尾。
+    public func movingTab(_ id: UUID, intoGroup groupID: UUID?) -> WindowArrangement? {
+        if let groupID {
+            let anchor = tabs.last { $0.groupID == groupID && $0.id != id }?.id
+            return movingTab(id, intoGroup: groupID, after: anchor)
+        }
+        guard let from = index(of: id), tabs[from].groupID != nil else { return nil }
+        let layouts = TabArrangement.movingTab(from: from, to: tabs.count - 1, in: tabLayouts) ?? tabLayouts
+        return adopting(layouts, ungrouped: [id])
+    }
+
+    /// 标签页拖到分组内的确切缝隙；`anchor == nil` 是该分组第一个位置。
+    public func movingTab(_ id: UUID, intoGroup groupID: UUID, after anchor: UUID?) -> WindowArrangement? {
+        guard let from = index(of: id), group(groupID) != nil else { return nil }
+        let rest = tabs.filter { $0.id != id }
+        let destination: Int
+        if let anchor {
+            guard let found = rest.firstIndex(where: { $0.id == anchor && $0.groupID == groupID }) else { return nil }
+            destination = found + 1
+        } else {
+            destination = rest.firstIndex { $0.groupID == groupID } ?? rest.count
+        }
+        let layouts = TabArrangement.movingTab(from: from, to: destination, in: tabLayouts) ?? tabLayouts
+        guard tabs[from].groupID != groupID || layouts != tabLayouts else { return nil }
+        return adopting(layouts, groupAssignments: [id: groupID])
+    }
+
+    public func creatingGroup(_ id: UUID, title: String, containing tabID: UUID) -> WindowArrangement? {
+        guard group(id) == nil, let index = index(of: tabID) else { return nil }
+        var next = self
+        next.groups.append(TabGroup(id: id, title: title))
+        var tab = next.tabs.remove(at: index)
+        let insertion = tab.groupID.flatMap { oldGroup in
+            next.tabs.lastIndex { $0.groupID == oldGroup }.map { $0 + 1 }
+        } ?? index
+        tab.groupID = id
+        next.tabs.insert(tab, at: min(insertion, next.tabs.count))
+        next.removeUnusedGroups()
+        return next
+    }
+
+    public func renamingGroup(_ id: UUID, to title: String) -> WindowArrangement? {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return nil }
+        var next = self
+        next.groups[index].title = title
+        return next
+    }
+
+    public func dissolvingGroup(_ id: UUID) -> WindowArrangement? {
+        guard groups.contains(where: { $0.id == id }) else { return nil }
+        var next = self
+        for index in next.tabs.indices where next.tabs[index].groupID == id {
+            next.tabs[index].groupID = nil
+        }
+        next.groups.removeAll { $0.id == id }
+        return next
     }
 
     /// core move_tab：当前标签页移动 amount 位，环绕。
     public func movingActiveTab(by amount: Int) -> WindowArrangement? {
         guard tabs.count > 1, amount != 0, let current = activeIndex else { return nil }
         let destination = (current + amount % tabs.count + tabs.count) % tabs.count
-        return TabArrangement.movingTab(from: current, to: destination, in: tabLayouts).flatMap { adopting($0) }
+        guard let layouts = TabArrangement.movingTab(from: current, to: destination, in: tabLayouts),
+              let moved = layouts.firstIndex(where: { $0.id == tabs[current].id }) else { return nil }
+        let destinationGroup = moved > 0 ? tab(layouts[moved - 1].id)?.groupID : nil
+        let assignments = destinationGroup.map { [tabs[current].id: $0] } ?? [:]
+        let ungrouped: Set<UUID> = destinationGroup == nil ? [tabs[current].id] : []
+        return adopting(layouts, groupAssignments: assignments, ungrouped: ungrouped)
     }
 
     // MARK: - pane
@@ -253,16 +346,22 @@ public struct WindowArrangement: Sendable, Equatable {
     /// 把分屏里的 pane 拆成新标签页，放在 `anchor` 之后（nil = 最前）。源标签页还有
     /// 别的 pane，所以 anchor 可以是源标签页自己。它本来就独占标签页时无事可做。
     public func detachingPane(_ pane: UUID, toNewTab id: UUID, title: TabTitle,
-                              after anchor: UUID?) -> WindowArrangement? {
+                              groupID: UUID? = nil, after anchor: UUID?) -> WindowArrangement? {
         let destination: Int
         if let anchor {
             guard let found = index(of: anchor) else { return nil }
             destination = found + 1
+        } else if let groupID {
+            guard group(groupID) != nil else { return nil }
+            destination = tabs.firstIndex { $0.groupID == groupID } ?? tabs.count
         } else {
             destination = 0
         }
         return TabArrangement.detachingPane(pane, toNewTab: id, at: destination, in: tabLayouts)
-            .flatMap { adopting($0, newTitles: [id: title]) }
+            .flatMap {
+                adopting($0, newTitles: [id: title],
+                         groupAssignments: groupID.map { [id: $0] } ?? [:])
+            }
     }
 
     // MARK: - 比例与放大
@@ -319,10 +418,13 @@ public struct WindowArrangement: Sendable, Equatable {
     /// 焦点 pane 已经不在树里的清掉焦点；新身份用 `newTitles` 给的标题（给不出就是无效命令），
     /// 没有焦点记录。当前标签页按 `select`，否则留在原来那个身上，它没了就落到原位次上的邻居。
     private func adopting(_ layouts: [TabLayout], newTitles: [UUID: TabTitle] = [:],
+                          groupAssignments: [UUID: UUID] = [:], ungrouped: Set<UUID> = [],
                           select: UUID? = nil) -> WindowArrangement? {
         var result: [ArrangedTab] = []
         for entry in layouts {
             if var tab = tab(entry.id) {
+                if let groupID = groupAssignments[entry.id] { tab.groupID = groupID }
+                if ungrouped.contains(entry.id) { tab.groupID = nil }
                 if tab.layout != entry.layout {
                     tab.layout = entry.layout
                     tab.zoomedPane = nil
@@ -331,7 +433,8 @@ public struct WindowArrangement: Sendable, Equatable {
                 result.append(tab)
             } else {
                 guard let title = newTitles[entry.id] else { return nil }
-                result.append(ArrangedTab(id: entry.id, layout: entry.layout, title: title))
+                result.append(ArrangedTab(id: entry.id, layout: entry.layout, title: title,
+                                          groupID: groupAssignments[entry.id]))
             }
         }
         let active: UUID?
@@ -342,6 +445,11 @@ public struct WindowArrangement: Sendable, Equatable {
         } else {
             active = result.isEmpty ? nil : result[min(activeIndex ?? 0, result.count - 1)].id
         }
-        return WindowArrangement(tabs: result, activeTabID: active)
+        return WindowArrangement(tabs: result, groups: groups, activeTabID: active)
+    }
+
+    private mutating func removeUnusedGroups() {
+        let used = Set(tabs.compactMap(\.groupID))
+        groups.removeAll { !used.contains($0.id) }
     }
 }

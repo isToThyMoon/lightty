@@ -7,6 +7,7 @@ import LighttyCore
 /// 被关掉，下标会变，身份不会。
 /// `leaf` = 单 pane 标签页的合并行：它既是可拖走的 pane，本身又是一个标签页。
 enum TabRowKind: Equatable {
+    case group(UUID)
     case tab(UUID)
     case pane(tab: UUID, pane: UUID)
     case leaf(tab: UUID, pane: UUID)
@@ -47,7 +48,17 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
     private struct RowItem {
         let kind: TabRowKind
+        let groupID: UUID?
+        let leadingInset: CGFloat
         let makeView: (NSView?) -> NSView
+
+        init(kind: TabRowKind, groupID: UUID? = nil, leadingInset: CGFloat = 0,
+             makeView: @escaping (NSView?) -> NSView) {
+            self.kind = kind
+            self.groupID = groupID
+            self.leadingInset = leadingInset
+            self.makeView = makeView
+        }
     }
     /// 控制器模型的如实投影，拖拽从不改写它。
     private var modelRows: [RowItem] = []
@@ -59,6 +70,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let paneRows = NSMapTable<NSUUID, PaneRowView>(keyOptions: .strongMemory, valueOptions: .weakMemory)
     /// 标签页没有持久化折叠语义；仅在当前侧栏实例内记忆，reload 不丢。
     private var collapsedTabIDs = Set<UUID>()
+    private var collapsedGroupIDs = Set<UUID>()
 
     private var controller: TerminalWindowController? {
         window?.windowController as? TerminalWindowController
@@ -158,6 +170,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         switch rowItems[row].kind {
+        case .group: return row == 0 ? 32 : 38
         case .tab: return row == 0 ? 30 : 36
         case .pane: return 42
         // 叶子行之间比同标签页内的 pane 行多留一点气口（它们是不同的标签页），
@@ -169,6 +182,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let identifier: NSUserInterfaceItemIdentifier
         switch rowItems[row].kind {
+        case .group: identifier = .init("tab-group-row")
         case .tab: identifier = .init("tab-row")
         case .pane: identifier = .init("pane-row")
         // 缩进在 PaneRowView 初始化时定死，叶子行与缩进 pane 行不共用复用池。
@@ -176,7 +190,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         let container = tableView.makeView(withIdentifier: identifier, owner: nil) as? TabRowContainer ?? TabRowContainer()
         container.identifier = identifier
-        container.bind(rowItems[row].makeView(container.content))
+        container.bind(rowItems[row].makeView(container.content),
+                       leadingInset: rowItems[row].leadingInset)
         decorate(container, row: row)
         return container
     }
@@ -270,11 +285,27 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     @objc private func clearTabs() {
-        ShellMenuPopover.present(from: clearTabsButton, items: [
+        let activeTab = controller?.tabOverview().first(where: \.isActive)?.id
+        var items: [ShellMenuPopover.Item] = []
+        if let activeTab {
+            items.append(.action(L("New tab group"), symbol: ShellSymbol.project) { [weak self] in
+                self?.presentNewGroupEditor(for: activeTab, from: self?.clearTabsButton)
+            })
+            items.append(.separator)
+        }
+        items.append(
             .action(L("Close all tabs in this window"), destructive: true, symbol: ShellSymbol.close) { [weak self] in
                 self?.controller?.requestClearTabs()
-            },
-        ])
+            })
+        ShellMenuPopover.present(from: clearTabsButton, items: items)
+    }
+
+    private func presentNewGroupEditor(for tabID: UUID, from anchor: NSView?) {
+        guard let anchor, let controller else { return }
+        NameEditorPopover.present(from: anchor, title: L("New tab group"), initial: "",
+                                  confirmLabel: L("Create")) { name in
+            controller.createSidebarGroup(containing: tabID, named: name)
+        }
     }
 
     @objc private func splitRight() {
@@ -295,36 +326,70 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private func rebuild() {
         guard let controller else { return }
-        reload(overview: controller.tabOverview())
+        reload(groupedOverview: controller.tabOverview(), groups: controller.sidebarGroups())
     }
 
     typealias OverviewEntry = (
         id: UUID, title: String, hasCustomTitle: Bool, isActive: Bool, panes: [PaneView])
+    typealias GroupedOverviewEntry = (
+        id: UUID, title: String, hasCustomTitle: Bool, isActive: Bool,
+        groupID: UUID?, panes: [PaneView])
     private struct TabPresentation {
         let id: UUID
         let title: String
         let isActive: Bool
+        let groupID: UUID?
         let count: Int
     }
 
     func reload(overview: [OverviewEntry]) {
+        reload(groupedOverview: overview.map { ($0.id, $0.title, $0.hasCustomTitle, $0.isActive, nil, $0.panes) },
+               groups: [])
+    }
+
+    private func reload(groupedOverview overview: [GroupedOverviewEntry], groups: [TabGroup]) {
         var rowItems: [RowItem] = []
         paneRows.removeAllObjects()
         collapsedTabIDs.formIntersection(overview.map(\.id))
+        let groupIDs = Set(groups.map(\.id))
+        collapsedGroupIDs.formIntersection(groupIDs)
+        let groupByID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
+        let groupCounts = Dictionary(grouping: overview.compactMap { entry in
+            entry.groupID.map { ($0, entry.isActive) }
+        }, by: \.0)
+        var emittedGroups = Set<UUID>()
         if let naming = namingTabID, !overview.contains(where: { $0.id == naming }) {
             // 命名途中标签页被关掉了：没有东西可命名，状态一并清掉。
             namingTabID = nil
             namingDraft = ""
         }
         for entry in overview {
+            let leadingInset: CGFloat = entry.groupID == nil ? 0 : 14
+            if let groupID = entry.groupID, !emittedGroups.contains(groupID),
+               let group = groupByID[groupID] {
+                emittedGroups.insert(groupID)
+                let members = groupCounts[groupID] ?? []
+                let presentation = GroupPresentation(
+                    id: groupID, title: group.title, count: members.count,
+                    containsActiveTab: members.contains(where: \.1),
+                    isCollapsed: collapsedGroupIDs.contains(groupID))
+                rowItems.append(RowItem(kind: .group(groupID), groupID: groupID,
+                                        makeView: { [weak self] existing in
+                    self?.makeGroupRow(presentation, reusing: existing as? TabGroupRowView) ?? NSView()
+                }))
+            }
+            if let groupID = entry.groupID, collapsedGroupIDs.contains(groupID) { continue }
             if entry.panes.count == 1, !entry.hasCustomTitle, entry.id != namingTabID,
                let pane = entry.panes.first {
                 // 叶子标签页：折叠对它无意义，折叠集合里的残留不影响它。
                 let tabID = entry.id
                 rowItems.append(RowItem(kind: .leaf(tab: tabID, pane: pane.dragIdentifier),
+                    groupID: entry.groupID,
+                    leadingInset: leadingInset,
                     makeView: { [weak self, weak pane] existing in
                         guard let self, let pane else { return NSView() }
-                        return self.makeLeafRow(for: pane, tabID: tabID, reusing: existing as? PaneRowView)
+                        return self.makeLeafRow(for: pane, tabID: tabID, groupID: entry.groupID,
+                                                reusing: existing as? PaneRowView)
                     }))
                 continue
             }
@@ -332,14 +397,19 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             let isCollapsed = entry.id != namingTabID
                 && (collapsedTabIDs.contains(entry.id) || drag?.collapsedForDrag == entry.id)
             let presentation = TabPresentation(id: entry.id, title: entry.title,
-                isActive: entry.isActive, count: entry.panes.count)
-            rowItems.append(RowItem(kind: .tab(entry.id), makeView: { [weak self] existing in
+                isActive: entry.isActive, groupID: entry.groupID, count: entry.panes.count)
+            rowItems.append(RowItem(kind: .tab(entry.id), groupID: entry.groupID,
+                                    leadingInset: leadingInset,
+                                    makeView: { [weak self] existing in
                 self?.makeTabRow(presentation, isCollapsed: isCollapsed, reusing: existing as? TabRowView) ?? NSView()
             }))
 
             guard !isCollapsed else { continue }
             for pane in entry.panes {
-                rowItems.append(RowItem(kind: .pane(tab: entry.id, pane: pane.dragIdentifier), makeView: { [weak self, weak pane] existing in
+                rowItems.append(RowItem(kind: .pane(tab: entry.id, pane: pane.dragIdentifier),
+                                        groupID: entry.groupID,
+                                        leadingInset: leadingInset,
+                                        makeView: { [weak self, weak pane] existing in
                     guard let self, let pane else { return NSView() }
                     return self.makePaneRow(for: pane, leading: .nested,
                         isActive: pane.dragIdentifier == self.selectedPaneID,
@@ -351,6 +421,53 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         self.rowItems = arrange(rowItems)
         table.reloadData()
         window?.invalidateCursorRects(for: self)
+    }
+
+    private struct GroupPresentation {
+        let id: UUID
+        let title: String
+        let count: Int
+        let containsActiveTab: Bool
+        let isCollapsed: Bool
+    }
+
+    private func makeGroupRow(_ entry: GroupPresentation,
+                              reusing existing: TabGroupRowView?) -> TabGroupRowView {
+        let row = existing ?? TabGroupRowView()
+        row.configure(title: entry.title, count: entry.count,
+                      containsActiveTab: entry.containsActiveTab, isCollapsed: entry.isCollapsed)
+        row.onToggle = { [weak self] in
+            guard let self else { return }
+            if self.collapsedGroupIDs.contains(entry.id) {
+                self.collapsedGroupIDs.remove(entry.id)
+            } else {
+                self.collapsedGroupIDs.insert(entry.id)
+            }
+            self.reload()
+        }
+        row.onMenu = { [weak self, weak row] in
+            guard let self, let row, let controller = self.controller else { return }
+            ShellMenuPopover.present(from: row, items: [
+                .action(L("New tab in group"), symbol: ShellSymbol.newTab) {
+                    controller.addTab(toGroup: entry.id)
+                },
+                .action(L("Rename group"), symbol: ShellSymbol.rename) {
+                    NameEditorPopover.present(from: row, title: L("Rename group"),
+                        initial: entry.title, confirmLabel: L("Rename")) { name in
+                        controller.renameSidebarGroup(withID: entry.id, to: name)
+                    }
+                },
+                .separator,
+                .action(L("Dissolve group"), symbol: ShellSymbol.close) {
+                    controller.dissolveSidebarGroup(withID: entry.id)
+                },
+                .separator,
+                .action(L("Close tabs in group"), destructive: true, symbol: ShellSymbol.close) {
+                    controller.closeTabs(inGroup: entry.id)
+                },
+            ])
+        }
+        return row
     }
 
     private func makeTabRow(_ entry: TabPresentation, isCollapsed: Bool, reusing existing: TabRowView?) -> TabRowView {
@@ -394,7 +511,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         row.onMenu = { [weak self, weak row] in
             guard let self, let anchor = row else { return }
-            ShellMenuPopover.present(from: anchor, items: [
+            var items: [ShellMenuPopover.Item] = [
                 .action(L("Rename tab"), symbol: ShellSymbol.rename) { [weak self] in
                     guard let controller = self?.controller else { return }
                     NameEditorPopover.present(
@@ -402,7 +519,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                         initial: entry.title, confirmLabel: L("Rename")
                     ) { name in controller.renameTab(withID: tabID, to: name) }
                 },
-            ])
+                .separator,
+            ]
+            items.append(contentsOf: self.groupMenuItems(for: tabID, currentGroupID: entry.groupID,
+                                                         anchor: anchor))
+            ShellMenuPopover.present(from: anchor, items: items)
         }
         row.onClose = { [weak self] in self?.controller?.closeTab(withID: tabID) }
         row.onBeginDrag = { [weak self, weak row] event in
@@ -425,6 +546,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func makeLeafRow(
         for pane: PaneView,
         tabID: UUID,
+        groupID: UUID?,
         reusing existing: PaneRowView?
     ) -> PaneRowView {
         let row = makePaneRow(for: pane, leading: .leafTab,
@@ -438,11 +560,42 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         // 起了名它就成为分组。就地展开成分组行，在名字将要出现的位置输入。
         let name: () -> Void = { [weak self] in self?.beginNaming(tabID) }
         row.onRename = name
-        row.onMenu = { [weak row] in
-            guard let anchor = row else { return }
-            ShellMenuPopover.present(from: anchor, items: [.action(L("Name tab"), symbol: ShellSymbol.rename, handler: name)])
+        row.onMenu = { [weak self, weak row] in
+            guard let self, let anchor = row else { return }
+            var items: [ShellMenuPopover.Item] = [
+                .action(L("Name tab"), symbol: ShellSymbol.rename, handler: name),
+                .separator,
+            ]
+            items.append(contentsOf: self.groupMenuItems(for: tabID, currentGroupID: groupID,
+                                                         anchor: anchor))
+            ShellMenuPopover.present(from: anchor, items: items)
+        }
+        // 叶子行有双重身份：侧栏里是整个标签页，拖到终端上又是 pane。
+        row.onBeginDrag = { [weak self, weak row] event in
+            guard let self, let row else { return }
+            self.beginRowDrag(source: .leaf(tab: tabID, pane: pane.dragIdentifier),
+                              from: row, event: event)
         }
         return row
+    }
+
+    private func groupMenuItems(for tabID: UUID, currentGroupID: UUID?,
+                                anchor: NSView) -> [ShellMenuPopover.Item] {
+        guard let controller else { return [] }
+        var items = controller.sidebarGroups().filter { $0.id != currentGroupID }.map { group in
+            ShellMenuPopover.Item.action(L("Move to group: %@", group.title), symbol: ShellSymbol.project) {
+                controller.moveTab(withID: tabID, intoGroup: group.id)
+            }
+        }
+        items.append(.action(L("Move to new group"), symbol: ShellSymbol.project) { [weak self, weak anchor] in
+            self?.presentNewGroupEditor(for: tabID, from: anchor)
+        })
+        if currentGroupID != nil {
+            items.append(.action(L("Remove from group"), symbol: ShellSymbol.close) {
+                controller.moveTab(withID: tabID, intoGroup: nil)
+            })
+        }
+        return items
     }
 
     private func makePaneRow(
@@ -497,8 +650,10 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// 拖的是什么：按身份记，不按下标。
     enum RowDragSource: Equatable {
-        /// 缩进 pane 行或叶子行。
+        /// 缩进 pane 行。
         case pane(UUID)
+        /// 单 pane 默认名标签页：侧栏落点解释为 tab，容器/终端落点解释为 pane。
+        case leaf(tab: UUID, pane: UUID)
         /// 标签页容器行。
         case tab(UUID)
     }
@@ -508,7 +663,10 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 关掉一个标签页，位次会整体前移，邻居不会变。
     enum RowDropCommand: Equatable {
         case moveTab(UUID, after: UUID?)
+        case moveTabIntoGroup(UUID, group: UUID)
+        case moveTabWithinGroup(UUID, group: UUID, after: UUID?)
         case detachPane(UUID, after: UUID?)
+        case detachPaneIntoGroup(UUID, group: UUID, after: UUID?)
         case movePaneBeside(UUID, target: UUID, zone: PaneDropZone)
         case movePaneIntoTab(UUID, tab: UUID)
     }
@@ -571,6 +729,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static func matches(_ row: TabRowKind, _ source: RowDragSource) -> Bool {
         switch (row, source) {
         case (.pane(_, let id), .pane(let pane)), (.leaf(_, let id), .pane(let pane)): return id == pane
+        case (.leaf(let tab, let pane), .leaf(let sourceTab, let sourcePane)):
+            return tab == sourceTab && pane == sourcePane
         case (.tab(let id), .tab(let tab)): return id == tab
         default: return false
         }
@@ -598,10 +758,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static func dropCommand(rows: [TabRowKind], sourceIndex si: Int, merge: TabRowKind?) -> RowDropCommand? {
         guard rows.indices.contains(si) else { return nil }
         switch rows[si] {
+        case .group:
+            return nil
         case .tab(let id):
+            if case .group(let group)? = merge { return .moveTabIntoGroup(id, group: group) }
             return .moveTab(id, after: precedingTab(in: rows, before: si))
         case .pane(_, let pane), .leaf(_, let pane):
             switch merge {
+            case .group(let group)?:
+                if case .leaf(let tab, _) = rows[si] { return .moveTabIntoGroup(tab, group: group) }
+                return nil
             case .tab(let tab)?:
                 return .movePaneIntoTab(pane, tab: tab)
             case .pane(_, let target)?, .leaf(_, let target)?:
@@ -642,7 +808,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         for item in rows[..<min(row, rows.count)].reversed() {
             switch item {
             case .tab(let id), .leaf(let id, _): return id
-            case .pane: continue
+            case .group, .pane: continue
             }
         }
         return nil
@@ -663,7 +829,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             startEvent: event,
             grabOffsetY: grabOffsetY,
             // pane 行可以拖到终端上分屏，卡片要跟着光标出列表；标签页行只在列表里排序。
-            followsPointerFreely: { if case .pane = source { return true } else { return false } }(),
+            followsPointerFreely: {
+                switch source {
+                case .pane, .leaf: return true
+                case .tab: return false
+                }
+            }(),
             onMove: { [weak self] cursor in self?.moveDrag(to: cursor) },
             dropFrame: { landing },
             onCommit: { [weak self] in landing = self?.finishDrag() },
@@ -673,6 +844,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 开始一次拖拽。源行不在列表里、或上一次拖拽还没收尾时返回 false。
     @discardableResult
     func startDrag(source: RowDragSource, card: NSView) -> Bool {
+        let source: RowDragSource = {
+            guard case .pane(let pane) = source,
+                  case .leaf(let tab, _) = modelRows.first(where: {
+                      if case .leaf(_, let id) = $0.kind { return id == pane }
+                      return false
+                  })?.kind else { return source }
+            return .leaf(tab: tab, pane: pane)
+        }()
         guard drag == nil, modelRows.contains(where: { Self.matches($0.kind, source) }) else { return false }
         var collapse: UUID?
         if case .tab(let id) = source, !collapsedTabIDs.contains(id) { collapse = id }
@@ -690,8 +869,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             setPaneDrop(nil)
             current = drag ?? current
         }
-        var target: TabRowKind?
-        if case .pane = current.source { target = mergeTarget(at: cursor, source: current.source) }
+        let target = mergeTarget(at: cursor, source: current.source)
         if target != current.merge {
             current.merge = target
             drag = current
@@ -720,9 +898,12 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 标签页行只在列表里排序，拖到外面不响应。
     private func moveDragOutsideList(to cursor: NSPoint) {
         guard var current = drag else { return }
-        if case .pane(let source) = current.source {
-            setPaneDrop(paneDropTarget(at: cursor, excluding: source))
+        switch current.source {
+        case .pane(let pane), .leaf(_, let pane):
+            setPaneDrop(paneDropTarget(at: cursor, excluding: pane))
             current = drag ?? current
+        case .tab:
+            break
         }
         let wasMerging = current.merge != nil
         let wasMoved = current.insertion != nil
@@ -775,7 +956,13 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let sourceIndex = rows.firstIndex { Self.matches($0, current.source) }
         let original = modelRows.firstIndex { Self.matches($0.kind, current.source) }
         var command: RowDropCommand?
-        if let paneDrop = current.paneDrop, case .pane(let source) = current.source {
+        let sourcePane: UUID? = {
+            switch current.source {
+            case .pane(let pane), .leaf(_, let pane): return pane
+            case .tab: return nil
+            }
+        }()
+        if let paneDrop = current.paneDrop, let source = sourcePane {
             pane(withID: paneDrop.pane)?.clearDropPreview()
             let command = RowDropCommand.movePaneBeside(source, target: paneDrop.pane, zone: paneDrop.zone)
             DispatchQueue.main.async { [weak self] in self?.completeDrag(command) }
@@ -783,6 +970,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         if let sourceIndex, current.merge != nil || sourceIndex != original {
             command = Self.dropCommand(rows: rows, sourceIndex: sourceIndex, merge: current.merge)
+            if current.merge == nil, let placement = groupPlacement(at: sourceIndex) {
+                switch command {
+                case .moveTab(let tab, _):
+                    command = .moveTabWithinGroup(tab, group: placement.group, after: placement.anchor)
+                case .detachPane(let pane, _):
+                    command = .detachPaneIntoGroup(pane, group: placement.group, after: placement.anchor)
+                default:
+                    break
+                }
+            }
         }
         let landingRow = current.merge.flatMap { rows.firstIndex(of: $0) } ?? sourceIndex
         let landing = landingRow.map { convert(table.rect(ofRow: $0), from: table) }
@@ -802,8 +999,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         switch command {
         case .moveTab(let tab, let anchor):
             return controller.moveTab(withID: tab, after: anchor)
+        case .moveTabIntoGroup(let tab, let group):
+            return controller.moveTab(withID: tab, intoGroup: group)
+        case .moveTabWithinGroup(let tab, let group, let anchor):
+            return controller.moveTab(withID: tab, intoGroup: group, after: anchor)
         case .detachPane(let pane, let anchor):
             return controller.detachPane(withID: pane, toNewTabAfter: anchor)
+        case .detachPaneIntoGroup(let pane, let group, let anchor):
+            return controller.detachPane(withID: pane, toNewTabAfter: anchor, inGroup: group)
         case .movePaneBeside(let pane, let target, let zone):
             guard let destination = controller.panes().first(where: { $0.dragIdentifier == target }) else { return false }
             return controller.movePane(withID: pane, to: destination, zone: zone)
@@ -814,9 +1017,40 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private func mergeTarget(at cursor: NSPoint, source: RowDragSource) -> TabRowKind? {
         for row in rowItems.indices where !Self.matches(rowItems[row].kind, source) {
+            let kind = rowItems[row].kind
+            switch (source, kind) {
+            case (.tab, .group): break
+            case (.leaf, .group), (.leaf, .tab), (.leaf, .pane), (.leaf, .leaf): break
+            case (.pane, .tab), (.pane, .pane), (.pane, .leaf): break
+            default: continue
+            }
             let rect = convert(table.rect(ofRow: row), from: table)
             guard cursor.y >= rect.minY, cursor.y <= rect.maxY else { continue }
-            return abs(cursor.y - rect.midY) <= rect.height * Self.mergeBand ? rowItems[row].kind : nil
+            return abs(cursor.y - rect.midY) <= rect.height * Self.mergeBand ? kind : nil
+        }
+        return nil
+    }
+
+    /// 行间落点所在的分组与组内前驱。分组标题与第一个子项之间的缝隙
+    /// 是组内第一位，不能被解释成前一个分组或未分组的末尾。
+    private func groupPlacement(at sourceIndex: Int) -> (group: UUID, anchor: UUID?)? {
+        guard rowItems.indices.contains(sourceIndex) else { return nil }
+        if sourceIndex > 0 {
+            let previous = rowItems[sourceIndex - 1]
+            if case .group(let group) = previous.kind { return (group, nil) }
+            if let group = previous.groupID {
+                for index in stride(from: sourceIndex - 1, through: 0, by: -1) {
+                    guard rowItems[index].groupID == group else { break }
+                    switch rowItems[index].kind {
+                    case .tab(let tab), .leaf(let tab, _): return (group, tab)
+                    case .group, .pane: continue
+                    }
+                }
+                return (group, nil)
+            }
+        }
+        if sourceIndex + 1 < rowItems.count, let group = rowItems[sourceIndex + 1].groupID {
+            return (group, nil)
         }
         return nil
     }
@@ -914,17 +1148,156 @@ private protocol SidebarPaneDropRow: NSView {
 
 private final class TabRowContainer: NSView {
     private(set) var content: NSView?
-    func bind(_ view: NSView) {
-        guard content !== view else { return }
+    private var leadingConstraint: NSLayoutConstraint?
+
+    func bind(_ view: NSView, leadingInset: CGFloat) {
+        if content === view {
+            leadingConstraint?.constant = leadingInset
+            return
+        }
         content?.removeFromSuperview()
         content = view
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
+        let leading = view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset)
+        leadingConstraint = leading
         NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leading,
             view.trailingAnchor.constraint(equalTo: trailingAnchor),
             view.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+}
+
+/// 标签页之上的窗口内分组行。它只管折叠和分组操作，不切换终端。
+private final class TabGroupRowView: NSView, SidebarHoverRow, SidebarPaneDropRow {
+    var onToggle: (() -> Void)?
+    var onMenu: (() -> Void)?
+
+    private let disclosure = NSButton()
+    private let label = NSTextField(labelWithString: "")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let menuButton = NSButton()
+    private var tracking: NSTrackingArea?
+    private var containsActiveTab = false
+    private var isCollapsed = false
+    private var dropHighlighted = false
+    private var hovered = false {
+        didSet {
+            menuButton.isHidden = !hovered
+            countLabel.isHidden = hovered
+            applyLook()
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = ShellStyle.compactRowCornerRadius
+        HoverCursor.installPointingHand(on: self)
+
+        disclosure.isBordered = false
+        disclosure.imagePosition = .imageOnly
+        disclosure.focusRingType = .none
+        disclosure.target = self
+        disclosure.action = #selector(toggle)
+
+        label.font = ShellStyle.Font.groupTitle
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        countLabel.font = ShellStyle.Font.count
+        countLabel.textColor = ShellStyle.tertiaryText
+
+        menuButton.image = SymbolImages.image(
+            ShellSymbol.more, pointSize: ShellStyle.compactIconSize, weight: .medium,
+            description: L("More actions"))
+        menuButton.isBordered = false
+        menuButton.imagePosition = .imageOnly
+        menuButton.focusRingType = .none
+        menuButton.contentTintColor = ShellStyle.secondaryText
+        menuButton.isHidden = true
+        menuButton.target = self
+        menuButton.action = #selector(menuTapped)
+
+        for view in [disclosure, label, countLabel, menuButton] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 32),
+            disclosure.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
+            disclosure.widthAnchor.constraint(equalToConstant: 18),
+            disclosure.heightAnchor.constraint(equalToConstant: 22),
+            label.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 4),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -6),
+            countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            menuButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            menuButton.widthAnchor.constraint(equalToConstant: ShellStyle.listActionSize),
+            menuButton.heightAnchor.constraint(equalTo: heightAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(title: String, count: Int, containsActiveTab: Bool, isCollapsed: Bool) {
+        sidebarHoverExited()
+        hovered = false
+        self.containsActiveTab = containsActiveTab
+        self.isCollapsed = isCollapsed
+        label.stringValue = title
+        countLabel.stringValue = "\(count)"
+        disclosure.image = SymbolImages.image(
+            isCollapsed ? "chevron.right" : "chevron.down",
+            pointSize: 9, weight: .semibold,
+            description: isCollapsed ? L("Expand group") : L("Collapse group"))
+        disclosure.toolTip = isCollapsed ? L("Expand group") : L("Collapse group")
+        applyLook()
+    }
+
+    private func applyLook() {
+        label.textColor = containsActiveTab ? ShellStyle.navigationAccent : ShellStyle.primaryText
+        disclosure.contentTintColor = containsActiveTab ? ShellStyle.navigationAccent : ShellStyle.secondaryText
+        layer?.backgroundColor = (hovered ? ShellStyle.selectionFill : ShellStyle.navigationGroupFill)
+            .shellResolvedCGColor(for: effectiveAppearance)
+        layer?.borderWidth = dropHighlighted ? 1 : 0
+        layer?.borderColor = ShellStyle.navigationAccent
+            .shellResolvedCGColor(for: effectiveAppearance)
+    }
+
+    func setDropHighlighted(_ on: Bool) {
+        dropHighlighted = on
+        applyLook()
+    }
+
+    @objc private func toggle() { onToggle?() }
+    @objc private func menuTapped() { onMenu?() }
+
+    override func mouseDown(with event: NSEvent) { onToggle?() }
+    func setSidebarHovered(_ value: Bool) { hovered = value }
+    override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
+    override func mouseExited(with event: NSEvent) { sidebarHoverExited() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard tracking == nil else { return }
+        let area = NSTrackingArea(rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        rowActionHit(point, in: self, buttons: [menuButton]) ?? super.hitTest(point)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyLook()
     }
 }
 

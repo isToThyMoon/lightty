@@ -506,3 +506,13 @@
 "No local sessions yet. Start a session with the toolbar; return here to continue it." = "No local sessions yet. Start a session with the toolbar; return here to continue it.";
 
 "Opened" = "Opened";
+"New tab group" = "New tab group";
+"New tab in group" = "New tab in group";
+"Rename group" = "Rename group";
+"Dissolve group" = "Dissolve group";
+"Move to group: %@" = "Move to group: %@";
+"Move to new group" = "Move to new group";
+"Remove from group" = "Remove from group";
+"Expand group" = "Expand group";
+"Collapse group" = "Collapse group";
+"Close tabs in group" = "Close tabs in group";

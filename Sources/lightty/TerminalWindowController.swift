@@ -77,6 +77,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// pinned 侧栏是 docked layout：主体区从侧栏右缘开始；preview 保持 overlay。
     private var rootLeadingConstraint: NSLayoutConstraint?
     private weak var sidebarButton: ShellIconButton?
+    /// 收起卡片时，标题栏开关等侧栏布局稳定后再出现。
+    private var sidebarButtonRevealPending = false
     private var tabSidebar: TabSidebarView?
     private var tabSidebarLeadingConstraint: NSLayoutConstraint?
     private var tabSidebarWidthConstraint: NSLayoutConstraint?
@@ -112,9 +114,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         duration: TimeInterval = ShellStyle.sidebarAnimationDuration,
         completion: (() -> Void)? = nil
     ) {
-        stopSidebarAnimationDriver()
+        // 新动画接管布局时，继续等待；不能在两段动画之间露出标题栏开关。
+        stopSidebarAnimationDriver(preservingSidebarButtonReveal: true)
         guard let themeFrame = window?.contentView?.superview else {
             targets.forEach { $0.0.constant = $0.1 }
+            stopSidebarAnimationDriver()
             completion?()
             return
         }
@@ -172,7 +176,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarAnimationStep?()
     }
 
-    private func stopSidebarAnimationDriver() {
+    private func stopSidebarAnimationDriver(preservingSidebarButtonReveal: Bool = false) {
         if #available(macOS 14.0, *) {
             (sidebarCADisplayLink as? CADisplayLink)?.invalidate()
         }
@@ -180,6 +184,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         sidebarLayoutAnimationTimer?.invalidate()
         sidebarLayoutAnimationTimer = nil
         sidebarAnimationStep = nil
+        if !preservingSidebarButtonReveal, sidebarButtonRevealPending {
+            sidebarButtonRevealPending = false
+            updateSidebarButtonState(animated: true)
+        }
         // 完成或被打断都算滑动结束（打断者会立刻再次关闸）
         ShellHoverGate.release(in: window)
     }
@@ -298,9 +306,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// 侧栏按钮 = task 卡片开关。卡片开着时它挪进卡片头部行（点了收起），
     /// 标题栏那一枚隐藏（否则会落在卡片里的红绿灯旁边、与头部行按钮重复）。
-    private func updateSidebarButtonState() {
-        sidebarButton?.isHidden = taskPanel != nil || settingsView != nil
+    private func updateSidebarButtonState(animated: Bool = false) {
         WorkspaceStore.shared.scheduleSave()  // task 卡片开合入快照
+        guard let button = sidebarButton else { return }
+        let hidden = taskPanel != nil || sidebarButtonRevealPending || settingsView != nil
+        guard button.isHidden != hidden else { return }
+        button.layer?.removeAnimation(forKey: "sidebarReveal")
+        button.isHidden = hidden
+        guard !hidden, animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        // 只动画呈现层，模型保持完全可见；再次收起时撤掉动画即可，不留下半透明状态。
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = ShellStyle.animationDuration
+        fade.timingFunction = ShellStyle.easeInOutCubic
+        button.layer?.add(fade, forKey: "sidebarReveal")
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -381,9 +401,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// core `new_tab`：当前窗口追加一个 tab（标签页 = 新的 pane 树容器）。
     func addTab(initialPane: PaneView, select: Bool = true, installPane: Bool = true) {
         if installPane { install(pane: initialPane) }
+        let groupID = arrangement.activeTab?.groupID
         guard let next = arrangement.appendingTab(
                 UUID(), layout: .pane(initialPane.dragIdentifier),
-                title: .numbered(tabNumbering.upcoming), select: select) else { return }
+                title: .numbered(tabNumbering.upcoming), groupID: groupID, select: select) else { return }
         commit(next, incoming: [initialPane])
     }
 
@@ -502,16 +523,61 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         return commit(next)
     }
 
+    @discardableResult
+    func moveTab(withID id: UUID, intoGroup groupID: UUID?) -> Bool {
+        guard let next = arrangement.movingTab(id, intoGroup: groupID) else { return false }
+        return commit(next)
+    }
+
+    @discardableResult
+    func moveTab(withID id: UUID, intoGroup groupID: UUID, after anchor: UUID?) -> Bool {
+        guard let next = arrangement.movingTab(id, intoGroup: groupID, after: anchor) else { return false }
+        return commit(next)
+    }
+
+    func createSidebarGroup(containing tabID: UUID, named title: String) {
+        guard let next = arrangement.creatingGroup(UUID(), title: title, containing: tabID) else { return }
+        commit(next)
+    }
+
+    func renameSidebarGroup(withID id: UUID, to title: String) {
+        guard let next = arrangement.renamingGroup(id, to: title) else { return }
+        commit(next)
+    }
+
+    func dissolveSidebarGroup(withID id: UUID) {
+        guard let next = arrangement.dissolvingGroup(id) else { return }
+        commit(next)
+    }
+
+    func closeTabs(inGroup id: UUID) {
+        let panes = arrangement.tabs.filter { $0.groupID == id }.flatMap(\.layout.panes)
+        close(panes: Set(panes))
+    }
+
+    func addTab(toGroup groupID: UUID) {
+        let pane = PaneView()
+        install(pane: pane)
+        guard let next = arrangement.appendingTab(
+            UUID(), layout: .pane(pane.dragIdentifier), title: .numbered(tabNumbering.upcoming),
+            groupID: groupID, select: true
+        ) else { return }
+        commit(next, incoming: [pane])
+    }
+
     /// 侧栏拖拽把一个分屏 pane 拆出来独立成新标签页，放在 `anchor` 之后（nil = 最前）。
     /// pane 视图本体不重建，PTY、cwd 与 scrollback 全保留；不跟随切换标签页
     /// （拖动是整理动作）。源标签页只剩这一个 pane 时没有可拆的东西，交给 moveTab。
     @discardableResult
-    func detachPane(withID sourceID: UUID, toNewTabAfter anchor: UUID?) -> Bool {
+    func detachPane(withID sourceID: UUID, toNewTabAfter anchor: UUID?,
+                    inGroup explicitGroupID: UUID? = nil) -> Bool {
         guard let host = arrangement.tabID(hosting: sourceID) else { return false }
         let before = arrangement
         let wasFocused = activePane?.dragIdentifier == sourceID
+        let destinationGroup = explicitGroupID ?? anchor.flatMap { arrangement.tab($0)?.groupID }
         guard let next = arrangement.detachingPane(sourceID, toNewTab: UUID(),
-                                                   title: .numbered(tabNumbering.upcoming), after: anchor)
+                                                   title: .numbered(tabNumbering.upcoming),
+                                                   groupID: destinationGroup, after: anchor)
         else { return false }
         // 拆走的是当前焦点时，焦点留在原标签页剩下的 pane 上（模型已清掉源标签页的焦点），视线不跳走。
         guard commit(next, focus: wasFocused ? next.tab(host)?.focusTarget : nil) else { return false }
@@ -538,12 +604,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         title: String,
         hasCustomTitle: Bool,
         isActive: Bool,
+        groupID: UUID?,
         panes: [PaneView]
     )] {
         arrangement.tabs.map { tab in
-            (tab.id, tab.title.displayed, tab.title.isCustom, tab.id == arrangement.activeTabID, panes(inTab: tab.id))
+            (tab.id, tab.title.displayed, tab.title.isCustom, tab.id == arrangement.activeTabID,
+             tab.groupID, panes(inTab: tab.id))
         }
     }
+
+    func sidebarGroups() -> [TabGroup] { arrangement.groups }
 
     /// 标签页列表、标题或选中变了：侧栏标签页列重载并排一次保存。
     private func refreshTabSidebar() {
@@ -1237,6 +1307,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func closeTaskPanel(animated: Bool = true) {
         guard let panel = taskPanel else { return }
         endTaskPanelResize()
+        sidebarButtonRevealPending = animated
         taskPanel = nil
         updateSidebarButtonState()
         let leading = taskPanelLeadingConstraint
@@ -1369,12 +1440,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         guard let captured = arrangement.snapshot({ tab -> TabSnapshot? in
             guard let root = SplitNodeSnapshot(tab.layout, leaf: { paneRegistry[$0]?.snapshot() }) else { return nil }
             return TabSnapshot(title: tab.title.displayed, customTitle: tab.title.isCustom,
-                               titleNumber: tab.title.number, root: root)
+                               titleNumber: tab.title.number, groupID: tab.groupID, root: root)
         }) else { return nil }
         return WindowSnapshot(
             frame: window?.frame,
             activeTabIndex: captured.activeIndex,
             tabs: captured.tabs,
+            sidebarGroups: arrangement.groups.map { TabGroupSnapshot(id: $0.id, title: $0.title) },
             taskPanelOpen: taskPanel != nil,
             tabSidebarOpen: tabSidebar != nil,
             primarySidebarMode: primarySidebarMode.rawValue)
@@ -1411,9 +1483,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             let id = index == 0 ? arrangement.tabs[0].id : UUID()
             let title = TabTitle.restored(title: tabSnapshot.title, customTitle: tabSnapshot.customTitle,
                                           number: tabSnapshot.titleNumber, defaultFormat: L("Tab %d"))
-            restored.append(ArrangedTab(id: id, layout: layout, title: title))
+            restored.append(ArrangedTab(id: id, layout: layout, title: title,
+                                        groupID: tabSnapshot.groupID))
         }
-        commit(WindowArrangement(restoring: restored, activeIndex: snapshot.activeTabIndex), incoming: created)
+        let groups = (snapshot.sidebarGroups ?? []).map { TabGroup(id: $0.id, title: $0.title) }
+        commit(WindowArrangement(restoring: restored, groups: groups,
+                                 activeIndex: snapshot.activeTabIndex), incoming: created)
         presentActiveTab()
         let prefix = L("Terminal %d").replacingOccurrences(of: "%d", with: "")
         for leaf in snapshot.tabs.flatMap({ $0.root.leaves }) where leaf.name.hasPrefix(prefix) {

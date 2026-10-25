@@ -9,7 +9,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - 修改配置、工作区快照或组织数据格式前，阅读 [持久化契约](docs/persistence.md)：启动时自动迁移，业务只处理当前格式；Handoff 保持已发布协议。
 
 - 领域术语：[CONTEXT.md](CONTEXT.md)。窗口包含标签页，标签页包含终端；任务绑定点是终端，不是窗口。
-- 当前布局：[双侧栏约定](docs/specs/double-sidebar.md)。第一侧栏管理资料，第二侧栏导航当前窗口的标签页与终端。
+- 当前布局：[双侧栏约定](docs/specs/double-sidebar.md)。第一侧栏管理资料，第二侧栏导航当前窗口的[标签页分组](docs/specs/tab-groups.md)、标签页与终端。
 - 待实现功能：[Handoff / Sessions 模式](docs/specs/primary-sidebar-modes.md)，[CLI 会话调研](docs/specs/session-provider-research.md)。设计文档不代表功能已实现。
 - Handoff 持久化：[任务格式](docs/task-format.md)。任务正文为接手 Agent 写，引用已有文档与提交，不重复复制，不记录密钥。
 - 与 Claude Code / Codex 的全部接触点（命令、hook、文件、安装方式、脆弱程度）：[依赖清单](docs/agent-dependencies.md)。动任何一处之前先看它，再进对应的细节文档。
