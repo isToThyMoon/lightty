@@ -383,7 +383,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                     self?.makeGroupRow(presentation, reusing: existing as? TabGroupRowView) ?? NSView()
                 }))
             }
-            if let groupID = entry.groupID, collapsedGroupIDs.contains(groupID) { continue }
+            if let groupID = entry.groupID,
+               collapsedGroupIDs.contains(groupID) || drag?.source == .group(groupID) { continue }
             if entry.panes.count == 1, !entry.hasCustomTitle, entry.id != namingTabID,
                let pane = entry.panes.first {
                 // 叶子标签页：折叠对它无意义，折叠集合里的残留不影响它。
@@ -441,6 +442,10 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let row = existing ?? TabGroupRowView()
         row.configure(title: entry.title, count: entry.count,
                       containsActiveTab: entry.containsActiveTab, isCollapsed: entry.isCollapsed)
+        row.onBeginDrag = { [weak self, weak row] event in
+            guard let self, let row else { return }
+            self.beginRowDrag(source: .group(entry.id), from: row, event: event)
+        }
         row.onToggle = { [weak self] in
             guard let self else { return }
             if self.collapsedGroupIDs.contains(entry.id) {
@@ -655,6 +660,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// 拖的是什么：按身份记，不按下标。
     enum RowDragSource: Equatable {
+        case group(UUID)
         /// 缩进 pane 行。
         case pane(UUID)
         /// 单 pane 默认名标签页：侧栏落点解释为 tab，容器/终端落点解释为 pane。
@@ -667,6 +673,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 顶层落点记成「排在哪个标签页之后」（nil = 最前），而不是第几位——这一拍之间
     /// 关掉一个标签页，位次会整体前移，邻居不会变。
     enum RowDropCommand: Equatable {
+        case moveGroup(UUID, after: UUID?)
         case moveTab(UUID, after: UUID?)
         case moveTabIntoGroup(UUID, group: UUID)
         case moveTabWithinGroup(UUID, group: UUID, after: UUID?)
@@ -733,6 +740,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     static func matches(_ row: TabRowKind, _ source: RowDragSource) -> Bool {
         switch (row, source) {
+        case (.group(let id), .group(let group)): return id == group
         case (.pane(_, let id), .pane(let pane)), (.leaf(_, let id), .pane(let pane)): return id == pane
         case (.leaf(let tab, let pane), .leaf(let sourceTab, let sourcePane)):
             return tab == sourceTab && pane == sourcePane
@@ -837,7 +845,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             followsPointerFreely: {
                 switch source {
                 case .pane, .leaf: return true
-                case .tab: return false
+                case .tab, .group: return false
                 }
             }(),
             onMove: { [weak self] cursor in self?.moveDrag(to: cursor) },
@@ -863,6 +871,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         drag = RowDrag(source: source, collapsedForDrag: collapse, card: card)
         // 只有临时折叠要重新投影；拖 pane 行时显示还没变，不必整表刷新。
         if collapse != nil { reload() }
+        else if case .group = source { reload() }
         return true
     }
 
@@ -889,9 +898,24 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             guard convert(table.rect(ofRow: row), from: table).midY > cursor.y else { break }
             insertion += 1
         }
-        guard insertion != (current.insertion ?? from) else { return }
+        if case .group = current.source {
+            // 分组只能排在顶层块之间，不能插进另一个分组或标签页的 pane 树。
+            let others = rowItems.filter { !Self.matches($0.kind, current.source) }
+            let boundaries = others.indices.filter { index in
+                switch others[index].kind {
+                case .group: return true
+                case .tab, .leaf: return others[index].groupID == nil
+                case .pane: return false
+                }
+            } + [others.count]
+            insertion = boundaries.min(by: { abs($0 - insertion) < abs($1 - insertion) }) ?? insertion
+        }
+        if insertion == from, current.insertion == nil,
+           convert(table.rect(ofRow: from), from: table).contains(cursor) { return }
+        let previousInsertion = current.insertion ?? from
         current.insertion = insertion
         drag = current
+        guard insertion != previousInsertion else { return }
         rowItems = arrange(modelRows)
         guard let to = rowItems.firstIndex(where: { Self.matches($0.kind, current.source) }), to != from else { return }
         table.beginUpdates()
@@ -907,7 +931,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case .pane(let pane), .leaf(_, let pane):
             setPaneDrop(paneDropTarget(at: cursor, excluding: pane))
             current = drag ?? current
-        case .tab:
+        case .tab, .group:
             break
         }
         let wasMerging = current.merge != nil
@@ -964,7 +988,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let sourcePane: UUID? = {
             switch current.source {
             case .pane(let pane), .leaf(_, let pane): return pane
-            case .tab: return nil
+            case .tab, .group: return nil
             }
         }()
         if let paneDrop = current.paneDrop, let source = sourcePane {
@@ -973,9 +997,11 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             DispatchQueue.main.async { [weak self] in self?.completeDrag(command) }
             return nil  // 落在列表外，卡片原地淡出
         }
-        if let sourceIndex, current.merge != nil || sourceIndex != original {
+        if let sourceIndex, current.merge != nil || current.insertion != nil || sourceIndex != original {
             command = Self.dropCommand(rows: rows, sourceIndex: sourceIndex, merge: current.merge)
-            if current.merge == nil, let placement = groupPlacement(at: sourceIndex) {
+            if case .group(let group) = current.source {
+                command = .moveGroup(group, after: topLevelAnchor(before: sourceIndex))
+            } else if current.merge == nil, let placement = groupPlacement(at: sourceIndex) {
                 switch command {
                 case .moveTab(let tab, _):
                     command = .moveTabWithinGroup(tab, group: placement.group, after: placement.anchor)
@@ -983,6 +1009,13 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                     command = .detachPaneIntoGroup(pane, group: placement.group, after: placement.anchor)
                 default:
                     break
+                }
+            } else if current.merge == nil, isGroupBoundary(at: sourceIndex) {
+                let anchor = topLevelAnchor(before: sourceIndex)
+                switch current.source {
+                case .tab(let tab), .leaf(let tab, _): command = .moveTab(tab, after: anchor)
+                case .pane(let pane): command = .detachPane(pane, after: anchor)
+                case .group: break
                 }
             }
         }
@@ -1002,14 +1035,16 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func perform(_ command: RowDropCommand) -> Bool {
         guard let controller else { return false }
         switch command {
+        case .moveGroup(let group, let anchor):
+            return controller.moveSidebarGroup(withID: group, after: anchor)
         case .moveTab(let tab, let anchor):
-            return controller.moveTab(withID: tab, after: anchor)
+            return controller.moveTab(withID: tab, after: anchor, inheritGroup: false)
         case .moveTabIntoGroup(let tab, let group):
             return controller.moveTab(withID: tab, intoGroup: group)
         case .moveTabWithinGroup(let tab, let group, let anchor):
             return controller.moveTab(withID: tab, intoGroup: group, after: anchor)
         case .detachPane(let pane, let anchor):
-            return controller.detachPane(withID: pane, toNewTabAfter: anchor)
+            return controller.detachPane(withID: pane, toNewTabAfter: anchor, inheritGroup: false)
         case .detachPaneIntoGroup(let pane, let group, let anchor):
             return controller.detachPane(withID: pane, toNewTabAfter: anchor, inGroup: group)
         case .movePaneBeside(let pane, let target, let zone):
@@ -1040,10 +1075,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 是组内第一位，不能被解释成前一个分组或未分组的末尾。
     private func groupPlacement(at sourceIndex: Int) -> (group: UUID, anchor: UUID?)? {
         guard rowItems.indices.contains(sourceIndex) else { return nil }
+        // 只有下方仍是组内成员才算组内缝隙。分组标题之前、组末和列表末尾都在组外。
+        guard sourceIndex + 1 < rowItems.count,
+              let destination = rowItems[sourceIndex + 1].groupID else { return nil }
+        if case .group = rowItems[sourceIndex + 1].kind { return nil }
         if sourceIndex > 0 {
             let previous = rowItems[sourceIndex - 1]
-            if case .group(let group) = previous.kind { return (group, nil) }
-            if let group = previous.groupID {
+            if case .group(let group) = previous.kind, group == destination { return (group, nil) }
+            if let group = previous.groupID, group == destination {
                 for index in stride(from: sourceIndex - 1, through: 0, by: -1) {
                     guard rowItems[index].groupID == group else { break }
                     switch rowItems[index].kind {
@@ -1054,8 +1093,34 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 return (group, nil)
             }
         }
-        if sourceIndex + 1 < rowItems.count, let group = rowItems[sourceIndex + 1].groupID {
-            return (group, nil)
+        return nil
+    }
+
+    private func isGroupBoundary(at index: Int) -> Bool {
+        if index + 1 == rowItems.count { return true }
+        if case .group = rowItems[index + 1].kind { return true }
+        return index > 0 && rowItems[index - 1].groupID != nil
+            && rowItems[index + 1].groupID == nil
+    }
+
+    /// 折叠分组只有标题可见，但排在它后面意味着排在它最后一个成员后面。
+    private func topLevelAnchor(before index: Int) -> UUID? {
+        let overview = (controller?.tabOverview() ?? []).filter { entry in
+            switch drag?.source {
+            case .tab(let tab)?, .leaf(let tab, _)?: return entry.id != tab
+            case .group(let group)?: return entry.groupID != group
+            default: return true
+            }
+        }
+        for row in rowItems[..<index].reversed() {
+            if let group = row.groupID {
+                if let anchor = overview.last(where: { $0.groupID == group })?.id { return anchor }
+                continue
+            }
+            switch row.kind {
+            case .tab(let tab), .leaf(let tab, _), .pane(let tab, _): return tab
+            case .group: continue
+            }
         }
         return nil
     }
@@ -1176,6 +1241,7 @@ private final class TabRowContainer: NSView {
 
 /// 标签页之上的窗口内分组行。它只管折叠和分组操作，不切换终端。
 private final class TabGroupRowView: NSView, SidebarHoverRow, SidebarPaneDropRow {
+    var onBeginDrag: ((NSEvent) -> Void)?
     var onToggle: (() -> Void)?
     var onMenu: (() -> Void)?
 
@@ -1282,7 +1348,22 @@ private final class TabGroupRowView: NSView, SidebarHoverRow, SidebarPaneDropRow
     @objc private func toggle() { onToggle?() }
     @objc private func menuTapped() { onMenu?() }
 
-    override func mouseDown(with event: NSEvent) { onToggle?() }
+    override func mouseDown(with event: NSEvent) {
+        let origin = event.locationInWindow
+        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            switch next.type {
+            case .leftMouseDragged:
+                guard hypot(next.locationInWindow.x - origin.x,
+                            next.locationInWindow.y - origin.y) >= 3 else { continue }
+                onBeginDrag?(next)
+                return
+            case .leftMouseUp:
+                onToggle?()
+                return
+            default: continue
+            }
+        }
+    }
     func setSidebarHovered(_ value: Bool) { hovered = value }
     override func mouseEntered(with event: NSEvent) { sidebarHoverEntered() }
     override func mouseExited(with event: NSEvent) { sidebarHoverExited() }

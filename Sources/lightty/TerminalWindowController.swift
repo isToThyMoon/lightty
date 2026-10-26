@@ -518,8 +518,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// 之间有别的标签页被关掉，也仍然落在同一个邻居后面。
     /// 选中项跟着标签页本体走，不跟着序号走——重排不该顺手换走当前上下文。
     @discardableResult
-    func moveTab(withID id: UUID, after anchor: UUID?) -> Bool {
-        guard let next = arrangement.movingTab(id, after: anchor) else { return false }
+    func moveTab(withID id: UUID, after anchor: UUID?, inheritGroup: Bool = true) -> Bool {
+        guard let next = arrangement.movingTab(id, after: anchor, inheritGroup: inheritGroup) else { return false }
+        return commit(next)
+    }
+
+    @discardableResult
+    func moveSidebarGroup(withID id: UUID, after anchor: UUID?) -> Bool {
+        guard let next = arrangement.movingGroup(id, after: anchor) else { return false }
         return commit(next)
     }
 
@@ -582,11 +588,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     /// （拖动是整理动作）。源标签页只剩这一个 pane 时没有可拆的东西，交给 moveTab。
     @discardableResult
     func detachPane(withID sourceID: UUID, toNewTabAfter anchor: UUID?,
-                    inGroup explicitGroupID: UUID? = nil) -> Bool {
+                    inGroup explicitGroupID: UUID? = nil, inheritGroup: Bool = true) -> Bool {
         guard let host = arrangement.tabID(hosting: sourceID) else { return false }
         let before = arrangement
         let wasFocused = activePane?.dragIdentifier == sourceID
-        let destinationGroup = explicitGroupID ?? anchor.flatMap { arrangement.tab($0)?.groupID }
+        let destinationGroup = explicitGroupID ?? (inheritGroup ? anchor.flatMap { arrangement.tab($0)?.groupID } : nil)
         guard let next = arrangement.detachingPane(sourceID, toNewTab: UUID(),
                                                    title: .numbered(tabNumbering.upcoming),
                                                    groupID: destinationGroup, after: anchor)

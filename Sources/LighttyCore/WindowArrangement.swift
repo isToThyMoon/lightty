@@ -215,7 +215,7 @@ public struct WindowArrangement: Sendable, Equatable {
     /// 标签页换位：挪到 `anchor` 之后，anchor 为 nil 挪到最前。anchor 按身份给出，
     /// 期间有别的标签页被关掉也落在同一个邻居后面；anchor 自己没了命令就作废。
     /// 原地不动返回 nil。选中项跟着标签页本体走。
-    public func movingTab(_ id: UUID, after anchor: UUID?) -> WindowArrangement? {
+    public func movingTab(_ id: UUID, after anchor: UUID?, inheritGroup: Bool = true) -> WindowArrangement? {
         guard let from = index(of: id), anchor != id else { return nil }
         let rest = tabs.filter { $0.id != id }
         let destination: Int
@@ -225,11 +225,33 @@ public struct WindowArrangement: Sendable, Equatable {
         } else {
             destination = 0
         }
-        let destinationGroup = anchor.flatMap { tab($0)?.groupID }
+        let destinationGroup = inheritGroup ? anchor.flatMap { tab($0)?.groupID } : nil
         let assignments = destinationGroup.map { [id: $0] } ?? [:]
         let ungrouped: Set<UUID> = destinationGroup == nil ? [id] : []
-        return TabArrangement.movingTab(from: from, to: destination, in: tabLayouts)
-            .flatMap { adopting($0, groupAssignments: assignments, ungrouped: ungrouped) }
+        let layouts = TabArrangement.movingTab(from: from, to: destination, in: tabLayouts) ?? tabLayouts
+        guard layouts != tabLayouts || tabs[from].groupID != destinationGroup else { return nil }
+        return adopting(layouts, groupAssignments: assignments, ungrouped: ungrouped)
+    }
+
+    /// 分组与成员作为一个连续块移动，保留成员顺序和当前焦点。
+    public func movingGroup(_ id: UUID, after anchor: UUID?) -> WindowArrangement? {
+        let members = tabs.filter { $0.groupID == id }
+        guard !members.isEmpty else { return nil }
+        var rest = tabs.filter { $0.groupID != id }
+        let insertion: Int
+        if let anchor {
+            guard let index = rest.firstIndex(where: { $0.id == anchor }) else { return nil }
+            insertion = rest[index].groupID.flatMap { group in
+                rest.lastIndex { $0.groupID == group }.map { $0 + 1 }
+            } ?? (index + 1)
+        } else {
+            insertion = 0
+        }
+        rest.insert(contentsOf: members, at: insertion)
+        guard rest != tabs else { return nil }
+        var next = self
+        next.tabs = rest
+        return next
     }
 
     /// 把标签页移到分组末尾；`nil` 表示移出分组并放到窗口末尾。
