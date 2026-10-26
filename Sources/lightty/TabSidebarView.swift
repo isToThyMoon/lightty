@@ -71,6 +71,7 @@ final class TabSidebarView: NSView {
     var onResizeEnded: (() -> Void)?
 
     private let column = TabColumnView()
+    private let outputMeter = AgentOutputMeterView(frame: .zero)
     private let dragStrip = EdgeDragStrip(range: TabSidebarSizing.range)
 
     init(topInset: CGFloat) {
@@ -82,7 +83,7 @@ final class TabSidebarView: NSView {
         dragStrip.onWidthChange = { [weak self] width in self?.onWidthChange?(width) }
         dragStrip.onResizeEnded = { [weak self] in self?.onResizeEnded?() }
 
-        for v in [column, dragStrip] {
+        for v in [column, outputMeter, dragStrip] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -90,7 +91,15 @@ final class TabSidebarView: NSView {
             column.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
             column.leadingAnchor.constraint(equalTo: leadingAnchor),
             column.trailingAnchor.constraint(equalTo: trailingAnchor),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            column.bottomAnchor.constraint(equalTo: outputMeter.topAnchor),
+
+            // A fixed footer: the top band belongs to the traffic lights once the primary
+            // sidebar closes, and a meter that moved with it would be hard to find.
+            // 22 = the column's 12 gutter + 10 row inset, so the pet lines up with row text.
+            outputMeter.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            outputMeter.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            outputMeter.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            outputMeter.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
             dragStrip.trailingAnchor.constraint(equalTo: trailingAnchor),
             dragStrip.topAnchor.constraint(equalTo: topAnchor, constant: topInset),

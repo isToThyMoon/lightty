@@ -533,3 +533,12 @@
 "Expand group" = "展开分组";
 "Collapse group" = "折叠分组";
 "Close tabs in group" = "关闭组内标签页";
+
+"Output speed of recent model requests in the selected terminal: output tokens divided by the time from sending each request to its completion, including the wait for the first token. Read from the Agent's session log; updates when a request finishes." = "当前终端最近几次模型请求的输出速度：输出 token 数 ÷ 从发出请求到完成的时间，包含等待首个 token 的时间。数据来自 Agent 的会话日志，每次请求完成后更新。";
+"Output speed unavailable" = "暂无输出速度";
+"Output speed: %@" = "输出速度：%@";
+"No request long enough to measure yet. Replies under %@ output tokens are mostly waiting for the first token and are not counted." = "还没有足够长的请求可以测速。输出少于 %@ 个 token 的回复，耗时几乎都是等待首个 token，不计入。";
+"Text: %@ characters/s. Characters compare across Agents; tokens do not, because each tokenizer splits text differently." = "正文：%@ 字符/秒。跨 Agent 比较请看字符：各家分词器切分方式不同，token 数不能直接比。";
+"%1$@ tokens, %2$@ of them thinking" = "%1$@ token（其中思考 %2$@）";
+"%@ tokens" = "%@ token";
+"Last request: %1$@, %2$@ characters of text, %3$@ s" = "最近一次请求：%1$@，正文 %2$@ 字符，用时 %3$@ 秒";

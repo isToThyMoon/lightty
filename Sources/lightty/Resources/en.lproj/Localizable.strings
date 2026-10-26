@@ -516,3 +516,12 @@
 "Expand group" = "Expand group";
 "Collapse group" = "Collapse group";
 "Close tabs in group" = "Close tabs in group";
+
+"Output speed of recent model requests in the selected terminal: output tokens divided by the time from sending each request to its completion, including the wait for the first token. Read from the Agent's session log; updates when a request finishes." = "Output speed of recent model requests in the selected terminal: output tokens divided by the time from sending each request to its completion, including the wait for the first token. Read from the Agent's session log; updates when a request finishes.";
+"Output speed unavailable" = "Output speed unavailable";
+"Output speed: %@" = "Output speed: %@";
+"No request long enough to measure yet. Replies under %@ output tokens are mostly waiting for the first token and are not counted." = "No request long enough to measure yet. Replies under %@ output tokens are mostly waiting for the first token and are not counted.";
+"Text: %@ characters/s. Characters compare across Agents; tokens do not, because each tokenizer splits text differently." = "Text: %@ characters/s. Characters compare across Agents; tokens do not, because each tokenizer splits text differently.";
+"%1$@ tokens, %2$@ of them thinking" = "%1$@ tokens, %2$@ of them thinking";
+"%@ tokens" = "%@ tokens";
+"Last request: %1$@, %2$@ characters of text, %3$@ s" = "Last request: %1$@, %2$@ characters of text, %3$@ s";

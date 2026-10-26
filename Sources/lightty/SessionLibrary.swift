@@ -129,6 +129,7 @@ final class SessionLibrary {
 
     func paneState(for id: UUID) -> PaneSessionState? { runtime.panes[id] }
     func markRead(_ id: UUID) { statusStore.markRead(id) }
+    func transcriptPath(for id: UUID) -> String? { statusStore.transcriptPath(for: id) }
     var openedSessionKeys: Set<AgentSessionKey> { runtime.openedSessionKeys }
     func presence(for key: AgentSessionKey) -> SessionPresence {
         if openedSessionKeys.contains(key) { return .inLightty }

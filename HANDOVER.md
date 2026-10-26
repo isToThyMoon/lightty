@@ -23,7 +23,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - PrimarySidebar：第一侧栏外壳、模式标题及说明；HandoffSidebarContent / SessionsSidebarContent 分别承载两种内容。
 - LaunchComposer / SearchPalette：共享启动浮层；三个入口（Sessions 新建会话、Handoff 新建任务、任务开始处理）只是它的三组初值。ArchivedTasksView 管理设置中的归档恢复与彻底删除。
 - SessionLibrary / AgentSessionProvider：分页会话目录、取消、项目持久化；列表、改名、删除、占用检测、存活进程观测都经 provider，Agent 差异只在 CodexSessionProvider / ClaudeSessionProvider 里。占用检测与存活进程只问各家的官方接口（Claude 的 `claude agents --json`；codex 没有对等接口，一律「问不出来」），不读进程表 / 文件表反推。调用 Agent CLI 与 node helper 的进程环境（清 LIGHTTY_*、PATH、配置目录变量、arm64 运行时路径）只在 AgentHelperProcess 里拼。
-- AgentSpec（LighttyCore）：一家 Agent 的全部常量——可执行名、配置根、显示名与图标资源、续接与选择器写法、bypass 参数、技能调用前缀、hook 事件表、配置文件名与格式、插件动词与清单路径。值写在 `Sources/LighttyCore/Agents/<家名>Agent.swift`，`SessionAgent.spec` 是全 app 唯一按家穷举的 switch。**加一家 Agent 只加一个文件**：枚举补 case 之后，编译错误只落在 `spec` 那个 switch 与几处枚举桥（HookAgent / LaunchAgent / PluginAgent），再新建一个 `XxxAgent.swift`。剩下要另外补的只有两处：`SessionCatalogSource.makeProvider`（要造 provider，LighttyCore 不依赖 app 目标）和 `HookMarketplace` 里那两份插件清单的内容。
+- AgentSpec（LighttyCore）：一家 Agent 的全部常量——可执行名、配置根、显示名与图标资源、续接与选择器写法、bypass 参数、技能调用前缀、hook 事件表、配置文件名与格式、插件动词与清单路径、会话日志格式与速度计精灵。值写在 `Sources/LighttyCore/Agents/<家名>Agent.swift`，`SessionAgent.spec` 是全 app 唯一按家穷举的 switch。**加一家 Agent 只加一个文件**：枚举补 case 之后，编译错误只落在 `spec` 那个 switch 与几处枚举桥（HookAgent / LaunchAgent / PluginAgent），再新建一个 `XxxAgent.swift`。剩下要另外补的只有两处：`SessionCatalogSource.makeProvider`（要造 provider，LighttyCore 不依赖 app 目标）和 `HookMarketplace` 里那两份插件清单的内容。
 - Claude 官方 SDK helper：`node scripts/prepare-claude-helper.mjs` 准备 debug 依赖，再运行 `swift build && .build/debug/lightty`。打包脚本自动准备双架构运行时；应用运行时不下载依赖。
 - PaneLauncher：由 lightty 发起的新终端（启动浮层、续接会话、原生会话选择器、任务开始处理、重启恢复）都构造启动请求交给它；删除互斥、已打开则聚焦、占用检查、会话关联、任务绑定、放置都在这里，结果交回调用方决定怎么提示。原生 CLI 恢复，目录身份跟随原来源，不通过 SDK 执行 Agent。helper 发布签名/公证及旧系统验收尚未完成。
 - SessionResumeFlow：续接与原生选择器的呈现层，只按启动器的结果弹目录面板、占用提示和错误框。
@@ -31,6 +31,7 @@ lightty 是基于 libghostty 的 macOS 终端应用，提供 Handoff 任务管�
 - ClaudeAgentView：Claude agent view（2.1.28x）的后台会话由 supervisor 托管，hook 继承的 pane 身份属于第一个拉起 supervisor 的终端。hook 按终端归属认出不在 lightty 所开终端里的 agent，只认路由记录；ClaudeAgentView 以 pane 的终端标题（列表 / `<前缀> <会话名>`）为时机、每次按 `claude agents --json` 从头核对 pane 正显示哪段后台会话，写记录、改关联，换了对话就解绑任务。全 app 只有它据 agent view 行动（`ClaudeSessionProvider` 只负责把官方输出里的 `kind`、`name` 读出来）。见 [hooks 文档](docs/hooks.md#claude-agent-view-的后台会话)。
 - TaskBindings（LighttyCore）：终端 ↔ Handoff 任务文件绑定的唯一所有者，任务的建档、改名、归档、删除也经它发起并发出带载荷的变更通知。任务目录的监听也归它（生产用 PathWatcher，测试注入手动变更源）：Agent 在外部写回任务文件后，它发 `lighttyTasksDidChange` 让列表重读，已绑定任务被外部改名时同步终端标题。
 - PaneView / TerminalSurfaceView：终端视图与 libghostty surface；任务绑定只读查询 TaskBindings。
+- AgentOutputMeterView / TranscriptSpeed（LighttyCore）：第二侧栏底部的当前终端 Agent 输出速度与精灵；只读 hook 报来的 `transcript_path` 会话日志，按请求计算「输出 token ÷ 请求发出到完成」，不加 Agent hook、配置或请求。计算口径、性能与限制见 [输出速度方案](docs/specs/output-speed.md)。
 - WorkspaceSnapshot / WorkspaceStore：窗口现场保存与重启恢复；不是全量 Agent 会话目录。
 - UserDataMigration / UserDataSchemas / JSONSchemaMigration：启动升级、各文件规则及纯内存版本转换，先于业务初始化。
 - AgentLaunchPreference：新任务默认 Agent 为 Codex，启动命令可在通用设置修改。

@@ -54,6 +54,9 @@ final class PaneStatusStore {
     /// 挂着的 pane（值仅作存在性标记）。detach 之后在途的报文要能被认出来丢掉。
     private var attached: Set<UUID> = []
     private var statuses: [UUID: PaneStatus] = [:]
+    /// 每个 pane 最近一次 hook 报的会话日志路径。兜底合成的状态（进程退出、命令结束）不带路径，
+    /// 所以单独记，按会话对上才给。
+    private var transcripts: [UUID: (agent: String?, session: String?, path: String)] = [:]
     /// Reading a request acknowledges its reminder, not the Agent's waiting state.
     private var readAttention: Set<UUID> = []
     private var processWatches: [UUID: (identity: AgentProcessIdentity, source: DispatchSourceProcess)] = [:]
@@ -230,6 +233,9 @@ final class PaneStatusStore {
         }
         if statuses[datagram.pane] != datagram.status { readAttention.remove(datagram.pane) }
         statuses[datagram.pane] = datagram.status
+        if let path = datagram.status.transcriptPath {
+            transcripts[datagram.pane] = (datagram.status.agent, datagram.status.sessionID, path)
+        }
         watchProcess(for: datagram.pane)
         postChange(datagram.pane)
     }
@@ -310,6 +316,7 @@ final class PaneStatusStore {
         routedPanes.remove(paneID)
         settledCodex.removeValue(forKey: paneID)
         submittedPanes.remove(paneID)
+        transcripts.removeValue(forKey: paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
         if hadStatus { postChange(paneID) }
@@ -328,6 +335,14 @@ final class PaneStatusStore {
     func status(for paneID: UUID) -> PaneStatus? {
         assertMain()
         return statuses[paneID]
+    }
+
+    /// 当前会话的日志文件路径；pane 已换到别的会话、或 hook 从没报过时为 nil。
+    func transcriptPath(for paneID: UUID) -> String? {
+        assertMain()
+        guard let status = statuses[paneID], let known = transcripts[paneID],
+              known.agent == status.agent, known.session == status.sessionID else { return nil }
+        return known.path
     }
 
     /// Only unread reminders may animate or cause a notification. A read attention

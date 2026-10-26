@@ -80,6 +80,8 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     /// 会话恢复（重启后 `--resume`）需要分辨 agent 是「刚开场」还是「已退出」，
     /// 只有这一个字段能说清。旧 hook 不发该字段 → nil，读方按「未知」处理。
     public let event: String?
+    /// hook 载荷里的 `transcript_path`：这段会话的日志文件，输出速度只读不写。旧 hook 不发 → nil。
+    public let transcriptPath: String?
 
     enum CodingKeys: String, CodingKey {
         case v, ts, state, agent, tool, detail, cwd, event
@@ -87,6 +89,7 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         case sourceRoot = "source_root"
         case sourceConfiguration = "source_configuration"
         case agentProcess = "agent_process"
+        case transcriptPath = "transcript_path"
     }
 
     public init(
@@ -101,7 +104,8 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         tool: String? = nil,
         detail: String? = nil,
         cwd: String? = nil,
-        event: String? = nil
+        event: String? = nil,
+        transcriptPath: String? = nil
     ) {
         self.v = v
         self.ts = ts
@@ -115,6 +119,7 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         self.detail = detail
         self.cwd = cwd
         self.event = event
+        self.transcriptPath = transcriptPath
     }
 
     // MARK: - 编解码

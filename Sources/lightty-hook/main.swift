@@ -248,7 +248,9 @@ let status = PaneStatus(
     // PostToolUse 的同一份参数只是回声
     detail: event == "PreToolUse" ? detail(from: payload["tool_input"]) : nil,
     cwd: string(payload["cwd"]),
-    event: event
+    event: event,
+    // 报文有 4KB 上限；超长路径宁可不发，速度计只是不显示。
+    transcriptPath: string(payload["transcript_path"]).flatMap { $0.utf8.count <= 1024 ? $0 : nil }
 )
 
 // 一发即走。返回值刻意丢弃：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、

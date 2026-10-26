@@ -59,5 +59,24 @@ public enum CodexAgent {
             busyPrefixes: Set((0x2800...0x28FF).compactMap { Unicode.Scalar($0).map(Character.init) }),
             settledPrefixes: [],
             attentionPrefixes: ["[ ! ] Action Required", "[ . ] Action Required"],
-            bareTitleIsSettled: true))
+            bareTitleIsSettled: true),
+        transcriptFormat: .codexRollout,
+        // 蓝色小机器人：圆头、深色面罩里一对闭着的眼睛、胸口一个 `>_`，两组小脚生成时交替踩步。
+        // 致敬 Codex Pets 里的「Codex」形象与配色，轮廓是 lightty 自己画的，不复刻官方宠物。
+        sprite: PixelSprite(
+            rows: [
+                "..HHHHHHHH..",
+                ".HHHHHHHHHH.",
+                "HHVVVVVVVVHH",
+                "HHVEEVVEEVHH",
+                "HHVVVVVVVVHH",
+                ".HHHHHHHHHH.",
+                "..BBBBBBBB..",
+                "..BCBBBBBB..",
+                "..BBCBDDBB..",
+                "...LR..LR...",
+            ],
+            inks: ["H": .rgb(0x3D6EF2), "V": .rgb(0x18203D), "E": .rgb(0x8AB8FF), "B": .rgb(0x4F7FF5),
+                   "C": .rgb(0xE3ECFF), "D": .rgb(0xE3ECFF), "L": .rgb(0x3D6EF2), "R": .rgb(0x3D6EF2)],
+            frames: ["L", "R"]))
 }

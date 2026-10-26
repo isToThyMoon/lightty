@@ -57,6 +57,24 @@ func captureSidebarVariants(_ controller: TerminalWindowController, panel: Prima
     try waitUntil("sidebar slide finishes") { panel.frame.minX >= ShellStyle.panelInset - 0.5 }
     for appearance in [NSAppearance.Name.aqua, .darkAqua] {
         window.appearance = NSAppearance(named: appearance)
+        if let host = window.contentView?.superview {
+            controller.openTabSidebar(animated: false)
+            host.layoutSubtreeIfNeeded()
+            if let meter = descendants(host).compactMap({ $0 as? AgentOutputMeterView }).first {
+                // Becoming key refreshes the meter, which clears the fixture value: no Agent in this window.
+                window.makeKeyAndOrderFront(nil)
+                // The first capture after an appearance switch returns the previous frame.
+                try captureSettingsWindow(window, to: directory.appendingPathComponent("warmup.png"))
+                for agent in [SessionAgent?.none] + SessionAgent.allCases.map(Optional.some) {
+                    let name = agent?.rawValue ?? "generic"
+                    meter.show(agent: agent)
+                    meter.render(48, hasAgent: true)
+                    try captureSettingsWindow(window, to: directory.appendingPathComponent("output-meter-\(name)-\(appearance.rawValue)-streaming.png"))
+                    meter.render(nil, hasAgent: true, following: true)
+                    try captureSettingsWindow(window, to: directory.appendingPathComponent("output-meter-\(name)-\(appearance.rawValue)-waiting.png"))
+                }
+            }
+        }
         for radius in [CGFloat(16), 18, 20] {
             panel.layer?.cornerRadius = radius
             try captureSettingsWindow(window, to: directory.appendingPathComponent("sidebar-\(appearance.rawValue)-continuous-\(Int(radius)).png"))

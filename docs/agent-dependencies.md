@@ -91,6 +91,15 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 
 ## 六、脆弱程度
 
+### 输出速度
+
+第二侧栏的速度计只读 hook 报来的 `transcript_path` 指向的会话日志，不加入 Agent 的命令、配置、
+请求或会话订阅链路。读的是两家的**私有日志格式**：Claude transcript 的 `api-request`、
+`assistant` 行（`message.id`、`usage.output_tokens`、`timestamp`、`isSidechain`），Codex rollout 的
+`token_usage_record`、`task_started` 与 `response_item`。格式变了只是速度计不显示，认不出的行不猜。
+升级任一家后，拿本机一段新会话核对：Claude Code 2.1.310、Codex 0.164.0 实测通过。
+计算口径与依据见[输出速度方案](specs/output-speed.md)。
+
 改了会**直接失效**的，按影响面排序：
 
 1. hook 载荷字段名、`hookSpecificOutput.additionalContext` 协议、插件目录约定 —— 状态、绑定、注入全没。
@@ -99,7 +108,7 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 4. `claude agents --json` 的输出格式 —— 占用一律变成「问不出来」，删除时每次都弹确认；pane 不再跟着 agent view 切换会话。`pid`、`sessionId` 按官方文档是「有才给」（后台会话的进程被 supervisor 停掉后没有 `pid`），缺一个不算格式变了。
 5. `claude plugin …` / `codex plugin …` 子命令形状 —— hook 装不上，已装的照常工作。
 
-改了只是**功能变弱**的：终端标题的前缀格式（Claude 中断后停在「思考中」、改名延后）、Codex 终端界面的 `originator` 名（0.157 起的终端会话从会话列表消失，pane 标题退回 pane 名）、配置文件的键名（设置页显示不全）、CLI 在 PATH 上的位置（找不到 CLI）。
+改了只是**功能变弱**的：会话日志的行格式（速度计不显示）、终端标题的前缀格式（Claude 中断后停在「思考中」、改名延后）、Codex 终端界面的 `originator` 名（0.157 起的终端会话从会话列表消失，pane 标题退回 pane 名）、配置文件的键名（设置页显示不全）、CLI 在 PATH 上的位置（找不到 CLI）。
 这些都必须退化成「问不出来」或空列表，不能崩、也不能把「不知道」当成「没有」。
 
 ## 相关文档

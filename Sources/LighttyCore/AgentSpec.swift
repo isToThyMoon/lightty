@@ -26,6 +26,14 @@ public struct AgentSpec: Sendable {
         case toml
     }
 
+    /// 会话日志（hook 载荷 `transcript_path` 指向的文件）的行格式，输出速度只读它。
+    public enum TranscriptFormat: Sendable, Equatable {
+        /// 每行一条记录，消息写完时整条落盘，带 `api-request` 请求起点。
+        case claudeTranscript
+        /// rollout：内容项逐个写，每次请求结束写一条 `token_usage_record`。
+        case codexRollout
+    }
+
     // MARK: - 进程与配置
 
     /// PATH 上的可执行文件名。
@@ -114,6 +122,12 @@ public struct AgentSpec: Sendable {
     /// 这家经 OSC 0 写进终端标题的形状：哪些前缀表示忙、闲、等用户处理，见 `AgentTerminalTitle`。
     public let terminalTitle: TerminalTitleShape
 
+    /// 会话日志格式，见 `TranscriptSpeedParser`。
+    public let transcriptFormat: TranscriptFormat
+
+    /// 侧栏速度计里代表这家的像素小精灵。
+    public let sprite: PixelSprite
+
     public init(
         executableName: String,
         configurationVariable: String,
@@ -137,7 +151,9 @@ public struct AgentSpec: Sendable {
         marketplaceManifestPath: String,
         pluginManifestPath: String,
         hooksDocumentPath: String,
-        terminalTitle: TerminalTitleShape
+        terminalTitle: TerminalTitleShape,
+        transcriptFormat: TranscriptFormat,
+        sprite: PixelSprite
     ) {
         self.executableName = executableName
         self.configurationVariable = configurationVariable
@@ -162,6 +178,8 @@ public struct AgentSpec: Sendable {
         self.pluginManifestPath = pluginManifestPath
         self.hooksDocumentPath = hooksDocumentPath
         self.terminalTitle = terminalTitle
+        self.transcriptFormat = transcriptFormat
+        self.sprite = sprite
     }
 
     /// 两家都订阅的事件。各家在自己的文件里只写「我比共有的多哪几个」，

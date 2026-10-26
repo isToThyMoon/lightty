@@ -47,5 +47,22 @@ public enum ClaudeAgent {
             attentionPrefixes: [],
             bareTitleIsSettled: false,
             agentViewTitle: "claude agents",
-            agentViewSeparator: " \u{00B7} "))
+            agentViewSeparator: " \u{00B7} "),
+        transcriptFormat: .claudeTranscript,
+        // 橙色像素小生物：圆顶、黑眼睛、两组小脚生成时交替踩步。致敬 Claude Code 启动界面的
+        // 像素风与配色，轮廓是 lightty 自己画的，不复刻官方吉祥物。橙色取 Claude 品牌橙。
+        sprite: PixelSprite(
+            rows: [
+                "...OOOOOO...",
+                "..OOOOOOOO..",
+                ".OOOOOOOOOO.",
+                ".OOEOOOOEOO.",
+                "OOOEOOOOEOOO",
+                "OOOOOOOOOOOO",
+                ".OOOOOOOOOO.",
+                ".A.B.AB.A.B.",
+                ".A.B.AB.A.B.",
+            ],
+            inks: ["O": .rgb(0xD97757), "E": .rgb(0x2B1D16), "A": .rgb(0xD97757), "B": .rgb(0xD97757)],
+            frames: ["A", "B"]))
 }
