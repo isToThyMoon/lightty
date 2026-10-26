@@ -711,6 +711,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let collapsedForDrag: UUID?
         /// 源行在"其余各行"里的插入位；nil = 还没离开原位。
         var insertion: Int? = nil
+        /// self 为非翻转坐标；组尾占位的上半段归组内，下半段归组外。
+        var cursorY: CGFloat = 0
         /// 压着中央带的那一行（按行身份记）。
         var merge: TabRowKind? = nil
         /// 光标在列表外、压在某个终端 pane 上：落点半区（只有 pane 行有）。
@@ -730,6 +732,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private static let mergeBand: CGFloat = 0.25
 
     private var drag: RowDrag?
+    private let groupTailIndicator = NSView()
 
     /// 当前显示出来的行序（测试与诊断用）。
     var displayedRows: [TabRowKind] { rowItems.map(\.kind) }
@@ -879,6 +882,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func moveDrag(to cursor: NSPoint) {
         guard var current = drag, !current.committing else { return }
         guard bounds.contains(cursor) else { moveDragOutsideList(to: cursor); return }
+        current.cursorY = cursor.y
+        drag = current
         if current.paneDrop != nil {
             setPaneDrop(nil)
             current = drag ?? current
@@ -890,6 +895,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             applyDragDecorations()
             applySnapshotLook(merging: target != nil)
         }
+        defer { updateGroupTailIndicator() }
         guard target == nil,
               let from = rowItems.firstIndex(where: { Self.matches($0.kind, current.source) }) else { return }
         // 光标之上（self 非翻转：y 越大越靠上）的其余行数 = 插入位
@@ -939,6 +945,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         guard wasMerging || wasMoved else { return }
         current.merge = nil
         current.insertion = nil
+        groupTailIndicator.removeFromSuperview()
         drag = current
         if wasMerging {
             applyDragDecorations()
@@ -1002,6 +1009,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             if case .group(let group) = current.source {
                 command = .moveGroup(group, after: topLevelAnchor(before: sourceIndex))
             } else if current.merge == nil, let placement = groupPlacement(at: sourceIndex) {
+                if isGroupBoundary(at: sourceIndex) {
+                    switch current.source {
+                    case .tab(let tab), .leaf(let tab, _):
+                        command = .moveTabWithinGroup(tab, group: placement.group, after: placement.anchor)
+                    case .pane(let pane):
+                        command = .detachPaneIntoGroup(pane, group: placement.group, after: placement.anchor)
+                    case .group: break
+                    }
+                }
                 switch command {
                 case .moveTab(let tab, _):
                     command = .moveTabWithinGroup(tab, group: placement.group, after: placement.anchor)
@@ -1026,6 +1042,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func completeDrag(_ command: RowDropCommand?) {
+        groupTailIndicator.removeFromSuperview()
         if let command { perform(command) }
         drag = nil
         reload()  // 无论命令改没改动模型，都按最终模型重新投影一次
@@ -1075,7 +1092,20 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// 是组内第一位，不能被解释成前一个分组或未分组的末尾。
     private func groupPlacement(at sourceIndex: Int) -> (group: UUID, anchor: UUID?)? {
         guard rowItems.indices.contains(sourceIndex) else { return nil }
-        // 只有下方仍是组内成员才算组内缝隙。分组标题之前、组末和列表末尾都在组外。
+        let slot = convert(table.rect(ofRow: sourceIndex), from: table)
+        if let group = tailGroup(at: sourceIndex), let drag, drag.cursorY >= slot.midY {
+            let sourceTab: UUID?
+            switch drag.source {
+            case .tab(let tab), .leaf(let tab, _): sourceTab = tab
+            case .pane: sourceTab = nil
+            case .group: return nil
+            }
+            let anchor = controller?.tabOverview().last {
+                $0.groupID == group && $0.id != sourceTab
+            }?.id
+            return (group, anchor)
+        }
+        // 除组尾上半段外，只有两侧仍属于同一组才算组内缝隙。
         guard sourceIndex + 1 < rowItems.count,
               let destination = rowItems[sourceIndex + 1].groupID else { return nil }
         if case .group = rowItems[sourceIndex + 1].kind { return nil }
@@ -1094,6 +1124,35 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
         }
         return nil
+    }
+
+    /// 组尾占位提供上下两个落点：贴近最后一个成员为组内，继续向下为组外。
+    private func tailGroup(at index: Int) -> UUID? {
+        guard index > 0, isGroupBoundary(at: index) else { return nil }
+        return rowItems[index - 1].groupID
+    }
+
+    private func updateGroupTailIndicator() {
+        guard let drag, drag.merge == nil, drag.insertion != nil,
+              let index = rowItems.firstIndex(where: { Self.matches($0.kind, drag.source) }),
+              tailGroup(at: index) != nil else {
+            groupTailIndicator.removeFromSuperview()
+            return
+        }
+        if case .group = drag.source {
+            groupTailIndicator.removeFromSuperview()
+            return
+        }
+        let rect = convert(table.rect(ofRow: index), from: table)
+        let insideGroup = groupPlacement(at: index) != nil
+        let inset: CGFloat = insideGroup ? 14 : 0
+        groupTailIndicator.wantsLayer = true
+        groupTailIndicator.layer?.backgroundColor = ShellStyle.navigationAccent
+            .shellResolvedCGColor(for: effectiveAppearance)
+        groupTailIndicator.frame = NSRect(x: rect.minX + inset,
+                                          y: insideGroup ? rect.maxY - 2 : rect.minY,
+                                          width: max(0, rect.width - inset), height: 2)
+        addSubview(groupTailIndicator, positioned: .above, relativeTo: drag.card)
     }
 
     private func isGroupBoundary(at index: Int) -> Bool {
