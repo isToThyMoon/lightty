@@ -1,5 +1,7 @@
 # Pane 状态与 Handoff 注入契约
 
+> 状态：现行契约。（核对于 2026-10-29）
+
 安装、卸载和故障排查见 [Agent 状态 hooks](../hooks.md)。实时活动状态与任务文件 frontmatter 的 status 无关；后者仅作文件兼容保留。
 
 ## 1. 职责

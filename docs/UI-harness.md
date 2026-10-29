@@ -79,6 +79,16 @@ Terminal 的前景、背景、透明度和终端字体由 Ghostty 拥有；壳�
 
 完成后按改动选择构建、已有行为测试和视觉检查。视觉重点是正常/窄宽度、长文本，以及本次涉及的明暗和交互状态；查看渲染结果后再判断对齐与观感。编译通过不等于视觉已验证，交付时说明未覆盖的场景即可，无需每次完成全套矩阵。
 
-测试与截图入口见 [HANDOVER 的构建与验证](../HANDOVER.md#构建与验证)；外观数值不写成单元测试断言。当前本机正在运行 lightty 时，不启动第二个应用实例（共享真实配置目录）；用测试 fixture 验证，真实终端交互留给当前实例的人工验收。
+看渲染结果用 `scripts/snapshot.sh <过滤>`，各区域对应的过滤见下表；外观数值不写成单元测试断言（见 [测试约定](testing.md#粒度)）。真实终端交互留给用户在当前运行的实例里验收。
+
+| 区域 | `scripts/snapshot.sh` 的过滤 | 产出 |
+| --- | --- | --- |
+| 两级侧栏整体、输出速度计、hover / 键盘 / 宽屏 | `SidebarControlsTests/testInitialWindowOpensTaskPanel` | `sidebar-*`、`output-meter-*`，明暗各一套 |
+| Sessions 会话行菜单 | `PrimarySidebarTests/testMoveToRecentMenu` | `session-menu-*` |
+| Sessions 列表（项目与会话行、展开 / 收起） | `PrimarySidebarTests/testRapidDisclosure` | `disclosure-*` |
+| Sessions 会话搜索 | `PrimarySidebarTests/testProjectsCollapse` | `session-search.png` |
+| 设置：MCP / Skills / Plugins | `MCPSettingsViewTests` / `SkillsSettingsViewTests` / `PluginsSettingsViewTests` | 各页明暗与状态 |
+
+截图时测试窗口会短暂上屏。`PrimarySidebarTests` 写在 `SessionCatalogTests.swift` 里，过滤按类名。新区域要截图时，在该区域的场景测试里按 `LIGHTTY_UI_SNAPSHOT_DIR` 分支加一张，并补进上表。
 
 本文采用短入口、按需读取和代码作为事实来源的组织方式，参考 [OpenAI harness engineering](https://openai.com/index/harness-engineering/) 与 [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)。这是组织依据，不是需要 agent 每次阅读的外部前置材料。

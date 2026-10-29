@@ -1,5 +1,7 @@
 # Claude Agent SDK 本地会话 helper：分发与接口核验
 
+> 状态：调研记录。决策已落地于 primary-sidebar-modes.md §4 与 scripts/claude-session-helper；Developer ID 签名/公证与旧系统验收仍未完成。（核对于 2026-10-29）
+
 核验日期：2026-09-07。范围仅为官方 SDK 的本地会话列表，不启动 Agent、不读取用户真实会话。本文包含官方资料核验及隔离实验；不等于完成发布验收。
 
 ## 实验结论

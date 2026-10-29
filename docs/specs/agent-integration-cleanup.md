@@ -1,5 +1,7 @@
 # Agent 接入清理与按家收敛：实施计划
 
+> 状态：调研记录。A1–D 已全部实施，现行契约在 agent-dependencies.md、agent-session-apis.md、hooks.md；正文各「现状」段是实施前的状态。（核对于 2026-10-29）
+
 目标：去掉对 Claude Code / Codex **非官方接口**的依赖，把每家 Agent 的知识收进各自一个文件。
 依赖现状见 `docs/agent-dependencies.md`。
 
@@ -18,7 +20,7 @@
 | C | 文档：`docs/agent-dependencies.md`、`agent-session-apis.md`、`hooks.md`、`session-deletion-research.md` | B 之后 |
 
 每阶段的验收：`unset LIGHTTY_PANE_ID LIGHTTY_SOCK; swift test` 全量 0 失败；
-新增测试遵守 `HANDOVER.md`「全量测试要点」（不建 surface、不上屏、不写固定等待、不钉外观）。
+新增测试遵守 [测试约定](../testing.md)（不建 surface、不上屏、不写固定等待、不钉外观）。
 **绝不启动第二个 lightty 实例**（`swift run`、`open`、`check-config-parity.sh` 都不许跑）。
 
 ## A1 占用检测只用官方接口
@@ -197,7 +199,7 @@ Codex 会话时，由 codex 的写锁拒绝，界面显示 `Failure.failed` 的�
 当前契约已写进常驻文档，不在这里重复：接触点清单见 `docs/agent-dependencies.md`，
 会话接口取舍见 `docs/specs/agent-session-apis.md`，hook 安装与排查见 `docs/hooks.md`，
 删除边界见 `docs/session-deletion-research.md`，`AgentSpec` 的位置与「加一家 Agent
-只加一个文件」见 `HANDOVER.md`「当前实现入口」。
+只加一个文件」见 `AgentSpec` 的文档注释。
 
 ### B 阶段的验收
 

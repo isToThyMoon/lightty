@@ -1,5 +1,7 @@
 # 双侧栏布局约定
 
+> 状态：现行契约。（核对于 2026-10-29）
+
 术语见 [CONTEXT.md](../../CONTEXT.md)。第一侧栏双模式的功能设计与待实施内容见
 [Handoff 任务 / Sessions 会话](primary-sidebar-modes.md)；本文说明当前布局与需要保持的交互契约。
 

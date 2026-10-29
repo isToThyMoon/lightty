@@ -29,6 +29,8 @@ import LighttyCore
 /// `~/.lightty/bin/lightty-hook` 的绝对路径，每次启动重新生成，"app 被挪过"
 /// 这类陈旧路径就不可能出现。生成是幂等的，内容没变的文件一个字节都不重写
 /// ——两家 CLI 都按版本号判断要不要重新拷贝，无谓地改动 mtime 只会制造噪音。
+///
+/// 加一家 Agent 时，这里要补该家的插件清单内容（其余常量在 `AgentSpec`）。
 enum HookMarketplace {
     /// marketplace 名 / 插件名。两家 CLI 都用 `plugin@marketplace` 寻址，
     /// Codex 更是**强制**要求这个形式。

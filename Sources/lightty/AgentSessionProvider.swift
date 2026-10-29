@@ -9,6 +9,10 @@ import LighttyCore
 /// （`SessionRename`、`SessionDeletion`、`PaneLauncher`、`SessionLibrary`）
 /// 只管确认、互斥和刷新，不按 Agent 分支。
 ///
+/// 占用检测与存活进程只问各家官方接口（Claude 的 `claude agents --json`；Codex 没有对等接口，
+/// 一律「问不出来」），不读进程表 / 文件表反推——反推的结果会随上游实现悄悄失真。
+/// 起 CLI 或 helper 的进程环境只在 `AgentHelperProcess` 里拼，adapter 不自己组环境。
+///
 /// 每个方法只做一次原生操作，可能起子进程、会阻塞，不在主线程调。
 /// 官方接口清单与为什么这样用，见 docs/specs/agent-session-apis.md。
 protocol AgentSessionProvider: SessionCatalogProvider {

@@ -8,6 +8,10 @@ import Foundation
 /// 编译错误，是一个静默走 Claude 分支的 bug。
 ///
 /// 什么该进来：现在散在各处、按家返回常量的那些 switch。
+/// 加一家 Agent：给 `SessionAgent` 补 case，再新建一个 `XxxAgent.swift`。穷举 switch 会报编译错误；
+/// `== .codex` 这类比较和写死的 `["claude", "codex"]` 不会报，散在插件、会话库、hook 安装等处，
+/// 清单与查找命令见 `add-agent` 技能。
+///
 /// 什么不该进来：需要构造对象的工厂（`SessionCatalogSource.makeProvider`、图标加载）、
 /// 读写两家配置格式的解析器 —— 那些是行为，且 LighttyCore 不依赖 app 目标。
 public struct AgentSpec: Sendable {

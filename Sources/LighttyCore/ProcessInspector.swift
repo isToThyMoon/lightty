@@ -8,6 +8,11 @@ import Darwin
 /// 用途：Codex 共享后台进程里的会话要对到 pane（见 `CodexSessionRouter`）。
 /// pane 里起的每个进程都继承了 `LIGHTTY_PANE_ID`，界面进程又是 pane 终端的前台作业，
 /// 这两条事实合起来就能说清「这个界面进程在哪个 pane」。
+///
+/// 在会话事实上，这是「占用检测 / 存活进程不读进程表反推」（见 `AgentSessionProvider`）的唯一例外
+/// （`AgentProcessIdentity` 读的是 hook 自己的祖先链与 pid 复用校验，不推断会话）：
+/// 这里要回答的是 lightty 自己注入的 pane ID 在哪个进程里，Codex 没有也不会有这个接口；
+/// 会话本身的事实仍只问官方广播。不要为别的问题复用它。规则见 docs/hooks.md「Codex 共享后台进程」。
 public enum ProcessInspector {
     /// 终端作业结构，全来自 `kinfo_proc`。
     public struct JobFacts: Equatable, Sendable {

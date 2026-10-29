@@ -3,6 +3,8 @@ import LighttyCore
 
 /// A window-local, disposable observer of the focused Agent's session log.
 /// It only reads the file the hook reported; the Agent and PTY never depend on it.
+/// 不为它加 Agent hook、配置或请求：只读 hook 已报来的 `transcript_path`。
+/// 口径、性能与限制见 docs/specs/output-speed.md。
 final class AgentOutputMeterView: NSView {
     private let pet = CALayer()
     private var sprite: PixelSprite?

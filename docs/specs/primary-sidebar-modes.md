@@ -1,6 +1,7 @@
 # 第一侧栏：Handoff 任务 / Sessions 会话
 
-日期：2026-09-07。状态：**开发中，尚未达到发布验收**。
+> 状态：部分实现。双模式外壳、目录、项目组织与恢复已落地；P4 发布加固（万条规模验收、helper 签名公证、旧系统验收）未完成。（核对于 2026-10-29）
+
 来源依据：[会话来源调研](session-provider-research.md)。术语见 [CONTEXT.md](../../CONTEXT.md)。
 
 已实现：双模式外壳、Codex CLI 与 Claude 官方 SDK 的分页目录、原生命令计划、项目及手动归属持久化；设置的 Handoff 归档恢复/彻底删除；搜索与任务弹窗共用 Agent 启动组件。
@@ -26,7 +27,7 @@
 
 - 首次成功归档提示“设置 → 归档”可恢复或彻底删除；失败不消耗首次提示。
 - 设置 → 归档只管理 `tasks/archive/*.md`，恢复重名时保留两份，彻底删除需要二次确认；不写入 CLI 历史。
-- 搜索右侧保留正文滚动预览，嵌入 `RestorePopoverController` 的共享 Agent、已打开位置、目的地和启动按钮。默认新标签页；回车优先前往已打开位置，否则执行当前 Agent/目的地选择。
+- 搜索右侧保留正文滚动预览，嵌入 `LaunchComposer` 的共享 Agent、已打开位置、目的地和启动按钮。默认新标签页；回车优先前往已打开位置，否则执行当前 Agent/目的地选择。
 - 搜索启动区独立滚动，最多占预览区 70%，长正文或多个已打开位置不覆盖控件。
 
 ## 1. 结论与范围
@@ -107,11 +108,11 @@ Sessions 顶部的新建会话按钮提供 Codex / Claude Code 选择，使用�
 2. 未打开：单击弹启动浮层（`LaunchComposer` 的续接主体），显示会话标题、Agent、更新时间与目录，只选去处——当前标签页分屏、新标签页（默认）、新窗口；Agent 与目录归会话，不可改。点继续才运行原生 resume。与 Handoff 单击任务一致，避免点一下就凭空多出终端。打开方式只在浮层里，行菜单不再重复。搜索面板是键盘流程，回车直接在新标签页续接。
 3. 发出恢复命令不等于成功：收到匹配 Agent 和会话 ID 的 hook 后才确认。未确认时再次点击，提示查看此前终端、明确重试或取消；不将 shell 仍运行视作 Agent 已恢复。SessionEnd、其他会话状态或终端退出后不复用该请求。
 4. CLI 不存在、目录丢失、来源不可用：先显示可恢复的错误，不创建一个无声失败的空终端。目录丢失可让用户选择新目录并展示影响，不直接退到 home 后执行 Agent。
-5. 已确认运行的 Codex 会话始终前往原终端，避免第二个 writer。手动恢复在后台进行最长约 2 秒的只读文件占用检查，同一身份的检查合并；对应 Agent 进程以可写方式持有相同来源目录下的准确会话文件时，提示回原终端继续或自行退出后再恢复，不创建新终端。没有匹配、工具失败或超时都属于未知，由原生 CLI 判断；进程名为 node 等情况及未持续持有文件的 Claude 会话可能无法识别。该检查不是互斥锁，不保证消除检查与启动间的竞态，不结束 Agent 进程、删除锁或自动 fork。原生选择器尚未选定会话 ID，其占用检查由 CLI 自行处理。
+5. 手动恢复前由 `PaneLauncher` 在后台调用 `provider.occupancy`（同一会话的检查合并）：`.inUse(pid)` 提示回原终端继续，不创建新终端；`.background(job)` 把命令改为 `claude attach` 接回后台会话；`.unknown` 交给原生 CLI 判断。Codex 目前一律 `.unknown`（不检查占用，已确认运行的会话仍前往原终端）；Claude 读 `claude agents --json` 的活会话表，超时 3 秒，问不出来即未知，不读进程表或文件表反推。该检查不是互斥锁，不保证消除检查与启动间的竞态，不结束 Agent 进程、删除锁或自动 fork。原生选择器尚未选定会话 ID，其占用检查由 CLI 自行处理。
 
 恢复环境由 `SessionConfigurationLocation` 保存来源语义：默认配置与显式目录分开，即使目录路径相同也不合并。默认配置通过子进程 `env -u` 清除对应覆盖变量，自定义配置只在子进程中设置该变量。侧栏、搜索与目录会话的工作区恢复共用 `SessionResumePlan`，原生选择器用 `SessionPickerPlan`，两者组合同一份 `AgentLaunchContext`（校验与命令拼法只在这里）；工作区同时保存确认后的会话身份和配置来源，缺少来源时不猜测目录。恢复流程不修改 Agent 配置、认证文件或原始会话，不附加新建 Agent 的权限参数。
 
-浏览历史和手动恢复不要求历史会话仍 alive。现有 `AgentResume.command(...alive:)` 的 alive 是“重启应用时是否自动重开 Agent”的策略，不能拿它过滤会话目录。
+浏览历史和手动恢复不要求历史会话仍 alive。工作区重启恢复的 alive 是“是否自动重开 Agent”的策略，不能拿它过滤会话目录。
 
 ## 3. Project：lightty 的组织信息
 
@@ -158,7 +159,7 @@ PrimarySidebar（外壳 / 模式 / 工具行）
                                 ├─ Codex Adapter
                                 └─ 项目归组与用户组织信息
 
-两种内容的用户意图 → TerminalLaunchCoordinator
+两种内容的用户意图 → TerminalLaunchRequest → PaneLauncher
                          ├─ 启动计划（新 Agent / resume / 仅终端）
                          └─ 现有新标签页 / 分屏 / 新窗口通路
 
@@ -167,12 +168,12 @@ PrimarySidebar（外壳 / 模式 / 工具行）
 
 ### 5.1 核心值与 Interface
 
-- `AgentKind`：Claude / Codex。`terminalOnly` 是启动选项，不是一种会话来源。
-- `SessionKey`：`sourceID + agentKind + nativeSessionID`。sourceID 指向稳定的配置来源，不能只用裸 ID，也不能只用标题或 cwd。
-- Codex 的 nativeSessionID 必须取具体 `thread.id`，不可误用新版 schema 中共享会话树的 `sessionId`；Claude 的毫秒时间与 Codex 的秒时间在 Adapter 内统一成 Date。
-- `SessionSummary`：key、title、cwd?、updatedAt?、sourceKind、archiveState、availability。只包含列表需要的数据，不携带 transcript 全文。
+- `SessionAgent`：Claude / Codex。只开终端是启动选项（`LaunchAgent.terminal`），不是一种会话来源。
+- `AgentSessionKey`：`agent + sourceRoot + nativeID`。sourceRoot 指向稳定的配置来源，不能只用裸 ID，也不能只用标题或 cwd。
+- Codex 的 nativeID 必须取具体 `thread.id`，不可误用新版 schema 中共享会话树的 `sessionId`；Claude 的毫秒时间与 Codex 的秒时间在 Adapter 内统一成 Date。
+- `AgentSession`：key、title、workingDirectory?、updatedAt?。只包含列表需要的数据，不携带 transcript 全文。
 - `Project`：稳定 ID、名称、折叠状态；手动归属是单独的用户组织记录。
-- `LaunchIntent`：启动 Handoff 任务 / 恢复会话 / 仅开终端；`LaunchDestination`：当前标签页分屏 / 新标签页 / 新窗口，替换现有数字索引约定。
+- `TerminalLaunchRequest`：`Subject`（纯终端 / 新 Agent / 续接会话 / 原生选择器 / 工作区快照）+ 目录 + 绑定任务 + 去处；`TerminalLaunchDestination`：当前标签页分屏 / 新标签页 / 新窗口。
 
 `SessionLibrary` 的外部 Interface 保持小：获取查询快照流、刷新、修改项目组织。它隐藏多源合并、排序、去重、部分失败、缓存以及请求取消。
 查询结果必须同时含数据和各来源状态，不能因 Claude 出错而清空已成功读取的 Codex 会话。
@@ -189,17 +190,17 @@ Claude 列表 SDK 会读取 transcript 头尾来生成元数据，limit 也不�
 ### 5.2 深度与避免过度抽象
 
 SessionLibrary 是 deep module：小 Interface 隐藏多来源和刷新一致性；删除它会把这些复杂度重新摊给多个视图。
-TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地时抽取：统一目录验证、计划、目的地及重复请求处理，不另包一层仅转发 addTab 的类。
+启动由 `PaneLauncher` 统一承担：目录验证、命令计划、占用检查、去处放置与重复请求处理；调用方只描述 `TerminalLaunchRequest`，不另包仅转发 addTab 的类。
 任务与会话可以共用行外观、菜单和启动目的地控件；不要用一个充满可选字段的通用 Entry 模型吞掉两者不同语义。
 
 ### 5.3 原生启动与安全
 
 - Agent 的来源、配置根、可执行文件与 resume ID 必须一致；从自定义 CODEX_HOME / CLAUDE_CONFIG_DIR 发现的会话，也在相同环境恢复。
 - 新建 Handoff 已配置的 `codex --yolo` / `claude --permission-mode bypassPermissions` 保留，不在本轮改变。
-- 建议 resume 默认沿用当前 `AgentResume` 的原生命令行为，不自动追加新任务的 bypass 参数。CLI 最终权限仍由其配置决定；若要统一成“恢复也跳过确认”，另设明确可见策略，经确认后实施。
+- 建议 resume 默认沿用 `SessionResumePlan` 的原生命令行为，不自动追加新任务的 bypass 参数。CLI 最终权限仍由其配置决定；若要统一成“恢复也跳过确认”，另设明确可见策略，经确认后实施。
 - 现有用户自定义命令是任意 shell 文本，不能直接在末尾拼接 `resume`。新增结构化 resume 配置（可执行文件、参数列表、环境）与新任务原始命令并存；默认直接用官方 CLI。
 - 受管查询进程用 executable + argv，不经过 shell。终端必须经 shell 首段输入时，在唯一编码出口处理逐参数 quoting / 控制字符拒绝，包含 ID、路径、环境；不插入会话标题或预览正文。
-- 已有 AgentResume ID 白名单仍允许以 `-` 开头的文本，未来计划生成必须拒绝 option-like ID，优先验证官方 ID 格式，避免把数据解释成选项。
+- `SessionResumePlan` 的 ID 白名单仍允许以 `-` 开头的文本，计划生成必须拒绝 option-like ID，优先验证官方 ID 格式，避免把数据解释成选项。
 - Sessions 恢复不自动绑定 handoff、不注入新的交接文档。历史任务关联可后续作为显式入口，不能把恢复原对话悄悄改成开启新任务。
 - 创建前预检，创建后使用 launch token 跟踪。有 hook 时以相同来源会话身份确认；无 hook 只标“已发起”，不能把“命令已发送”宣称“Agent 已恢复成功”。进程失败需保留可见终端错误。
 
@@ -211,7 +212,7 @@ TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地�
 | `TerminalWindowController.swift` | 两侧栏布局、动画、全屏避让、终端容器 | 只持有 PrimarySidebar 并接用户意图，不扫描会话、不保存项目规则 |
 | `LaunchComposer.swift` | 启动浮层：任务主体、Agent、工作目录、去处 | 三个入口、搜索面板与会话续接共用；续接只选去处，不加入会话解析 |
 | `AgentLaunchPreference.swift` | 新 Agent 命令及用户选择 | 保留配置兼容；与来源身份、resume 策略分开 |
-| `WorkspaceSnapshot.swift` / `AgentResume` | 工作区恢复与原生 resume | 工作区快照使用 workspace.json；格式升级集中在启动迁移 Module，业务只读取当前模型 |
+| `WorkspaceSnapshot.swift` | 工作区恢复与原生 resume | 工作区快照使用 workspace.json；格式升级集中在启动迁移 Module，业务只读取当前模型 |
 | `PaneStatusStore` / `PaneView` | hook 会话 ID、现场状态 | 给出已知 lightty 现场映射；来源标识缺失时不得猜测跨配置根相同 ID |
 第一侧栏模式写入窗口快照时新增可选字段，旧快照缺失按 Handoff 解码；不要仅增加一个必填 Codable 字段导致所有旧快照失效。
 现有 `taskPanelOpen` 等序列化键不急于改名；内部变量可逐步更名，避免概念更正变成无关大重构。
@@ -256,7 +257,7 @@ TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地�
 
 ### P4：发布加固
 
-合成 1 万条会话测试：主线程不做 I/O，缓存首屏目标 200ms 内（目标值，尚未实测），分页/筛选可取消，内存随元数据而非全文大小增长。
+待测（目标值均未实测）：合成 1 万条会话测试，主线程不做 I/O，缓存首屏目标 200ms 内（目标值，尚未实测），分页/筛选可取消，内存随元数据而非全文大小增长。
 真实 UI 覆盖深浅色、全局 accent、键盘/VoiceOver、不同语言、长标题、快速切模式以及 macOS 13–15 / 26；旧系统抖动必须真机或对应系统环境验收，不能用 26 上通过代替。
 发布包验证签名、helper 分发、无 Node/Python 开发环境、两 CLI 版本升级、外部程序不可用时降级。
 
@@ -264,6 +265,8 @@ TerminalLaunchCoordinator 只在 Handoff 与 Sessions 两个调用方都落地�
 
 ## 9. 不在首期
 
-对话全文阅读器、跨 Agent 转换历史、云端同步、会话删除/改名/归档写回、后台自动恢复所有会话、多层项目树、自动合并 worktree、任意第三方 Agent 插件系统。
+对话全文阅读器、跨 Agent 转换历史、云端同步、会话归档写回 Agent、后台自动恢复所有会话、多层项目树、自动合并 worktree、任意第三方 Agent 插件系统。
+
+会话改名与永久删除已实现（`SessionRename.swift`、`SessionDeletion.swift`）：Codex 走 app-server `thread/name/set`，Claude 走 helper 的 `rename-session.mjs` / `delete-session.mjs`；删除前先做占用检查并二次确认。
 
 Claude SDK helper 路线已选定，正式发布仍受签名、公证、许可及目标系统验收门槛约束。当前 resume 不追加 bypass；若修改此权限策略，需另行明确确认。

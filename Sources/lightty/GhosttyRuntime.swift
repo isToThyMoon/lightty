@@ -3,7 +3,7 @@ import GhosttyKit
 
 /// 启动时从 ghostty 配置读出的 terminal host 所需值。
 /// 仅用于 surface、pane chrome、分隔线和透明窗口底座；应用标题栏/任务侧栏有独立
-/// 的 ShellStyle，不能从这些值派生（HANDOVER 8.2.1）。
+/// 的 ShellStyle，不能从这些值派生（见 docs/UI-harness.md「基础语义」）。
 struct GhosttyConfigValues {
     var backgroundColor: NSColor = .windowBackgroundColor
     var foregroundColor: NSColor = .textColor

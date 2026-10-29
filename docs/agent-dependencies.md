@@ -12,7 +12,7 @@ lightty 与两家 CLI 的每一处接触点，按功能列出，每项写清两�
 
 ## 一、启动与恢复会话
 
-命令行只在 `Sources/lightty/AgentCommand.swift` 一处拼装。
+命令行只在 `Sources/lightty/AgentCommand.swift` 一处拼装；调 CLI 与 node helper 的进程环境（清 `LIGHTTY_*`、PATH、配置目录变量、arm64 运行时路径）只在 `AgentHelperProcess` 里拼。
 
 | 功能 | Claude Code | Codex | 出问题时 |
 |---|---|---|---|
@@ -48,7 +48,7 @@ lightty 与两家 CLI 的每一处接触点，按功能列出，每项写清两�
 
 ## 三、会话列表、改名、删除、占用
 
-每项接口的取舍理由见 `docs/specs/agent-session-apis.md`；删除的边界见 `docs/session-deletion-research.md`。
+这些操作都经 `AgentSessionProvider`（`ClaudeSessionProvider` / `CodexSessionProvider`，由 `SessionCatalogSource.makeProvider` 选择），两家差异只在 provider 里。每项接口的取舍理由见 `docs/specs/agent-session-apis.md`；删除的边界见 `docs/session-deletion-research.md`。
 
 | 功能 | Claude Code | Codex | 出问题时 |
 |---|---|---|---|

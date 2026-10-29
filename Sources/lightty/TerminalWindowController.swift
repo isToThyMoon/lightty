@@ -28,6 +28,10 @@ extension TabTitle {
 /// 层级：window（1 侧边栏）→ tab（pane 树容器）→ split 布局 → pane。
 /// core new_tab 在当前窗口追加 tab；new_split 改当前 tab 的 pane tree，
 /// 并继承当前任务；方向一致插相邻位、方向不同原位包反向 split。
+///
+/// 标签页、排布、标题、放大与焦点都在 `WindowArrangement` 值里：改树只经 `commit`，关闭只经
+/// `close(panes:)`，不要绕过它们直接改视图或模型（否则放大态、焦点、持久化各算各的）。
+/// 见 docs/specs/pane-layout.md。
 final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private let rootContainer = NSView()
     /// 主体区（tab 内容），随侧栏钉住向右推移。

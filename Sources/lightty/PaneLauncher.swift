@@ -75,6 +75,8 @@ enum TerminalLaunchRefusal {
 /// 模态界面不在这里：目录选择面板、占用提示框、错误框由调用方按结果呈现，
 /// 所以整条链路可以脱离模态测试。
 ///
+/// 恢复一律是原生 CLI 命令，目录身份跟随会话原来源；不通过 SDK 执行 Agent（SDK helper 只做会话文件操作）。
+///
 /// 主线程独占。占用检查会起子进程，放到 `occupancyQueue` 上做，结果回主线程。
 final class PaneLauncher {
     typealias RunningPane = (controller: TerminalWindowController, pane: PaneView)

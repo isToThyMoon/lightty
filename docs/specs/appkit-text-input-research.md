@@ -1,5 +1,7 @@
 # AppKit 文本输入控件调研
 
+> 状态：调研记录。结论已落地为 ShellControls.swift 的 ShellTextFieldStyle / ShellFieldBox / ShellTextArea。（核对于 2026-10-29）
+
 ## 结论
 
 单行输入统一使用原生 `NSTextField`，保留 `placeholderString` / `placeholderAttributedString`，不要在外层再复制一套 placeholder 状态机。Apple 将 `NSTextField` 定义为简单文本编辑控件，并明确提供 placeholder API；`NSTextFieldCell` 负责文本字段的绘制和编辑。

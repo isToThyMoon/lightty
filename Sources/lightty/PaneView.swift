@@ -32,7 +32,8 @@ struct PaneIdentityMorphGeometry {
     }
 }
 
-/// pane = 任务绑定点（HANDOVER 8.2）。header + 终端 surface。
+/// pane = 任务绑定点（见 CONTEXT.md「任务绑定」）。header + 终端 surface。
+/// 任务绑定只读查询 `TaskBindings`，不自己写绑定或指针文件。
 /// 生命周期：新开 pane 不创建文件（未命名，内存态）；命名那一刻才经 TaskStore 落盘。
 final class PaneView: NSView {
     let sessionLibrary: SessionLibrary

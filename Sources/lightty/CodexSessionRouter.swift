@@ -17,6 +17,9 @@ import LighttyCore
 ///
 /// 选 pane 的规则见 `choose`。子会话（带 `parentThreadId`）不在任何 pane 上显示，不写记录；
 /// 工具里另起的 `codex exec` 也对不上任何界面进程——它们的 hook 查不到记录，照旧隐形。
+///
+/// 分工：广播与补查快照的字段解析集中在 `CodexSessionEvents`，这里只消费类型化事件、负责关联与时序。
+/// 会话本身的事实只问官方广播；进程事实只用来定 pane。见 docs/hooks.md「Codex 共享后台进程」。
 final class CodexSessionRouter {
     /// 一个候选界面进程：它在哪个 pane、是谁、怎么启动的、在哪个目录。
     struct Client: Equatable {

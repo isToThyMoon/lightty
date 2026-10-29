@@ -1,5 +1,7 @@
 # Plugins 设置页
 
+> 状态：现行契约。（核对于 2026-10-29）
+
 ## 目标与边界
 
 把 Claude Code 与 Codex 两个 Agent 已安装的插件放进一个可浏览的界面：插件是什么、
@@ -117,15 +119,13 @@
 - 只有缓存的 Codex 插件不能启用：开关不出现，原因写在详情里，调用写入会直接报错。
 - 写成功之后才更新界面状态，失败时开关回到原位，不展示一个没落盘的状态。
 
-## 实施结果与验收
+## 实现与验收
 
 - 新增 `PluginCatalog.swift`（只读扫描 + 唯一写入口）、`PluginConfigEdit.swift`
   （JSON/TOML 定点编辑）、`PluginsSettingsView.swift`（三栏与动作）。
 - `SkillCatalog` 收窄：不再扫插件，`SkillOrigin` 去掉 `.plugin`，
   `SkillRecord` 去掉只服务于插件的 `sourceName` / `sourceVersion` / `provenanceNote`；
   Skills 页导航去掉 `Plugin skills` 分支，保留 `Built-in skills`。
-- 2026-09-15 全量 `swift test`：LighttyTests 223 项 XCTest（1 项跳过）、
-  LighttyCoreTests 173 项、Swift Testing 142 项，0 失败。
 - UI 测试覆盖中英文、明暗主题与 1280 / 1080 / 900pt 三种宽度，全部用隐藏窗口的
   `cacheDisplay` 出图，不启动第二个 lightty 实例。
 
