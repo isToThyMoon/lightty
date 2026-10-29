@@ -4,9 +4,12 @@ import Testing
 
 /// 行形状照本机日志裁剪（Claude Code 2.1.310 transcript、Codex rollout，2026-10-26）。
 struct TranscriptSpeedTests {
-    private func samples(_ lines: [String], format: AgentSpec.TranscriptFormat) -> [TranscriptSpeedSample] {
+    private func samples(_ lines: [String], format: AgentSpec.TranscriptFormat,
+                         typeSeparator: String = ":") -> [TranscriptSpeedSample] {
         var parser = TranscriptSpeedParser(format: format)
-        return lines.compactMap { parser.consume(Data($0.utf8)) }
+        return lines.compactMap {
+            parser.consume(Data($0.replacingOccurrences(of: #""type":"#, with: "\"type\"" + typeSeparator).utf8))
+        }
     }
 
     private func claudeAssistant(_ id: String, _ time: String, tokens: Int, block: String = "text",
@@ -23,7 +26,8 @@ struct TranscriptSpeedTests {
         #"{"type":"user","timestamp":"2026-10-26T06:01:\#(time)Z","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","content":"\"type\":\"assistant\" in tool output"}]}}"#
     }
 
-    @Test func claudeMeasuresFromRequestToLastBlockOfTheMessage() {
+    @Test(arguments: [":", ": ", " \t:\t "])
+    func claudeMeasuresFromRequestToLastBlockOfTheMessage(typeSeparator: String) {
         let found = samples([
             claudeUser("20.000"),
             claudeRequest("20.100"),
@@ -38,7 +42,7 @@ struct TranscriptSpeedTests {
             claudeUser("25.200"),
             claudeRequest("25.300"),
             claudeAssistant("msg_2", "27.300", tokens: 100),
-        ], format: .claudeTranscript)
+        ], format: .claudeTranscript, typeSeparator: typeSeparator)
         #expect(found.map(\.id) == ["msg_1", "msg_1", "msg_1", "msg_2"])
         #expect(found.map(\.outputTokens) == [400, 400, 400, 100])
         #expect(found.map(\.reasoningTokens) == [120, 120, 120, nil])
@@ -67,7 +71,8 @@ struct TranscriptSpeedTests {
         return #"{"timestamp":"2026-10-26T\#(time)Z","type":"\#(type)","payload":\#(body)}"#
     }
 
-    @Test func codexMeasuresFromTheLatestInputBoundaryToTheUsageRecord() {
+    @Test(arguments: [":", ": ", " \t:\t "])
+    func codexMeasuresFromTheLatestInputBoundaryToTheUsageRecord(typeSeparator: String) {
         let found = samples([
             codex("03:26:46.724", "event_msg", payload: #"{"type":"task_started"}"#),
             codex("03:26:49.094", "response_item", payload: #"{"type":"message","role":"user"}"#),
@@ -87,7 +92,7 @@ struct TranscriptSpeedTests {
             // A tool output that lands after the record still starts the next request.
             codex("03:27:04.321", "response_item", payload: #"{"type":"function_call_output"}"#),
             codex("03:27:08.813", "token_usage_record", usage: 73),
-        ], format: .codexRollout)
+        ], format: .codexRollout, typeSeparator: typeSeparator)
         #expect(found.map(\.outputTokens) == [138, 130, 73])
         #expect(found.map(\.reasoningTokens) == [0, 9, 0])
         #expect(found.map(\.visibleCharacters) == [4, 2, 0])

@@ -15,37 +15,13 @@ import LighttyCore
 //    零输出、零副作用（Codex 另可凭会话路由记录找回 pane，见主流程）。用户很可能在
 //    lightty 之外也跑同一个 agent，那时 hook 必须完全隐形。
 
-// MARK: - payload 取值
+// MARK: - 环境与声明
 
-/// 取非空字符串。空串和纯空白当作「没有」——写进报文只会污染 UI。
+/// 空串和纯空白的环境变量当作「未设置」。
 private func string(_ value: Any?) -> String? {
     guard let raw = value as? String else { return nil }
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
-}
-
-/// tool_input 里按优先级找一个「人一眼能看懂」的字段。两家 agent 的工具参数名
-/// 大体同源，覆盖不到就返回 nil——宁可没有 detail，也不把原始 JSON 倒进报文。
-private let detailKeys = [
-    "file_path", "path", "notebook_path", "command", "pattern", "url", "query", "description",
-]
-
-private func detail(from toolInput: Any?) -> String? {
-    guard let dict = toolInput as? [String: Any] else { return nil }
-    for key in detailKeys {
-        if let raw = string(dict[key]) { return summarize(raw) }
-    }
-    return nil
-}
-
-/// 压成单行并截断。读方（§4.2）也会截断，但写方先截是硬要求：
-/// 一条 bash 命令可能有几 KB，而报文有 4KB 上限、这个字段只够显示一行。
-private func summarize(_ raw: String, limit: Int = 80) -> String {
-    let flat = raw.split(whereSeparator: \.isNewline).joined(separator: " ")
-    guard flat.count > limit else { return flat }
-    // 路径的信息量在尾部（文件名），命令/描述在头部
-    if flat.contains("/") { return "…" + String(flat.suffix(limit - 1)) }
-    return String(flat.prefix(limit - 1)) + "…"
 }
 
 /// 命令行里的 `--agent <名>`。hooks 文件由 lightty 自己生成（`HookMarketplace.hookCommand`），
@@ -58,25 +34,7 @@ private func declaredAgent() -> String? {
     return agent.rawValue
 }
 
-/// **兼容退路**：用户装的还是 `--agent` 之前的插件版本时才走到这里。
-/// 只剩载荷里 `transcript_path` 的路径形状，再退回环境变量（会从上层会话泄漏）。
-/// 认不出就留空——`agent` 是可选字段，猜错比留空更糟。
-private func detectAgent(payload: [String: Any]) -> String? {
-    HookAgentDetection.agent(
-        transcriptPath: string(payload["transcript_path"]),
-        environment: ProcessInfo.processInfo.environment)
-}
-
 // MARK: - handoff 注入（§8）
-
-/// hook 输出 wire：两家 agent 完全相同的 `hookSpecificOutput` 结构。
-private struct HookOutput: Encodable {
-    struct Specific: Encodable {
-        let hookEventName: String
-        let additionalContext: String
-    }
-    let hookSpecificOutput: Specific
-}
 
 /// pane 当前绑定的任务文件路径。没绑 / 指针读不到 → nil。
 private func boundTaskPath(paneID: String) -> String? {
@@ -114,19 +72,30 @@ private struct HandoffMarker: Equatable {
 ///   「先开 agent 再绑任务 / 新建任务 / 改名」这些晚于开场的绑定变化；
 ///   改名会换路径，重注是对的——agent 需要知道新的回写地址。
 /// - 其他事件：不注。
-private func handoffToInject(event: String, paneID: String, sessionID: String?) -> String? {
-    guard let path = boundTaskPath(paneID: paneID) else { return nil }
+private func handoffToInject(event: String, paneID: String, sessionID: String?,
+                             diagnostic: (AgentDiagnostic.Reason) -> Void) -> String? {
+    guard event == "SessionStart" || event == "UserPromptSubmit" else { return nil }
+    guard let path = boundTaskPath(paneID: paneID) else {
+        diagnostic(.noTask)
+        return nil
+    }
     let marker = HandoffMarker(session: sessionID ?? "", path: path)
     switch event {
     case "SessionStart":
         break
     case "UserPromptSubmit":
-        guard HandoffMarker.read(paneID: paneID) != marker else { return nil }
+        guard HandoffMarker.read(paneID: paneID) != marker else {
+            diagnostic(.alreadyInjected)
+            return nil
+        }
     default:
         return nil
     }
     guard let context = handoffContext(path: path, lateBinding: event != "SessionStart")
-    else { return nil }
+    else {
+        diagnostic(.unreadableTask)
+        return nil
+    }
     marker.write(paneID: paneID)
     return context
 }
@@ -149,20 +118,23 @@ private func handoffContext(path: String, lateBinding: Bool) -> String? {
 // MARK: - 主流程
 
 // readToEnd 抛 Swift 错误（readDataToEndOfFile 抛的是 NSException，Swift 侧接不住）
-guard let input = try? FileHandle.standardInput.readToEnd(), !input.isEmpty,
-      let payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any],
-      let event = string(payload["hook_event_name"]),
-      let state = PaneActivity(
-          hookEventName: event, notificationType: string(payload["notification_type"]),
-          // Claude Code 的 PostToolUseFailure：用户中断了正在跑的工具时带 is_interrupt
-          interrupted: (payload["is_interrupt"] as? Bool) == true)
-else { exit(0) }
+guard let input = try? FileHandle.standardInput.readToEnd(), let payload = AgentHookEvent(input)
+else {
+    let environment = ProcessInfo.processInfo.environment
+    if let pane = environment["LIGHTTY_PANE_ID"].flatMap(UUID.init(uuidString:)),
+       environment["LIGHTTY_SOCK"] != nil {
+        AgentDiagnostic.emit(.init(.hookRoute, .unsupportedPayload,
+            agent: declaredAgent().flatMap(SessionAgent.init(rawValue:)), pane: pane))
+    }
+    exit(0)
+}
 
 let environment = ProcessInfo.processInfo.environment
+let event = payload.name
 
 // 哪一家：`--agent` 说了算，它是我们自己写进 hooks 文件的。没给才退回按载荷 / 环境去猜
 // ——只为兼容还装着旧版插件的用户。
-let agentName = declaredAgent() ?? detectAgent(payload: payload)
+let agentName = declaredAgent() ?? payload.inferredAgent(environment: environment)
 let isCodex = agentName == SessionAgent.codex.rawValue
 
 // 这段会话在哪个 pane、agent 进程是谁。
@@ -196,13 +168,21 @@ let isCodex = agentName == SessionAgent.codex.rawValue
 let paneUUID: UUID
 let socketPath: String
 let agentProcess: AgentProcessIdentity?
-let sessionID = string(payload["session_id"])
+let sessionID = payload.sessionID
+func diagnose(_ stage: AgentDiagnostic.Stage, _ reason: AgentDiagnostic.Reason, pane: UUID? = nil) {
+    AgentDiagnostic.emit(.init(stage, reason, agent: agentName.flatMap(SessionAgent.init(rawValue:)),
+                               pane: pane, session: sessionID, hook: event))
+}
 if isCodex, let sessionID, let route = AgentSessionRoute.read(sessionID: sessionID) {
     // 共享后台进程关一个会话循环就跑 SessionEnd（上游 `shutdown_session_runtime`），而新界面续接同一段
     // 会话时正是先关掉旧的循环——lightty 重启恢复现场时，旧界面留下的 SessionEnd 会按刚写好的路由
     // 落进新 pane，把续接的关联清掉（2026-09-29 实测）。它说明不了 pane 里的界面退出了没有；界面退出
     // 看 shell 的命令结束信号。
-    if event == "SessionEnd" { exit(0) }
+    if event == "SessionEnd" {
+        diagnose(.hookRoute, .ignoredSessionEnd, pane: route.pane)
+        exit(0)
+    }
+    diagnose(.hookRoute, .sessionRecord, pane: route.pane)
     paneUUID = route.pane
     socketPath = route.socket
     agentProcess = route.client
@@ -211,19 +191,25 @@ if isCodex, let sessionID, let route = AgentSessionRoute.read(sessionID: session
           let inheritedSocket = string(environment["LIGHTTY_SOCK"])
     else { exit(0) }
     let ancestry = AgentProcessIdentity.ancestry(startingAt: getppid())
-    if ancestry.isNested || (isCodex && !ancestry.inTerminal) { exit(0) }
+    if ancestry.isNested || (isCodex && !ancestry.inTerminal) {
+        diagnose(.hookRoute, ancestry.isNested ? .nestedSession : .missingRoute, pane: inherited)
+        exit(0)
+    }
     // 开终端的进程和 socket 的宿主有一个说不清（链断了、测试用的临时 socket）就按「在」处理。
     let lightty = PaneRuntimeDirectory.ownerPID(ofSocket: inheritedSocket)
     let inPaneTerminal = ancestry.terminalOwner == nil || lightty == nil || ancestry.terminalOwner == lightty
     if inPaneTerminal {
+        diagnose(.hookRoute, .inheritedTerminal, pane: inherited)
         paneUUID = inherited
         socketPath = inheritedSocket
         agentProcess = ancestry.process
     } else if let sessionID, let route = AgentSessionRoute.read(sessionID: sessionID) {
+        diagnose(.hookRoute, .sessionRecord, pane: route.pane)
         paneUUID = route.pane
         socketPath = route.socket
         agentProcess = route.client
     } else {
+        diagnose(.hookRoute, .missingRoute, pane: inherited)
         exit(0)
     }
 }
@@ -235,7 +221,7 @@ let sourceRoot = agentName.flatMap(SessionAgent.init(rawValue:)).map { agent in
 }
 let status = PaneStatus(
     ts: Date(),
-    state: state,
+    state: payload.activity,
     agent: agentName,
     sessionID: sessionID,
     sourceRoot: sourceRoot,
@@ -243,29 +229,34 @@ let status = PaneStatus(
         SessionConfigurationLocation.resolve(agent: $0, environment: environment)
     },
     agentProcess: agentProcess,
-    tool: string(payload["tool_name"]),
-    // detail 只在 PreToolUse 给：那一刻「在干什么」才有信息量，
-    // PostToolUse 的同一份参数只是回声
-    detail: event == "PreToolUse" ? detail(from: payload["tool_input"]) : nil,
-    cwd: string(payload["cwd"]),
+    tool: payload.tool,
+    detail: payload.detail,
+    cwd: payload.workingDirectory,
     event: event,
-    // 报文有 4KB 上限；超长路径宁可不发，速度计只是不显示。
-    transcriptPath: string(payload["transcript_path"]).flatMap { $0.utf8.count <= 1024 ? $0 : nil }
+    transcriptPath: payload.transcriptPath
 )
 
-// 一发即走。返回值刻意丢弃：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、
+// 一发即走。结果只用于系统诊断：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、
 // 收方卡住（ENOBUFS）都不是 hook 该处理的事——没人看状态而已，agent 照跑。
 // 不重试、不写 stderr：重试只会把不确定的延迟加到用户的每次工具调用上。
-PaneStatusDatagram(pane: paneUUID, status: status).send(to: URL(fileURLWithPath: socketPath))
+switch PaneStatusDatagram(pane: paneUUID, status: status).send(to: URL(fileURLWithPath: socketPath)) {
+case .success: diagnose(.hookSend, .sent, pane: paneUUID)
+case .failure: diagnose(.hookSend, .sendFailed, pane: paneUUID)
+}
 
 // handoff 注入：SessionStart 开场注一次；UserPromptSubmit 补「开场之后才绑定」的情况。
 // 其余事件不输出任何东西——hook 的沉默就是「一切照常」。
-if let context = handoffToInject(event: event, paneID: paneID, sessionID: status.sessionID) {
-    let output = HookOutput(
-        hookSpecificOutput: .init(hookEventName: event, additionalContext: context))
-    // 必须走 JSONEncoder：正文是任意 markdown，手拼字符串迟早炸在引号/换行上
-    if let json = try? JSONEncoder().encode(output) {
-        FileHandle.standardOutput.write(json)
+if let context = handoffToInject(event: event, paneID: paneID, sessionID: status.sessionID,
+                                 diagnostic: { diagnose(.handoff, $0, pane: paneUUID) }) {
+    if let json = try? payload.contextOutput(context) {
+        do {
+            try FileHandle.standardOutput.write(contentsOf: json)
+            diagnose(.handoff, .outputWritten, pane: paneUUID)
+        } catch {
+            diagnose(.handoff, .outputFailed, pane: paneUUID)
+        }
+    } else {
+        diagnose(.handoff, .outputFailed, pane: paneUUID)
     }
 }
 

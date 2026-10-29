@@ -57,7 +57,7 @@ public struct TranscriptSpeedParser {
 
     // MARK: Claude
 
-    private static let claudeMarkers = [#""type":"assistant""#, #""type":"api-request""#, #""type":"user""#]
+    private static let claudeMarkers = [#""assistant""#, #""api-request""#, #""user""#]
         .map { Data($0.utf8) }
 
     private struct ClaudeEntry: Decodable {
@@ -81,7 +81,7 @@ public struct TranscriptSpeedParser {
     }
 
     private mutating func consumeClaude(_ line: Data) -> TranscriptSpeedSample? {
-        guard Self.claudeMarkers.contains(where: { line.range(of: $0) != nil }),
+        guard Self.containsType(Self.claudeMarkers, in: line),
               let entry = try? JSONDecoder().decode(ClaudeEntry.self, from: line),
               entry.isSidechain != true, let time = Self.date(entry.timestamp) else { return nil }
         switch entry.type {
@@ -109,8 +109,8 @@ public struct TranscriptSpeedParser {
 
     // MARK: Codex
 
-    private static let codexMarkers = [#""type":"token_usage_record""#, #""type":"task_started""#,
-                                       #""type":"response_item""#].map { Data($0.utf8) }
+    private static let codexMarkers = [#""token_usage_record""#, #""task_started""#,
+                                       #""response_item""#].map { Data($0.utf8) }
 
     private struct CodexEntry: Decodable {
         struct Payload: Decodable {
@@ -127,7 +127,7 @@ public struct TranscriptSpeedParser {
     }
 
     private mutating func consumeCodex(_ line: Data) -> TranscriptSpeedSample? {
-        guard Self.codexMarkers.contains(where: { line.range(of: $0) != nil }),
+        guard Self.containsType(Self.codexMarkers, in: line),
               let entry = try? JSONDecoder().decode(CodexEntry.self, from: line),
               let time = Self.date(entry.timestamp) else { return nil }
         let payload = entry.payload
@@ -170,6 +170,32 @@ public struct TranscriptSpeedParser {
             break
         }
         return nil
+    }
+
+    private static let typeKey = Data(#""type""#.utf8)
+
+    /// 仍先按字节过滤，但不依赖 JSON 序列化器是否在冒号两侧加空白。
+    /// 这只是预筛，真正的结构和语义仍由上面的解码器判断。
+    private static func containsType(_ markers: [Data], in line: Data) -> Bool {
+        var start = line.startIndex
+        while start < line.endIndex, let key = line.range(of: typeKey, in: start..<line.endIndex) {
+            start = key.upperBound
+            var cursor = start
+            func skipWhitespace() {
+                while cursor < line.endIndex {
+                    switch line[cursor] {
+                    case 32, 9, 13, 10: cursor += 1
+                    default: return
+                    }
+                }
+            }
+            skipWhitespace()
+            guard cursor < line.endIndex, line[cursor] == 58 else { continue } // colon
+            cursor += 1
+            skipWhitespace()
+            if markers.contains(where: { line[cursor...].starts(with: $0) }) { return true }
+        }
+        return false
     }
 
     private mutating func advance(to time: Date) {

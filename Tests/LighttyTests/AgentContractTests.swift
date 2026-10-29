@@ -14,16 +14,31 @@ import Testing
 ///
 /// **代码里新用到一个方法、字段或枚举值，就加进下面的表。**
 struct AgentContractTests {
+    /// 专项检查要求两家都实际验证，避免未安装 CLI 却被报成全部通过。
+    private static let required = ProcessInfo.processInfo.environment["LIGHTTY_REQUIRE_AGENT_CONTRACTS"] == "1"
+
+    private func recordVersion(_ agent: SessionAgent, executable: String, directory: URL) throws {
+        let data = try AgentHelperProcess.agentCLI(agent, executable: executable, root: directory.path,
+            arguments: ["--version"], directory: directory).output(timeout: 15)
+        let version = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        try #require(!version.isEmpty, "\(agent.rawValue) returned an empty version")
+        let record = try JSONSerialization.data(withJSONObject: [
+            "agent": agent.rawValue, "executable": executable, "version": version,
+        ], options: [.sortedKeys])
+        // 专项检查收集这一行；与实际测试共用可执行文件定位，不再用 shell 的 which 猜。
+        print("LIGHTTY_AGENT_VERSION " + String(decoding: record, as: UTF8.self))
+    }
+
     // MARK: - Codex app-server
 
     /// `CodexSessionProvider`、`CodexSessionRouter`、`CodexPluginInventory` 发出的请求。
     static let codexRequests = ["initialize", "thread/list", "thread/read", "thread/loaded/list",
                                 "thread/name/set", "plugin/installed"]
     /// `CodexSessionRouter` 订阅的广播。
-    static let codexNotifications = ["thread/started", "thread/status/changed", "turn/completed",
-                                     "thread/closed", "thread/name/updated"]
+    static let codexNotifications = CodexSessionEvents.Method.allCases.map(\.rawValue)
     /// 读到的结构字段：定义名 → 字段。
     static let codexFields: [String: [String]] = [
+        "ThreadListParams": ["useStateDbOnly"],
         "Thread": ["id", "cwd", "createdAt", "updatedAt", "name", "preview", "source", "originator",
                    "status", "parentThreadId", "ephemeral", "threadSource"],
         "ThreadStatusChangedNotification": ["threadId", "status"],
@@ -40,11 +55,12 @@ struct AgentContractTests {
 
     static let codex = HookInstaller.locateExecutable(SessionAgent.codex.executableName)
 
-    @Test(.enabled(if: codex != nil, "codex is not installed"))
+    @Test(.enabled(if: codex != nil || required, "codex is not installed"))
     func codexAppServerStillSpeaksWhatLighttyUses() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        try recordVersion(.codex, executable: try #require(Self.codex, "Codex CLI is required"), directory: directory)
         // 只在本地生成协议描述：不连后台进程、不建会话、不联网。
         _ = try AgentHelperProcess.agentCLI(.codex, executable: try #require(Self.codex), root: directory.path,
             arguments: ["app-server", "generate-json-schema", "--out", directory.path], directory: directory)
@@ -81,6 +97,16 @@ struct AgentContractTests {
             }
             for value in values { #expect((flat + tagged).contains(value), "\(name).\(value)") }
         }
+        // 合成配置根发现不了大历史目录的扫描超时：用真实配置做只读目录查询，
+        // 沿用生产的超时与参数；不输出会话正文、标题或路径，也不执行元数据写入。
+        let configuration = SessionConfigurationLocation.resolve(agent: .codex,
+            environment: ProcessInfo.processInfo.environment)
+        let root = configuration.root(for: .codex, home: FileManager.default.homeDirectoryForCurrentUser)
+        let source = SessionCatalogSource(agent: .codex, root: root,
+            executable: try #require(Self.codex), configuration: configuration)
+        for archived in [false, true] {
+            _ = try CodexSessionProvider(source: source).page(archived: archived, cursor: nil, cancelled: { false })
+        }
     }
 
     // MARK: - Claude Code
@@ -90,10 +116,14 @@ struct AgentContractTests {
     /// agent view 的两样官方接口：`claude agents --json` 是官方说的「从 Claude Code 外面读会话状态」的
     /// 正式途径（占用检测、agent view 跟随都靠它），后台会话行带着短 ID；`claude attach <id>` 把后台
     /// 会话连回终端（重启恢复、从侧栏打开后台会话都靠它）。读的是本机真实的活会话表（只读）。
-    @Test(.enabled(if: claude != nil, "claude is not installed"))
+    @Test(.enabled(if: claude != nil || required, "claude is not installed"))
     func claudeAgentViewInterfacesStillWork() throws {
         let executable = try #require(Self.claude)
-        let root = SessionConfigurationLocation.standard
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try recordVersion(.claude, executable: executable, directory: directory)
+        let root = SessionConfigurationLocation.resolve(agent: .claude, environment: ProcessInfo.processInfo.environment)
             .root(for: .claude, home: FileManager.default.homeDirectoryForCurrentUser).path
         let rows = ClaudeSessionProvider.liveSessions(executable: executable, root: root)
         #expect(rows != nil, "`claude agents --json` output is no longer recognized")

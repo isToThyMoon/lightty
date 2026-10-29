@@ -206,32 +206,40 @@ final class PaneStatusStore {
 
     private func ingest(_ datagram: PaneStatusDatagram) {
         assertMain()
+        func diagnose(_ reason: AgentDiagnostic.Reason) {
+            AgentDiagnostic.emit(.init(.statusIngest, reason,
+                agent: datagram.status.agent.flatMap(SessionAgent.init(rawValue:)), pane: datagram.pane,
+                session: datagram.status.sessionID, hook: datagram.status.event, activity: datagram.status.state))
+        }
         // detach 之后可能还有在途报文，别把已经清掉的状态复活
-        guard attached.contains(datagram.pane) else { return }
+        guard attached.contains(datagram.pane) else { diagnose(.detachedPane); return }
         // 兜底状态让位于任何 hook 报文：标题比 hook 先到很常见，按时间比会把 hook 的
         // 第一发（连同绑定会话的 SessionStart）当成旧报文丢掉。
         if let previous = statuses[datagram.pane], previous.event != Self.fallbackEvent {
-            guard datagram.status.ts >= previous.ts else { return }
+            guard datagram.status.ts >= previous.ts else { diagnose(.staleTimestamp); return }
             if datagram.status.event == "SessionEnd",
                (datagram.status.agent != previous.agent || datagram.status.sessionID != previous.sessionID) {
+                diagnose(.staleSession)
                 return // An old conversation can end after this process has switched conversations.
             }
             if let old = previous.agentProcess, let next = datagram.status.agentProcess,
-               next.startedBefore(old) { return }
+               next.startedBefore(old) { diagnose(.staleProcess); return }
         }
         if datagram.status.agent == "codex", let session = datagram.status.sessionID {
             let settled = settledCodex[datagram.pane]
             if datagram.status.event == "UserPromptSubmit" {
                 settledCodex.removeValue(forKey: datagram.pane)
             } else if datagram.status.event == "Stop" || datagram.status.event == "Interrupt" {
-                if settled?.session == session, settled?.completed == true { return }
+                if settled?.session == session, settled?.completed == true { diagnose(.settledTurn); return }
                 settledCodex[datagram.pane] = (session, true)
             } else if settled?.session == session,
                       [.thinking, .tool, .attention].contains(datagram.status.state) {
+                diagnose(.settledTurn)
                 return // A late tool hook cannot reopen a turn the daemon has closed.
             }
         }
         if statuses[datagram.pane] != datagram.status { readAttention.remove(datagram.pane) }
+        diagnose(.accepted)
         statuses[datagram.pane] = datagram.status
         if let path = datagram.status.transcriptPath {
             transcripts[datagram.pane] = (datagram.status.agent, datagram.status.sessionID, path)
@@ -441,7 +449,7 @@ final class PaneStatusStore {
 
     // MARK: - Codex daemon lifecycle
 
-    enum CodexActivity { case active, waiting, idle, completed, interrupted, failed }
+    enum CodexActivity: Equatable { case active, waiting, idle, completed, interrupted, failed }
     /// Hooks add tool details; the daemon decides whether a turn is still running.
     /// Keep completion acknowledgement across the following idle event and late hooks.
     private var settledCodex: [UUID: (session: String, completed: Bool)] = [:]

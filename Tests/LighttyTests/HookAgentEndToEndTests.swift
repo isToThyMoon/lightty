@@ -254,7 +254,7 @@ final class HookAgentEndToEndTests: XCTestCase {
 
     /// 主会话工具里拉起的子会话（组长 → 脱离终端的工具 shell → hook）不发状态，
     /// 否则它的 SessionStart / SessionEnd 会顶掉主会话的状态和会话绑定。
-    func testSessionLaunchedInsideAnotherSessionStaysSilent() throws {
+    func testIgnoredHooksDoNotReplaceTheMainSession() throws {
         let pane = UUID()
         store.attach(pane)
         defer { store.detach(pane) }
@@ -267,6 +267,11 @@ final class HookAgentEndToEndTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         let env = hookEnvironment(pane: pane)
+        // 新版上游改变载荷时，诊断也不能污染 hook stdout 或主会话状态。
+        for payload in ["", "{broken", #"{"hook_event_name":"FutureEvent","session_id":"unknown"}"#] {
+            let ignored = try launcher.run(payload: payload, arguments: ["--agent", "claude"], environment: env)
+            XCTAssertTrue(ignored.output.isEmpty)
+        }
         // 报文按发送顺序到达：子会话若发了，一定排在主会话那发前面
         try launcher.run(.nested, payload: #"{"hook_event_name":"SessionStart","session_id":"child","cwd":"/tmp"}"#,
                          arguments: ["--agent", "claude"], environment: env)

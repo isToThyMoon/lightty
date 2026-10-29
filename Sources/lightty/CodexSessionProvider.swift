@@ -17,8 +17,10 @@ struct CodexSessionProvider: AgentSessionProvider {
         if cancelled() { throw CancellationError() }
         // `vscode` 也要：0.157 起终端会话记在这个来源下，逐条再按 originator 筛（见 `decode`）。
         // 本地 app-server 拒绝非空的 `originators` 参数，只能拿回来自己筛。
+        // 目录读取走官方索引。默认 scan-and-repair 会重扫历史 rollout，本机大日志下
+        // 可超过一分钟；12 秒超时后重启进程又从头扫描，列表和 pane 标题一直拿不到。
         var params: [String: Any] = ["limit": 100, "sourceKinds": ["cli", "vscode"],
-            "modelProviders": [], "archived": archived, "sortKey": "updated_at"]
+            "modelProviders": [], "archived": archived, "sortKey": "updated_at", "useStateDbOnly": true]
         if let cursor { params["cursor"] = cursor }
         let response = try server.request("thread/list", params: params, cancelled: cancelled)
         let sessions = try Self.decode(response, source: source, archived: archived)
@@ -69,9 +71,8 @@ struct CodexSessionProvider: AgentSessionProvider {
 
     // MARK: - 占用与存活进程
 
-    /// codex 没有可问的活会话表：`codex agents` 要先连上一个共用的后台服务，而 lightty
-    /// 是直接在终端里跑 codex，不连那个服务。所以占用一律「问不出来」——别处开着的会话
-    /// 不再标「在其他终端中打开」，删除时由 codex 自己的写锁拒绝。
+    /// Router 虽已旁听共享后台，但 loaded / active 不等于某个终端正打开该会话，
+    /// 不能作为外部占用的证明。这里仍返回「问不出来」，删除由 CLI 自己的写锁拒绝。
     func occupancy(of key: AgentSessionKey) -> SessionOccupancy.Result { .unknown }
 
     /// 没有 Claude 那样的额外核查：codex 自己的写锁拒绝（含被占用的子会话）是权威。

@@ -26,6 +26,7 @@ final class CodexSessionRouter {
         let workingDirectory: String?
     }
 
+    private let diagnostic: (AgentDiagnostic) -> Void
     private let library: SessionLibrary
     private let socketPath: String
     private let runDirectory: URL
@@ -51,7 +52,9 @@ final class CodexSessionRouter {
     /// - Parameter connect: 起一条旁听连接。默认经 `codex app-server proxy`，测试换成替身。
     init(library: SessionLibrary, socketPath: String,
          runDirectory: URL = PaneRuntimeDirectory.runDirectory,
+         diagnostic: @escaping (AgentDiagnostic) -> Void = AgentDiagnostic.emit,
          connect: @escaping (AgentHelperProcess) throws -> CodexDaemonConnection = { try CodexDaemonChannel($0) }) {
+        self.diagnostic = diagnostic
         self.library = library
         self.socketPath = socketPath
         self.runDirectory = runDirectory
@@ -126,12 +129,17 @@ final class CodexSessionRouter {
         lastAttempt = Date()
         initialized = false
         let spec = AgentHelperProcess.agentCLI(source, arguments: ["app-server", "proxy"], directory: source.root)
-        guard let channel = try? connect(spec) else { return }
+        diagnostic(.init(.daemonConnection, .connecting, agent: .codex))
+        guard let channel = try? connect(spec) else {
+            diagnostic(.init(.daemonConnection, .launchFailed, agent: .codex))
+            return
+        }
         self.channel = channel
         channel.onNotification = { [weak self] method, params in self?.handle(method, params) }
         channel.onClose = { [weak self, weak channel] in
             guard let self, self.channel === channel else { return }
             self.channel = nil
+            self.diagnostic(.init(.daemonConnection, .disconnected, agent: .codex))
             guard self.initialized else { self.failures += 1; return }
             // 用着的连接断了（后台进程重启、Codex 升级）：马上重连，别等下一个 Codex 界面。
             // 重连后按惯例补查，已经在跑的会话重新对上 pane。
@@ -141,6 +149,7 @@ final class CodexSessionRouter {
         // 握手卡住（`proxy` 起了却没有回应）也要断开，否则永远不再重试。
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self, weak channel] in
             guard let self, let channel, self.channel === channel, !self.initialized else { return }
+            self.diagnostic(.init(.daemonConnection, .handshakeTimeout, agent: .codex))
             channel.close()
         }
         channel.request("initialize", params: [
@@ -148,6 +157,7 @@ final class CodexSessionRouter {
             "capabilities": ["experimentalApi": false],
         ]) { [weak self, weak channel] result in
             guard let self, let channel, result != nil else { return }
+            self.diagnostic(.init(.daemonConnection, .connected, agent: .codex))
             self.initialized = true
             self.failures = 0
             channel.notify("initialized")
@@ -157,46 +167,27 @@ final class CodexSessionRouter {
     }
 
     private func handle(_ method: String, _ params: [String: Any]) {
-        switch method {
-        case "thread/started":
-            if let thread = params["thread"] as? [String: Any] { consider(thread, announced: true) }
-        case "thread/status/changed":
-            guard let id = params["threadId"] as? String else { return }
+        let event: CodexSessionEvents.Event
+        do {
+            guard let decoded = try CodexSessionEvents.decode(method, params: params) else { return }
+            event = decoded
+        } catch {
+            diagnostic(.init(.daemonEvent, .unsupportedPayload, agent: .codex))
+            return
+        }
+        switch event {
+        case .started(let thread): consider(thread, announced: true)
+        case .activityChanged(let id, let activity):
             activityRevisions[id] = UUID()
             if routes[id] == nil { lookUp(id) }
-            applyStatus(params["status"] as? [String: Any], threadID: id)
-        case "turn/completed":
-            guard let id = params["threadId"] as? String,
-                  let turn = params["turn"] as? [String: Any] else { return }
+            if let activity { library.noteCodexActivity(activity, threadID: id) }
+        case .turnCompleted(let id, let activity):
             activityRevisions[id] = UUID()
-            switch turn["status"] as? String {
-            case "completed": library.noteCodexActivity(.completed, threadID: id)
-            case "interrupted": library.noteCodexActivity(.interrupted, threadID: id)
-            case "failed": library.noteCodexActivity(.failed, threadID: id)
-            default: break
-            }
-        case "thread/closed":
-            if let id = params["threadId"] as? String { drop(id) }
-        case "thread/name/updated":
-            // 自动起名与 `/rename` 都经 `thread/name/set`，后台进程随后广播这一条：重读目录的准确时机。
-            if let id = params["threadId"] as? String { library.codexThreadRenamed(id) }
-        default:
-            break
-        }
-    }
-
-    /// `ThreadStatus.active` 带着的 `activeFlags` 里表示「在等用户」的两项（app-server 协议的枚举，
-    /// 契约检查见 `AgentContractTests`）。没有 hook 能报 `waitingOnUserInput`。
-    private static let waitingFlags: Set<String> = ["waitingOnApproval", "waitingOnUserInput"]
-
-    private func applyStatus(_ status: [String: Any]?, threadID: String) {
-        switch status?["type"] as? String {
-        case "active":
-            let flags = Set(status?["activeFlags"] as? [String] ?? [])
-            library.noteCodexActivity(flags.isDisjoint(with: Self.waitingFlags) ? .active : .waiting,
-                                      threadID: threadID)
-        case "idle": library.noteCodexActivity(.idle, threadID: threadID)
-        default: break
+            if let activity { library.noteCodexActivity(activity, threadID: id) }
+        case .closed(let id): drop(id)
+        case .renamed(let id):
+            diagnostic(.init(.titleRefresh, .requested, agent: .codex, session: id))
+            library.codexThreadRenamed(id)
         }
     }
 
@@ -205,10 +196,15 @@ final class CodexSessionRouter {
         unresolved[id] = Date()
         let revision = activityRevisions[id]
         channel?.request("thread/read", params: ["threadId": id, "includeTurns": false]) { [weak self] result in
-            guard let self, let thread = result?["thread"] as? [String: Any],
-                  Self.isShownInATerminal(thread) else { return }
-            if self.activityRevisions[id] == revision {
-                self.applyStatus(thread["status"] as? [String: Any], threadID: id)
+            guard let self else { return }
+            guard let wire = result?["thread"] as? [String: Any] else {
+                self.diagnostic(.init(.sessionRoute, .lookupFailed, agent: .codex, session: id))
+                return
+            }
+            let thread = CodexSessionEvents.Thread(wire)
+            guard thread.isShownInTerminal else { return }
+            if self.activityRevisions[id] == revision, let activity = thread.activity {
+                self.library.noteCodexActivity(activity, threadID: id)
             }
             self.consider(thread, announced: false)
         }
@@ -218,10 +214,10 @@ final class CodexSessionRouter {
 
     /// - Parameter announced: 会话是不是经 `thread/started` 刚宣布的。只有这种才算
     ///   「新鲜」；连上时补查、状态变化补查到的可能是界面早已退出、还挂在后台进程里的残留会话。
-    private func consider(_ thread: [String: Any], announced: Bool) {
-        guard let id = thread["id"] as? String, Self.isShownInATerminal(thread) else { return }
-        let cwd = thread["cwd"] as? String
-        let createdAt = (thread["createdAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+    private func consider(_ thread: CodexSessionEvents.Thread, announced: Bool) {
+        guard let id = thread.id, thread.isShownInTerminal else { return }
+        let cwd = thread.directory
+        let createdAt = thread.createdAt
         let declared = library.panes(forCodexThread: id)
         let registered = library.registeredPaneIDs
         let socket = socketPath
@@ -231,16 +227,21 @@ final class CodexSessionRouter {
                 guard let self else { return }
                 if let pane = declared.count == 1 ? declared.first : nil {
                     // lightty 自己续接或恢复的：pane 早就知道，界面进程找得到就一并记下。
-                    self.record(id, pane: pane, client: clients.first { $0.pane == pane }?.process)
-                } else if let client = Self.choose(threadID: id, cwd: cwd, createdAt: createdAt,
-                                                   announced: announced, clients: clients) {
-                    self.record(id, pane: client.pane, client: client.process)
+                    self.record(id, pane: pane, client: clients.first { $0.pane == pane }?.process, reason: .declaredSession)
+                } else {
+                    var reason = AgentDiagnostic.Reason.unresolved
+                    if let client = Self.choose(threadID: id, cwd: cwd, createdAt: createdAt,
+                                                announced: announced, clients: clients, selectedBy: { reason = $0 }) {
+                        self.record(id, pane: client.pane, client: client.process, reason: reason)
+                    } else {
+                        self.diagnostic(.init(.sessionRoute, .unresolved, agent: .codex, session: id))
+                    }
                 }
             }
         }
     }
 
-    private func record(_ id: String, pane: UUID, client: AgentProcessIdentity?) {
+    private func record(_ id: String, pane: UUID, client: AgentProcessIdentity?, reason: AgentDiagnostic.Reason) {
         // 一个界面同一时刻只显示一个会话（`/new` 之后旧会话就不在它上面了）。
         if let client {
             for (other, route) in routes where other != id && route.client == client { drop(other) }
@@ -248,34 +249,24 @@ final class CodexSessionRouter {
         let route = AgentSessionRoute(pane: pane, socket: socketPath, client: client)
         do {
             try route.write(sessionID: id, in: runDirectory)
+            diagnostic(.init(.sessionRoute, reason, agent: .codex, pane: pane, session: id))
             routes[id] = (pane, client)
             unresolved.removeValue(forKey: id)
             library.setCodexRouted(true, pane: pane)
         } catch {
-            NSLog("codex session route write failed: \(error)")
+            diagnostic(.init(.sessionRoute, .writeFailed, agent: .codex, pane: pane, session: id))
         }
     }
 
     private func drop(_ id: String) {
         activityRevisions.removeValue(forKey: id)
         let pane = routes.removeValue(forKey: id)?.pane
+        if let pane { diagnostic(.init(.sessionRoute, .removed, agent: .codex, pane: pane, session: id)) }
         unresolved.removeValue(forKey: id)
         AgentSessionRoute.remove(sessionID: id, in: runDirectory)
         if let pane, !routes.values.contains(where: { $0.pane == pane }) {
             library.setCodexRouted(false, pane: pane)
         }
-    }
-
-    /// 界面上显示的会话才有 pane。后台进程还会自己建会话，目录与界面相同、也会宣布
-    /// `thread/started`，配上去会把真正会话的记录挤掉（实测：生成会话标题时建了一个
-    /// `threadSource: thread_title`、`ephemeral: true` 的会话，回合的 Stop 就此丢失）：
-    /// 子会话（带 `parentThreadId`）、临时会话、以及来源不是 `user` 的
-    /// （`subagent`、`guardian_review`、`memory_consolidation`、各功能自建的）。
-    /// 没有 `threadSource` 字段的旧版本按 `user` 处理。
-    static func isShownInATerminal(_ thread: [String: Any]) -> Bool {
-        thread["parentThreadId"] as? String == nil
-            && (thread["ephemeral"] as? Bool) != true
-            && (thread["threadSource"] as? String ?? "user") == "user"
     }
 
     /// 在 lightty 的 pane 里、此刻占着终端、启动参数是 `codex` 的进程。
@@ -312,16 +303,23 @@ final class CodexSessionRouter {
     ///
     /// 手敲 `codex resume` 的选择器或 `--last` 两样都没有，对不上，这段会话就不显示状态。
     static func choose(threadID: String, cwd: String?, createdAt: Date?, announced: Bool,
-                       clients: [Client]) -> Client? {
+                       clients: [Client], selectedBy: (AgentDiagnostic.Reason) -> Void = { _ in }) -> Client? {
         let named = clients.filter { $0.arguments.contains(threadID) }
-        if !named.isEmpty { return Set(named.map(\.pane)).count == 1 ? named.first : nil }
+        if !named.isEmpty {
+            guard Set(named.map(\.pane)).count == 1 else { return nil }
+            selectedBy(.resumeArgument)
+            return named.first
+        }
 
         guard let cwd else { return nil }
         let target = URL(fileURLWithPath: cwd).standardizedFileURL.path
         let here = clients.filter {
             $0.workingDirectory.map { URL(fileURLWithPath: $0).standardizedFileURL.path } == target
         }
-        if announced, here.count == 1 { return here.first }
+        if announced, here.count == 1 {
+            selectedBy(.uniqueDirectory)
+            return here.first
+        }
 
         guard let createdAt else { return nil }
         let ranked = here.map { client -> (Client, TimeInterval) in
@@ -331,6 +329,7 @@ final class CodexSessionRouter {
         }.sorted { $0.1 < $1.1 }
         guard let nearest = ranked.first, nearest.1 < 10 else { return nil }
         if ranked.count > 1, ranked[1].1 - nearest.1 < 3 { return nil }
+        selectedBy(.nearestStart)
         return nearest.0
     }
 }

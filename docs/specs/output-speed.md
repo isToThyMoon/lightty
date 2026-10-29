@@ -50,7 +50,7 @@ Codex 的 OTel 指标 `codex.responses_api_engine_service_tbt.duration_ms` 能�
 
 - `TranscriptTail` 只读、增量跟随一个文件：首次只读末尾 1MB 并从下一行开始，之后只读新追加的
   完整行。文件变短（被重写）或一次追加超过 8MB 时，从末尾 1MB 重新起步，宁可丢样本也不阻塞；
-  单行超过 16MB 丢弃。行先按 `"type":"…"` 字节匹配过滤，再解码只含所需字段的结构。
+  单行超过 16MB 丢弃。行先按 `type` 键和值做字节预筛（容忍冒号两侧的 JSON 空白），再解码只含所需字段的结构；序列化器加空格不会改变读数。
 - `AgentOutputMeterView` 在 key 窗口可见、第二侧栏可见、聚焦终端有 hook 绑定的 Agent 会话且有路径时，
   每秒轮询一次；读取与解析在专用 utility 队列上，主线程只渲染。
 - 2026-10-26 本机 release 构建：2.0MB 的 Claude transcript 全量解析约 12ms，8.7MB 的 Codex rollout

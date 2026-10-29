@@ -1,7 +1,7 @@
 # Agent 会话操作：官方接口清单与 lightty 的用法
 
-日期：2026-09-09。证据来自本机安装的 `codex-cli 0.153.4`、`claude 2.1.266`，以及 lightty 已打包的官方开发包 `@anthropic-ai/claude-agent-sdk 0.3.263`。
-所有验证都在临时的配置根里做，没有改动用户自己的会话。
+当前实现的接口边界见下表；初次调研基于 Codex 0.153.4 / Claude 2.1.266，后续后台路由已实现。
+实际通过检查的 CLI 与 SDK 版本以 [兼容验证报告](../agent-compatibility.md) 为准。元数据写入测试使用临时配置根；活会话查询只读本机状态。
 
 这份文档回答一个问题：**lightty 想对一段会话做某件事时，官方给了什么，我们用了什么，为什么剩下的没用。**
 新增功能前先查这张表，不要先自己解析目录或者往终端里敲命令。
@@ -9,7 +9,7 @@
 ## 一句话结论
 
 会话的**列表、删除、改名、占用**都只走官方接口：CLI 命令、官方开发包、`codex app-server`、钩子。
-不读操作系统的进程表 / 文件表反推，不监听两家的私有文件。
+会话元数据与占用不读操作系统进程表 / 文件表反推。终端身份路由是独立职责：Codex 以进程事实关联 pane，见 [hooks 文档](../hooks.md#codex-共享后台进程)。
 
 自己动手的只剩一处：**Claude 少数会话读不出工作目录**——开发包只看转录文件的头 64KB，
 贴图开头的会话会漏掉，helper 往后多读一段。见「三、已知的接口坑」。
@@ -21,9 +21,9 @@
 
 | 要做的事 | Codex | Claude |
 | --- | --- | --- |
-| 列出会话 | 常驻 `codex app-server` 的 `thread/list`（`CodexSessionProvider` → `CodexAppServer`） | 开发包的 `listSessions`（`scripts/claude-session-helper/list-sessions.mjs`） |
+| 列出会话 | 常驻 `codex app-server` 的 `thread/list`，设 `useStateDbOnly: true` 读取官方索引（`CodexSessionProvider` → `CodexAppServer`） | 开发包的 `listSessions`（`scripts/claude-session-helper/list-sessions.mjs`） |
 | 读列表不列的会话（只给 pane 补标题） | 没有，列表就是全部 | 开发包的 `getSessionInfo`（`list-sessions.mjs --id <uuid>`，`ClaudeSessionProvider.unlistedSession`）：← 转后台换了会话 ID 之后，`listSessions` 把被接替的旧会话藏起来，pane 却可能还关联着它 |
-| pane 正显示哪段后台会话 | 不适用 | `claude agents --json` + 终端标题（`ClaudeAgentView`，见 hooks 文档） |
+| pane 正显示哪段后台会话 | `CodexSessionRouter` 旁听共享后台广播并匹配终端进程；见 hooks 文档 | `claude agents --json` + 终端标题（`ClaudeAgentView`，见 hooks 文档） |
 | 删除会话 | `codex delete --force <id>`（`SessionDeletion`） | 开发包的 `deleteSession`（`delete-session.mjs`） |
 | 改名（会话没开） | `thread/name/set`（`SessionRename`） | 开发包的 `renameSession`（`rename-session.mjs`） |
 | 改名（会话开着） | 把 `/rename` 敲进那个终端（`AgentCommand.rename`） | 同左 |
@@ -32,6 +32,14 @@
 | 状态（思考中 / 工具 / 等你 / 完成） | 钩子（`HookInstaller`） | 钩子 |
 | 判断会话是否已在别处打开 | 没有官方接口，一律不判断（`CodexSessionProvider.occupancy` 恒为「问不出来」） | `claude agents --json`（`ClaudeSessionProvider.occupancy`） |
 
+### 目录查询与历史修复
+
+日常目录查询设置 `useStateDbOnly: true`，分页、来源筛选、归档与标题字段保持相同。
+该参数由本机 `ThreadListParams` schema 声明：默认查询会扫描 JSONL 并修复元数据；大历史目录
+下可能超过请求超时，重建进程再次扫描，导致目录与依赖目录的 pane 标题持续不可用。
+索引模式读取 Codex 已登记的会话；手工拷入但尚未被 Codex 索引的日志需先由 Codex 导入或修复，
+lightty 不自行解析或修改其数据库。兼容检查同时核对参数并实际读取本机普通与归档目录的首页。
+
 ### 改名为什么分两条路
 
 会话正开着的时候只能敲 `/rename`：从外面写进记录文件，那个**已经跑起来的进程不会重读**，它屏幕上还是旧标题。
@@ -39,10 +47,9 @@
 
 唯一给不了改名的情况是「开着、而且 agent 正在跑」：那一刻 PTY 前台是它的输出流，塞不进命令。
 
-两家都没有「会话改名」的钩子或订阅接口，lightty 也不为会话操作监听会话记录、`session_index.jsonl` 这些私有文件（唯一只读会话记录的是[输出速度](output-speed.md)，不参与任何会话操作）。
-用户自己敲 `/rename` 之后，标题在**下一个钩子事件**到达时才重读官方列表：要么这一轮结束（Stop），
-要么他开始下一轮提问（`UserPromptSubmit`，状态从非 thinking 变 thinking）。
-代价是 Codex 自动生成的标题也要等下一次钩子事件才显示；改完名一直不提问，标题就停在旧名上。
+Codex 共享后台连接已订阅 `thread/name/updated`，自动命名与 `/rename` 都触发重读；
+两家的终端标题变化也可触发刷新，并在 Stop 与开始下一轮提问时补查。标题真值来自官方目录，
+不为会话操作监听私有记录文件。输出速度独立读取日志，不参与会话元数据操作。
 
 **敲命令必须分两步**：先送文本，再单独按一次回车键（`TerminalSurfaceView.sendReturn()`）。
 `sendText` 在 core 里走的是 `completeClipboardPaste`——它是粘贴，不是打字（`vendor/ghostty/src/apprt/embedded.zig` 的 `ghostty_surface_text` 注释写着这句）。
@@ -52,13 +59,13 @@ agent 的 TUI 开着括号粘贴模式，**粘进去的回车只是插入一个�
 
 ### 状态为什么继续用钩子
 
-钩子是两家都正式提供的扩展点，**不是** hack，而且它给的粒度比任何只读接口都细。
-只读的替代都更差：`claude agents --json` 只有忙 / 闲；codex 要先连上一个共用的后台服务才有状态变化通知。
+钩子提供工具粒度的事件和 Handoff 上下文注入。Codex 已接入共享后台广播，用来补充等待用户、
+回合完成与中断等事实；广播与钩子共同驱动状态，不意味着钩子可以整体移除。
 
 ### 占用检测为什么两家不一样
 
 - Claude 自己维护着一张活会话表，`claude agents --json` 就是给脚本读的（帮助里写着 `for scripting; does not require a TTY`）。它直接给出 pid 与 sessionId 的对应，是这个问题的正面答案。核对过：lightty 自己 pane 里跑的 claude 也在这张表里。
-- Codex 没有对等的东西。`codex agents` 要先有一个共用的后台服务（见下），而 lightty 是直接在终端里跑 codex，不连那个服务；不连的话 `thread/list` 里每一条的状态都是「未加载」。所以 codex 的占用一律是「问不出来」：会话不再标「在其他终端中打开」，删除时由 codex 自己的写锁拒绝。
+- Codex 当前 provider 的占用接口仍返回「问不出来」，删除交给 CLI 写锁。虽然 Router 已旁听共享后台，已加载或 active 的 thread 不等于「哪个终端正在打开它」，不能直接当成外部占用的证明。
 
 只用官方接口，不读操作系统的进程表 / 文件表反推（那要按进程名认 agent，而进程名随安装方式变）。
 问不出来就是「问不出来」，绝不能当成「没人用」。
@@ -70,18 +77,13 @@ agent 的 TUI 开着括号粘贴模式，**粘进去的回车只是插入一个�
 `thread/queue/add`，命令行是 `codex queue --thread <UUID或会话名> --message <文本>`。
 这是「handoff 派任务」那类功能的正经接口——不用再往终端里敲字。
 
-**前提**：要连上共用的后台服务（`codex app-server daemon start`），并且那段会话本身是挂在这个服务下的（终端里用 `codex --remote <地址>` 启动）。
-lightty 现在不是这么跑的，所以要用这条得先改启动方式。这一整块在 codex 里还标着 experimental。
+当前 `CodexDaemonChannel` 已经通过 `codex app-server proxy` 连到原生 CLI 使用的共享后台，
+`CodexSessionRouter` 使用会话生命周期、状态、完成及改名广播。它与列目录所用的独立
+`CodexAppServer` 是两条连接；独立 app-server 的内存状态不能替代终端后台的状态。
 
-同一套前提下还能拿到的东西：`thread/status/changed`、`turn/started`、`turn/completed` 这些通知，以及 `turn/interrupt`、`turn/steer`。
-换句话说，**如果哪天决定挂到那个后台服务上，钩子那一整套是可以退休的**——但那是一次架构改动，不是一个函数。
-
-**这一段没有验到底**：确认过后台服务能起来（`codex app-server daemon start` 返回 `{"status":"started"}`），也确认过不起它 `codex agents` 直接报连不上 socket；
-但「终端用 `--remote` 挂上去、再从外面看到它的实时状态」这一整条没走通——直接跟控制 socket 说话被拒，前面应该还有一层握手，没继续查。
-上面这些能力是从帮助文本和导出的协议定义推出来的，不是跑通的结论。真要做，第一步是先把这条路走通一次。
-
-代价也要一起算：那个后台服务是**全机器一个**，不归 lightty 独有，起停会影响机器上别的用它的东西；
-而且现在一个 pane 一个 codex 进程，崩一个只死一个 pane，挂上去之后那个服务倒了就是所有 pane 的 agent 一起没。
+消息排队、`turn/interrupt`、`turn/steer` 尚未作为 lightty 的控制路径接入；已有旁听连接不代表
+这些写操作已验收。采用前仍需核对本机协议、目标会话归属与原生 TUI 行为，不能据历史调研
+推断现在一定要修改启动方式。lightty 不负责起停用户共享后台。
 
 ### Claude：会话的其他操作
 
@@ -99,7 +101,7 @@ lightty 现在不是这么跑的，所以要用这条得先改启动方式。这
 
 用到的官方接口逐项写在 `Tests/LighttyTests/AgentContractTests.swift` 的表里：Codex 的 app-server 方法、
 广播、字段、枚举值（对着本机 `codex app-server generate-json-schema` 的输出核），以及 `claude agents --json`
-能否解码。升级 Claude Code / Codex 之后跑 `swift test --filter AgentContractTests`；代码里新用到一项就加进表。
+能否解码。升级后运行 [完整兼容检查](../agent-compatibility.md)；只核 schema 时可单跑 `swift test --filter AgentContractTests`。代码里新用到一项就加进表。
 Claude 开发包的行为（含被接替的会话按 ID 仍读得到）由 `ClaudeSessionCatalogTests` 用合成转录核对。
 
 ### 生成协议定义
@@ -150,10 +152,10 @@ CLI 自己写下的原值。
 
 ## 四、边界
 
-- 这里的每一个接口都只碰**会话的元数据**：列表、标题、删除、占用。不加载会话、不启动 agent、不读会话正文。
+- 会话目录接口只处理列表、标题、删除与占用，不加载会话或启动 agent；原生恢复与 attach 由启动流程负责，旁听连接由 Router 负责。
 - 配置根一律显式传（`CODEX_HOME` / `CLAUDE_CONFIG_DIR`），不依赖默认值——用户可能配了自己的目录。
 - 起的子进程一律去掉 `LIGHTTY_` 开头的环境变量：那是 pane 的钩子路由，工具进程不是 pane，绝不能继承。
-- codex 的 app-server 整体仍标着 experimental，不能对外宣传成永不变化。认不出的输出必须退化成「问不出来」，不能崩、也不能当成空表。
+- Codex app-server 区分稳定接口与 `experimentalApi` 门控接口；按本机导出的 schema 核对所用能力。字段存在性不能证明业务语义与时序不变，仍需行为验证。认不出的输出不能当成空表。
 
 ## 参考
 

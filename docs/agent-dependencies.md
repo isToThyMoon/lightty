@@ -52,7 +52,7 @@ lightty 与两家 CLI 的每一处接触点，按功能列出，每项写清两�
 
 | 功能 | Claude Code | Codex | 出问题时 |
 |---|---|---|---|
-| 列会话 | **不调 claude**。打包的 Node 运行时跑 `@anthropic-ai/claude-agent-sdk 0.3.263` 的 `list-sessions.mjs`（`listSessions`，每页 100，按 offset 翻页） | 常驻的 `codex app-server --listen stdio://`（`CodexAppServer`，同一可执行文件 + 配置根一个，首次请求时启动并 `initialize` → `initialized`），再发 `thread/list`（含 `archived`，`sourceKinds: [cli, vscode]`）；只留终端界面建的会话：`source: cli`，或 0.157 起的 `source: vscode` + `originator: codex-tui`（`CodexAgent.terminalOriginator`） | SDK 缺失：报「helper 丢失」；app-server 单次请求 12 秒超时或格式不认识：这一家显示错误，另一家照常；超时、进程退出、可执行文件换过时下一次请求换新进程 |
+| 列会话 | **不调 claude**。打包的 Node 运行时跑 `@anthropic-ai/claude-agent-sdk 0.3.263` 的 `list-sessions.mjs`（`listSessions`，每页 100，按 offset 翻页） | 常驻的 `codex app-server --listen stdio://`（`CodexAppServer`，同一可执行文件 + 配置根一个，首次请求时启动并 `initialize` → `initialized`），再发 `thread/list`（含 `archived`，`sourceKinds: [cli, vscode]`、`useStateDbOnly: true`，读取官方索引而不在每次刷新时扫描修复历史日志）；只留终端界面建的会话：`source: cli`，或 0.157 起的 `source: vscode` + `originator: codex-tui`（`CodexAgent.terminalOriginator`） | SDK 缺失：报「helper 丢失」；app-server 单次请求 12 秒超时或格式不认识：这一家显示错误，另一家照常；超时、进程退出、可执行文件换过时下一次请求换新进程 |
 | 补工作目录 | SDK 只在转录头 64KB 找 `cwd`，找不到时 helper 往后多读转录文件 | app-server 直接给 | |
 | 改名 | `rename-session.mjs`（`renameSession`） | `thread/name/set` | |
 | 删除 | `delete-session.mjs`（`deleteSession`） | `codex delete --force <id>` | 删除前先做占用检查 |
@@ -103,7 +103,7 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 改了会**直接失效**的，按影响面排序：
 
 1. hook 载荷字段名、`hookSpecificOutput.additionalContext` 协议、插件目录约定 —— 状态、绑定、注入全没。
-2. `codex app-server` 的方法名与响应形状（官方仍标 experimental）—— Codex 会话列表与改名、插件清单（`plugin/installed`）。app-server 须常驻：它一启动就跑插件同步、git 市场升级检查等启动任务，问一句就关会砍断这些任务，留下孤儿 `git` 和 `~/.codex/.tmp/git-*`。
+2. `codex app-server` 的方法名与响应形状 —— Codex 会话列表与改名、插件清单（`plugin/installed`）。官方区分稳定接口和 `experimentalApi` 门控接口，不能把所有方法统称为 experimental；稳定 schema 也不保证来源字段语义或 pane 关联规则不变。app-server 须常驻：它一启动就跑插件同步、git 市场升级检查等启动任务，问一句就关会砍断这些任务，留下孤儿 `git` 和 `~/.codex/.tmp/git-*`。
 3. `@anthropic-ai/claude-agent-sdk` 的 `listSessions` / `renameSession` / `deleteSession` —— Claude 会话列表；版本锁在 `scripts/claude-session-helper/package.json`。
 4. `claude agents --json` 的输出格式 —— 占用一律变成「问不出来」，删除时每次都弹确认；pane 不再跟着 agent view 切换会话。`pid`、`sessionId` 按官方文档是「有才给」（后台会话的进程被 supervisor 停掉后没有 `pid`），缺一个不算格式变了。
 5. `claude plugin …` / `codex plugin …` 子命令形状 —— hook 装不上，已装的照常工作。
@@ -111,8 +111,12 @@ hook 认「哪个进程是 agent」也不看名字，只看终端作业结构（
 改了只是**功能变弱**的：会话日志的行格式（速度计不显示）、终端标题的前缀格式（Claude 中断后停在「思考中」、改名延后）、Codex 终端界面的 `originator` 名（0.157 起的终端会话从会话列表消失，pane 标题退回 pane 名）、配置文件的键名（设置页显示不全）、CLI 在 PATH 上的位置（找不到 CLI）。
 这些都必须退化成「问不出来」或空列表，不能崩、也不能把「不知道」当成「没有」。
 
+后台广播与补查快照的适配入口是 `CodexSessionEvents`；它将外部字段转成类型化事件，
+`CodexSessionRouter` 负责会话关联与事件先后关系。修改入口和验证方式见 [兼容验证](agent-compatibility.md#适配入口)。
+
 ## 相关文档
 
+- [兼容验证](agent-compatibility.md)：统一执行入口、按功能的报告与验证边界
 - `docs/hooks.md`：hook 安装、Codex 信任提示、排查
 - `docs/specs/pane-status.md`：状态报文、状态机、handoff 注入与写回
 - `docs/terminal-associations.md`：pane、会话、任务、Agent 进程的绑定关系

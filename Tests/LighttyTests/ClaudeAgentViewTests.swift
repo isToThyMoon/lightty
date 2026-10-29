@@ -61,8 +61,10 @@ struct ClaudeAgentViewTests {
         sessions.foreground(foreground.key.nativeID, "mobile-3f")
         sessions.name(other.key.nativeID, "Loading states")
         let root = f.root.path
+        var diagnostics: [AgentDiagnostic] = []
         let view = ClaudeAgentView(library: f.library, taskBindings: tasks, socketPath: "/tmp/lightty-test.sock",
-                                   runDirectory: runDirectory) { _ in sessions.rows(cwd: root) }
+                                   runDirectory: runDirectory,
+                                   diagnostic: { diagnostics.append($0) }, liveSessions: { _ in sessions.rows(cwd: root) })
         view.start()
         defer { view.stop() }
         let pane = f.pane()
@@ -94,6 +96,9 @@ struct ClaudeAgentViewTests {
         title("\u{25D0} Emby player")
         try await f.wait { shown(pane) == continued.key.nativeID }
         #expect(route(continued)?.pane == pane)
+        #expect(diagnostics.contains {
+            $0.reason == .titleMatched && $0.pane == pane && $0.session == continued.key.nativeID
+        })
         #expect(tasks.task(for: pane) != nil, "同一段对话换了个后台会话 ID，任务不该丢")
         title("\u{25D1} Emby player")
         await awaitMainQueue(hops: 2)
@@ -167,7 +172,7 @@ struct ClaudeAgentViewTests {
         sessions.name(stranger.key.nativeID, "Loading states")
         let root = f.root.path
         let view = ClaudeAgentView(library: f.library, taskBindings: tasks, socketPath: "/tmp/lightty-test.sock",
-                                   runDirectory: runDirectory) { _ in sessions.rows(cwd: root) }
+                                   runDirectory: runDirectory, liveSessions: { _ in sessions.rows(cwd: root) })
         view.start()
         defer { view.stop() }
         func shown(_ pane: UUID) -> String? { f.library.paneState(for: pane)?.sessionKey?.nativeID }

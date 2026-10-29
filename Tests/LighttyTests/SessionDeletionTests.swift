@@ -95,33 +95,6 @@ struct SessionDeletionTests {
         }
     }
 
-    @Test func codexNativeDeletionUpdatesCatalog() throws {
-        let executable = try #require(HookInstaller.locateExecutable("codex"))
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-delete-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let directory = root.appendingPathComponent("sessions/2026/09/08")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let ids = [UUID().uuidString.lowercased(), UUID().uuidString.lowercased()]
-        for id in ids {
-            let rows: [[String: Any]] = [
-                ["timestamp": "2026-09-08T00:00:00Z", "type": "session_meta", "payload": [
-                    "id": id, "timestamp": "2026-09-08T00:00:00Z", "cwd": root.path,
-                    "originator": "lightty-test", "cli_version": "0.153.4", "source": "cli", "model_provider": "openai"]],
-                ["timestamp": "2026-09-08T00:00:01Z", "type": "event_msg", "payload": [
-                    "type": "user_message", "message": "Deletion fixture", "images": []]]]
-            let data = try rows.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
-                .joined(separator: "\n") + "\n"
-            try data.write(to: directory.appendingPathComponent("rollout-2026-09-08T00-00-00-\(id).jsonl"),
-                atomically: true, encoding: .utf8)
-        }
-        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable,
-                                          configuration: .custom(root.path))
-        let provider = CodexSessionProvider(source: source)
-        #expect(try provider.sessions(archived: false, cancelled: { false }).count == 2)
-        try SessionDeletion.delete(.init(agent: .codex, sourceRoot: root.path, nativeID: ids[0]), provider: provider)
-        #expect(try provider.sessions(archived: false, cancelled: { false }).map(\.key.nativeID) == [ids[1]])
-    }
-
     private var helper: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent(".build/claude-session-helper")
@@ -201,5 +174,35 @@ struct SessionDeletionTests {
         #expect(state.assignments.map(\.session) == [other])
         #expect(state.archivedSessions.isEmpty)
         #expect(state.projects == [project])
+    }
+}
+
+/// 本机 CLI 契约与 fixture 测试分开，离线回归不依赖用户安装 Codex。
+struct CodexSessionDeletionIntegrationTests {
+    @Test func codexNativeDeletionUpdatesCatalog() throws {
+        let executable = try #require(HookInstaller.locateExecutable("codex"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-delete-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("sessions/2026/09/08")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ids = [UUID().uuidString.lowercased(), UUID().uuidString.lowercased()]
+        for id in ids {
+            let rows: [[String: Any]] = [
+                ["timestamp": "2026-09-08T00:00:00Z", "type": "session_meta", "payload": [
+                    "id": id, "timestamp": "2026-09-08T00:00:00Z", "cwd": root.path,
+                    "originator": "lightty-test", "cli_version": "0.153.4", "source": "cli", "model_provider": "openai"]],
+                ["timestamp": "2026-09-08T00:00:01Z", "type": "event_msg", "payload": [
+                    "type": "user_message", "message": "Deletion fixture", "images": []]]]
+            let data = try rows.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+                .joined(separator: "\n") + "\n"
+            try data.write(to: directory.appendingPathComponent("rollout-2026-09-08T00-00-00-\(id).jsonl"),
+                atomically: true, encoding: .utf8)
+        }
+        let source = SessionCatalogSource(agent: .codex, root: root, executable: executable,
+                                          configuration: .custom(root.path))
+        let provider = CodexSessionProvider(source: source)
+        #expect(try provider.sessions(archived: false, cancelled: { false }).count == 2)
+        try SessionDeletion.delete(.init(agent: .codex, sourceRoot: root.path, nativeID: ids[0]), provider: provider)
+        #expect(try provider.sessions(archived: false, cancelled: { false }).map(\.key.nativeID) == [ids[1]])
     }
 }

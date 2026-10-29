@@ -16,10 +16,13 @@ final class CodexSessionRouterTests: XCTestCase {
     /// 续接（`codex resume <ID>`）：参数里带着会话 ID 的那个，别的条件都不看。
     func testTheClientNamingTheThreadWins() {
         let a = UUID(), b = UUID()
+        var reason: AgentDiagnostic.Reason?
         let chosen = CodexSessionRouter.choose(
             threadID: thread, cwd: "/work", createdAt: nil, announced: false,
-            clients: [client(a, pid: 10, started: 100), client(b, pid: 11, started: 100, arguments: ["codex", "resume", thread])])
+            clients: [client(a, pid: 10, started: 100), client(b, pid: 11, started: 100, arguments: ["codex", "resume", thread])],
+            selectedBy: { reason = $0 })
         XCTAssertEqual(chosen?.pane, b)
+        XCTAssertEqual(reason, .resumeArgument)
     }
 
     /// 刚宣布的会话，目录里只有一个界面：就是它。目录写法不同（尾斜杠）也算一致；
@@ -69,18 +72,6 @@ final class CodexSessionRouterTests: XCTestCase {
                                                clients: [old, fresh]))
     }
 
-    /// 后台进程自己建的会话不上任何 pane：实测生成标题时建了一个同目录的临时会话，
-    /// 配上去会把真正会话的记录挤掉，回合的 Stop 跟着丢了。
-    func testOnlyUserThreadsBelongToATerminal() {
-        XCTAssertTrue(CodexSessionRouter.isShownInATerminal(["id": "a", "threadSource": "user", "ephemeral": false]))
-        XCTAssertTrue(CodexSessionRouter.isShownInATerminal(["id": "a"]), "旧版本没有来源字段")
-        XCTAssertFalse(CodexSessionRouter.isShownInATerminal(["id": "a", "threadSource": "thread_title", "ephemeral": true]))
-        XCTAssertFalse(CodexSessionRouter.isShownInATerminal(["id": "a", "threadSource": "user", "ephemeral": true]))
-        XCTAssertFalse(CodexSessionRouter.isShownInATerminal(["id": "a", "threadSource": "subagent"]))
-        XCTAssertFalse(CodexSessionRouter.isShownInATerminal(["id": "a", "parentThreadId": "b"]))
-        XCTAssertTrue(CodexSessionRouter.isShownInATerminal(["id": "a", "parentThreadId": NSNull()]))
-    }
-
     // MARK: - WebSocket 帧
 
     /// 客户端发的帧带掩码；服务端的解码器照样认得（掩码按规范异或回来）。
@@ -122,6 +113,8 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
     var dead = false
     private(set) var requests: [String] = []
     var threads: [String: [String: Any]] = [:]
+    var holdsReads = false
+    private var heldReads: [() -> Void] = []
     private var closed = false
     private let loaded: () -> [String]
 
@@ -137,7 +130,17 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
         case "thread/read": result = (params["threadId"] as? String).flatMap { threads[$0] }.map { ["thread": $0] }
         default: result = nil
         }
-        DispatchQueue.main.async { completion(result) }
+        if method == "thread/read", holdsReads {
+            heldReads.append { completion(result) }
+        } else {
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func releaseReads() {
+        let pending = heldReads
+        heldReads.removeAll()
+        for reply in pending { DispatchQueue.main.async(execute: reply) }
     }
 
     func notify(_ method: String) {}
@@ -151,16 +154,46 @@ private final class FakeDaemonConnection: CodexDaemonConnection {
 
 @MainActor
 struct CodexDaemonReconnectTests {
+    /// 合成的乱序回放：较新但不认识的状态仍使在途旧快照失效，不能倒退到旧状态。
+    @Test(arguments: ["thread/status/changed", "turn/completed"])
+    func newerUnknownActivitySupersedesAnOlderSnapshot(method: String) async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record("replayed-thread"), pane = f.pane()
+        try await f.load([record])
+        try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
+        let connection = FakeDaemonConnection(loaded: { [record.key.nativeID] })
+        connection.holdsReads = true
+        connection.threads[record.key.nativeID] = ["id": record.key.nativeID, "status": ["type": "idle"]]
+        var diagnostics: [AgentDiagnostic] = []
+        let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
+            runDirectory: f.root.appendingPathComponent("run"), diagnostic: { diagnostics.append($0) },
+            connect: { _ in connection })
+        router.start()
+        defer { router.stop() }
+        try await f.wait { connection.requests.contains("thread/read") }
+        let payload: [String: Any] = method == "turn/completed"
+            ? ["threadId": record.key.nativeID, "turn": ["status": "future"]]
+            : ["threadId": record.key.nativeID, "status": ["type": "future"]]
+        connection.onNotification?(method, payload)
+        connection.onNotification?("thread/status/changed", ["status": ["type": "idle"]])
+        #expect(diagnostics.contains { $0.stage == .daemonEvent && $0.reason == .unsupportedPayload })
+        connection.releaseReads()
+        await awaitMainQueue(hops: 2)
+        #expect(f.library.paneState(for: pane)?.status?.state == .thinking)
+    }
+
     @Test(arguments: [false, true]) func restoredSessionReceivesDaemonActivityBeforeAnyHook(snapshot: Bool) async throws {
         let f = try SessionModelFixture()
         defer { f.close() }
+        var diagnostics: [AgentDiagnostic] = []
         let record = f.record("restored-thread"), pane = f.pane()
         try await f.load([record])
         f.library.associate(.restoring(f.association(record)), with: pane)
         let connection = FakeDaemonConnection(loaded: { snapshot ? [record.key.nativeID] : [] })
         connection.threads[record.key.nativeID] = ["id": record.key.nativeID, "status": ["type": "active"]]
         let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
-            runDirectory: f.root.appendingPathComponent("run")) { _ in connection }
+            runDirectory: f.root.appendingPathComponent("run"), diagnostic: { diagnostics.append($0) }, connect: { _ in connection })
         router.start()
         defer { router.stop() }
         try await f.wait { connection.requests.contains("thread/loaded/list") }
@@ -173,6 +206,9 @@ struct CodexDaemonReconnectTests {
         }
         #expect(f.library.paneState(for: pane)?.status?.state == .thinking)
         #expect(f.library.paneState(for: pane)?.acceptsInput == false)
+        try await f.wait { diagnostics.contains { $0.reason == .declaredSession && $0.pane == pane } }
+        #expect(diagnostics.contains { $0.stage == .daemonConnection && $0.reason == .connected })
+        #expect(diagnostics.first { $0.reason == .declaredSession }?.session == record.key.nativeID)
         // 回合中等用户（批准、回答提问——后者没有 hook）：等你；用户处理完回到思考中。
         for flag in ["waitingOnApproval", "waitingOnUserInput"] {
             connection.onNotification?("thread/status/changed", ["threadId": record.key.nativeID,
@@ -195,7 +231,7 @@ struct CodexDaemonReconnectTests {
         try await f.status(.thinking, event: "UserPromptSubmit", pane: pane, record: record)
         let connection = FakeDaemonConnection(loaded: { [] })
         let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
-            runDirectory: f.root.appendingPathComponent("run")) { _ in connection }
+            runDirectory: f.root.appendingPathComponent("run"), connect: { _ in connection })
         router.start()
         defer { router.stop() }
         try await f.wait { connection.requests.contains("thread/loaded/list") }
@@ -261,11 +297,11 @@ struct CodexDaemonReconnectTests {
         let runDirectory = f.root.appendingPathComponent("run")
         var connections: [FakeDaemonConnection] = []
         let router = CodexSessionRouter(library: f.library, socketPath: "/nonexistent.sock",
-                                        runDirectory: runDirectory) { _ in
+                                        runDirectory: runDirectory, connect: { _ in
             let connection = FakeDaemonConnection(loaded: { [record.key.nativeID] })
             connections.append(connection)
             return connection
-        }
+        })
         router.start()
         defer { router.stop() }
         try await f.wait { connections.first?.requests.contains("thread/loaded/list") == true }

@@ -55,6 +55,7 @@ final class ClaudeAgentView {
 
     typealias LiveSessions = (SessionCatalogSource) -> [ClaudeSessionProvider.LiveSession]?
 
+    private let diagnostic: (AgentDiagnostic) -> Void
     private let library: SessionLibrary
     private let taskBindings: TaskBindings
     private let socketPath: String
@@ -66,9 +67,11 @@ final class ClaudeAgentView {
     /// - Parameter liveSessions: 问一次 `claude agents --json`。测试换成固定的表。
     init(library: SessionLibrary, taskBindings: TaskBindings, socketPath: String,
          runDirectory: URL = PaneRuntimeDirectory.runDirectory,
+         diagnostic: @escaping (AgentDiagnostic) -> Void = AgentDiagnostic.emit,
          liveSessions: @escaping LiveSessions = {
              ClaudeSessionProvider.liveSessions(executable: $0.executable, root: $0.root.path)
          }) {
+        self.diagnostic = diagnostic
         self.library = library
         self.taskBindings = taskBindings
         self.socketPath = socketPath
@@ -109,6 +112,7 @@ final class ClaudeAgentView {
         display.checked = parsed.body
         display.missedAt = nil
         displays[pane] = display
+        diagnostic(.init(.titleRefresh, .requested, agent: .claude, pane: pane))
         check(parsed.body, for: pane)
     }
 
@@ -116,6 +120,7 @@ final class ClaudeAgentView {
     /// 不在这个 pane 上了。还没回来的查询跟着作废（`checked` 清掉）。
     private func enterList(_ pane: UUID) {
         var display = displays[pane] ?? Display()
+        diagnostic(.init(.sessionRoute, .list, agent: .claude, pane: pane, session: display.shown))
         display.mode = .list
         display.checked = nil
         display.missedAt = nil
@@ -141,7 +146,11 @@ final class ClaudeAgentView {
     /// 宁可暂时没跟上，也不认错。
     private func resolve(_ name: String, rows: [ClaudeSessionProvider.LiveSession]?,
                          source: SessionCatalogSource, in pane: UUID) {
-        guard let rows, let display = displays[pane] else { displays[pane]?.missedAt = Date(); return }
+        guard let rows, let display = displays[pane] else {
+            diagnostic(.init(.sessionRoute, .lookupFailed, agent: .claude, pane: pane))
+            displays[pane]?.missedAt = Date()
+            return
+        }
         let associated = library.paneState(for: pane)?.sessionKey
             .flatMap { $0.agent == .claude ? $0.nativeID : nil }
         let foreground = rows.filter { !$0.isBackground }
@@ -154,6 +163,7 @@ final class ClaudeAgentView {
            let row = rows.first(where: { $0.isBackground && $0.name == name }), let session = row.sessionID {
             return show(session, named: name, directory: row.cwd, source: source, in: pane)
         }
+        diagnostic(.init(.sessionRoute, .titleUnmatched, agent: .claude, pane: pane, session: associated))
         displays[pane]?.missedAt = Date()
     }
 
@@ -161,6 +171,7 @@ final class ClaudeAgentView {
         guard var display = displays[pane] else { return }
         if let shown = display.shown { AgentSessionRoute.remove(sessionID: shown, in: runDirectory) }
         display.shown = nil
+        diagnostic(.init(.sessionRoute, .foreground, agent: .claude, pane: pane))
         display.mode = .foreground
         display.conversation = name
         displays[pane] = display
@@ -186,7 +197,7 @@ final class ClaudeAgentView {
             try AgentSessionRoute(pane: pane, socket: socketPath, client: nil)
                 .write(sessionID: session, in: runDirectory)
         } catch {
-            NSLog("claude agent view route write failed: \(error)")
+            diagnostic(.init(.sessionRoute, .writeFailed, agent: .claude, pane: pane, session: session))
             displays[pane] = display
             return
         }
@@ -195,6 +206,7 @@ final class ClaudeAgentView {
         if let previous = display.conversation, previous != name, taskBindings.task(for: pane) != nil {
             taskBindings.unbind(pane)
         }
+        diagnostic(.init(.sessionRoute, .titleMatched, agent: .claude, pane: pane, session: session))
         display.shown = session
         display.conversation = name
         displays[pane] = display
@@ -224,6 +236,7 @@ final class ClaudeAgentView {
 
     private func forget(_ pane: UUID) {
         if let shown = displays.removeValue(forKey: pane)?.shown {
+            diagnostic(.init(.sessionRoute, .removed, agent: .claude, pane: pane, session: shown))
             AgentSessionRoute.remove(sessionID: shown, in: runDirectory)
         }
     }

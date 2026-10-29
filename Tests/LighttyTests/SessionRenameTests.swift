@@ -5,8 +5,8 @@ import XCTest
 @testable import lightty
 
 /// 对着真的 codex 跑，用的是一个临时的、合成的配置根，绝不碰用户自己的会话。
-final class CodexSessionRenameIntegrationTests: XCTestCase {
-    func testInstalledCodexRenamesASyntheticSessionThroughTheOfficialInterface() throws {
+final class AgentSessionMetadataIntegrationTests: XCTestCase {
+    func testInstalledCodexRenamesAndDeletesASyntheticSessionThroughTheOfficialInterface() throws {
         guard let executable = HookInstaller.locateExecutable("codex") else { throw XCTSkip("Codex CLI not installed") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rename-test-\(UUID())")
         let directory = root.appendingPathComponent("sessions/2026/09/07")
@@ -34,10 +34,14 @@ final class CodexSessionRenameIntegrationTests: XCTestCase {
         try SessionRename.rename(key, to: "改过的名字", provider: CodexSessionProvider(source: source))
         let records = try CodexSessionProvider(source: source).sessions(archived: false, cancelled: { false })
         XCTAssertEqual(records.first(where: { $0.key.nativeID == id })?.title, "改过的名字")
+        // 升级兼容检查覆盖完整元数据生命周期，避免 schema 仍在而 CLI 删除语义已变。
+        try CodexSessionProvider(source: source).delete(key)
+        let remaining = try CodexSessionProvider(source: source).sessions(archived: false, cancelled: { false })
+        XCTAssertFalse(remaining.contains { $0.key == key })
     }
 
     /// 同样对着真的官方开发包跑，配置根是临时目录。
-    func testBundledHelperRenamesASyntheticClaudeSessionThroughTheOfficialSDK() throws {
+    func testBundledHelperRenamesAndDeletesASyntheticClaudeSessionThroughTheOfficialSDK() throws {
         // 与 ClaudeSessionCatalogTests 同一套定位：测试进程的 argv[0] 是 Xcode 的
         // xctest，`installedHelper` 那条向上找 .build 的路走不通。
         let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -69,6 +73,9 @@ final class CodexSessionRenameIntegrationTests: XCTestCase {
         let records = try ClaudeSessionProvider(source: source, helperDirectory: helper)
             .sessions(archived: false, cancelled: { false })
         XCTAssertEqual(records.first(where: { $0.key.nativeID == id })?.title, "改过的名字")
+        let provider = ClaudeSessionProvider(source: source, helperDirectory: helper)
+        try provider.delete(key)
+        XCTAssertFalse(try provider.sessions(archived: false, cancelled: { false }).contains { $0.key == key })
     }
 }
 

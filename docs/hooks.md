@@ -6,6 +6,9 @@ lightty 让 pane 显示里面的 agent 正在干什么（思考中 / 执行工�
 入口：**设置 → 通用 → Agent 状态 hooks → 管理…**。首次启动时若检测到你装了 agent 却没配过，
 会主动弹一次引导。
 
+状态、标题或 Handoff 异常时，按 [运行时诊断](agent-compatibility.md#运行时诊断) 采集
+Hook 路由、socket 发送/接收、后台会话关联和上下文输出的阶段与原因。
+
 ## 它是怎么工作的
 
 ```
