@@ -5,3 +5,4 @@ Frameworks/
 .idea/
 dist/
 scripts/claude-session-helper/node_modules/
+.claude/settings.local.json

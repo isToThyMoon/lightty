@@ -1,0 +1,22 @@
+# check-docs.py 白名单：一行一个 token，# 开头为注释。
+# 只登记「合法的外部名字 / 占位符」；仓库内真正失效的引用应该改文档，不要加在这里。
+
+# ---- 链接 ----
+# README 里指向 GitHub Releases 页的相对链接，只在 GitHub 上解析得到
+../../releases
+
+# ---- 标识符：占位符 / 构建参数 ----
+XxxSessionProvider   # add-agent 技能里的命名模板，Xxx 代表新 Agent 名
+ReleaseFast          # zig build -Doptimize=ReleaseFast
+
+# ---- 路径：描述 Agent 插件 / 外部仓库内部结构，不在本仓库 ----
+plugins/lightty/hooks/hooks.json
+plugins/lightty/hooks.json
+plugins/lightty/skills/handoff/SKILL.md
+skills/.system
+.codex-plugin/plugin.json
+.claude-plugin/plugin.json
+hooks/hooks.json
+codex-rs/ext/skills/src/host_roots.rs
+# Sparkle 更新源 URL 路径片段（GitHub Releases），不是仓库文件
+releases/latest/download/appcast.xml
