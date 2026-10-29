@@ -50,9 +50,16 @@ final class SessionCatalogTests: XCTestCase {
         }
         let provider = CodexSessionProvider(source: .init(agent: .codex, root: root, executable: executable, configuration: .custom(root.path)))
         let records = try provider.sessions(archived: false, cancelled: { false })
-        XCTAssertEqual(Set(records.map(\.key.nativeID)), expected)
-        XCTAssertTrue(records.allSatisfy { $0.workingDirectory == root.path })
-        XCTAssertTrue(try provider.sessions(archived: true, cancelled: { false }).isEmpty)
+        XCTAssertEqual(Set(records.map(\.key.nativeID)), expected, "records: \(records.map(\.key.nativeID))")
+        // Codex 会把 cwd 规范化成真实路径（/var -> /private/var），所以与解析符号链接后的目录比。
+        // 不用 URL.resolvingSymlinksInPath：它会把 /private/var 反向折成 /var。
+        let expectedCwd = root.path.withCString { realpath($0, nil) }.map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        } ?? root.path
+        XCTAssertTrue(records.allSatisfy { $0.workingDirectory == expectedCwd },
+                      "expected cwd \(expectedCwd), got \(records.map { $0.workingDirectory ?? "nil" })")
+        XCTAssertTrue(try provider.sessions(archived: true, cancelled: { false }).isEmpty, "archived history should be empty")
         XCTAssertThrowsError(try provider.sessions(archived: false, cancelled: { true }))
     }
 }

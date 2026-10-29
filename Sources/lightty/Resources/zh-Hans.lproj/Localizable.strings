@@ -542,3 +542,7 @@
 "%1$@ tokens, %2$@ of them thinking" = "%1$@ token（其中思考 %2$@）";
 "%@ tokens" = "%@ token";
 "Last request: %1$@, %2$@ characters of text, %3$@ s" = "最近一次请求：%1$@，正文 %2$@ 字符，用时 %3$@ 秒";
+"No tab open" = "没有打开的标签页";
+"Open a task from the sidebar, or create a new tab." = "从侧栏打开任务，或新建标签页。";
+"Search" = "搜索";
+"Save" = "保存";
