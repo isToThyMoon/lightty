@@ -53,9 +53,10 @@ final class AgentOutputMeterView: NSView {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
+    /// 失焦不算看不见：窗口还在屏上时，读数继续跟着这个窗口的当前 pane。
     private var isVisible: Bool {
         guard let window else { return false }
-        return window.isKeyWindow && window.occlusionState.contains(.visible)
+        return window.occlusionState.contains(.visible)
             && !isHiddenOrHasHiddenAncestor
     }
 
