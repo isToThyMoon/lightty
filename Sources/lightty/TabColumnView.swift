@@ -2277,6 +2277,7 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
     }
 
     private func applyFill() {
+        applyForeground()
         // Fill means selection/hover only. Completion is conveyed by the dot and text.
         if isActive {
             layer?.backgroundColor = ShellStyle.activeItemFill
@@ -2288,6 +2289,18 @@ private final class PaneRowView: NSView, SidebarPaneDropRow, SidebarHoverRow {
             layer?.backgroundColor = NSColor.clear
                 .shellResolvedCGColor(for: effectiveAppearance)
         }
+    }
+
+    /// 当前行是实心导航色底：文字、模板图标与行尾按钮改用色底上的前景，层级靠透明度保留。
+    private func applyForeground() {
+        let on = isActive ? ShellStyle.onNavigationAccent : nil
+        nameLabel.textColor = on ?? ShellStyle.primaryText
+        taskLabel.textColor = on?.withAlphaComponent(0.85) ?? ShellStyle.secondaryText
+        directoryLabel.textColor = on?.withAlphaComponent(0.75) ?? ShellStyle.tertiaryText
+        statusLabel.foregroundOverride = on?.withAlphaComponent(0.85)
+        agentIcon.contentTintColor = on ?? ShellStyle.primaryText
+        closeButton.contentTintColor = on ?? ShellStyle.secondaryText
+        menuButton.contentTintColor = on ?? ShellStyle.secondaryText
     }
 
     deinit {

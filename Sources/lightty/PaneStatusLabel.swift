@@ -83,7 +83,13 @@ final class PaneStatusLabel: NSTextField, NSAnimationDelegate {
         updateAnimation()
     }
 
+    /// 压在实心底色上时统一用这个前景，状态色在色底上读不清。
+    var foregroundOverride: NSColor? {
+        didSet { applyColor(progress: breath?.currentProgress ?? 0) }
+    }
+
     fileprivate func applyColor(progress: NSAnimation.Progress) {
+        if let foregroundOverride { textColor = foregroundOverride; return }
         guard let color = emphasizedColor else { textColor = ShellStyle.secondaryText; return }
         effectiveAppearance.performAsCurrentDrawingAppearance {
             // Keep at least 80% of the status accent, even at the quietest phase.

@@ -180,8 +180,11 @@ enum ShellStyle {
         navigationAccent.withAlphaComponent(alpha)
     }
     /// 容器提供归属提示，当前终端提供更强的定位提示。
-    static var activeContainerFill: NSColor { navigationTint(0.08) }
-    static var activeItemFill: NSColor { navigationTint(0.14) }
+    /// 当前终端行是实心导航色，压在上面的文字与图标取 `onNavigationAccent`。
+    static var activeContainerFill: NSColor { navigationTint(0.16) }
+    static var activeItemFill: NSColor { navigationAccent }
+    /// 导航色上的前景：浅色主题的导航色偏深，配白字；深色主题提亮过，配深字。
+    static let onNavigationAccent = NSColor.shellDynamic(light: 0xFFFFFF, dark: 0x1C1B1F)
 
     // MARK: 状态色（pane 活动状态 / 任务绑定态）
 
@@ -734,8 +737,8 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
     /// 会在较深的分组底色外圈出一道亮边，连组间留白也一起染上。
     var drawsHover = true
 
-    /// 这一行在一段连续凹托里的位置。托本身由表格在背景上整块画（行间有空隙，逐行画会
-    /// 留缝），行只据此把 hover / 选中缩进托里。
+    /// 这一行在一段连续凹托里的位置。托由每行各画一截：行框含行间空隙、上下相接，
+    /// 中间的行铺满整高，首尾才收圆角。托跟着行视图走，挪行动画时随行一起滑动。
     enum TrayPosition { case none, single, top, middle, bottom }
 
     var trayPosition = TrayPosition.none {
@@ -762,7 +765,28 @@ final class ShellTableRowView: ShellDropTargetRowView, SidebarHoverRow {
         return rect
     }
 
+    /// 本行那一截托：横向内缩 `trayInset`，只在托的首尾内缩并收圆角。
+    private func drawTraySegment() {
+        guard trayPosition != .none else { return }
+        let top = trayPosition == .top || trayPosition == .single
+        let bottom = trayPosition == .bottom || trayPosition == .single
+        let (minEdge, maxEdge) = isFlipped ? (top, bottom) : (bottom, top)
+        let radius = Self.trayCornerRadius
+        // 不收口的一侧把圆角推到行框外，再按行框裁掉，留下直边与相邻行接上。
+        var rect = bounds.insetBy(dx: Self.trayInset, dy: 0)
+        let lower = minEdge ? Self.trayInset : -radius
+        let upper = maxEdge ? Self.trayInset : -radius
+        rect.origin.y += lower
+        rect.size.height -= lower + upper
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds).addClip()
+        ShellStyle.trayFill.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
+        drawTraySegment()
         guard drawsHover, isHovered, !drawsSelection else { return }
         ShellStyle.hoverFill.setFill()
         NSBezierPath(
