@@ -385,7 +385,7 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
                     FilePreferences.shared.set(true, forKey: "handoffArchiveNoticeShown")
                     let alert = AppBranding.makeAlert()
                     alert.messageText = L("Task archived")
-                    alert.informativeText = L("You can restore it or permanently delete it in Settings > Archive.")
+                    alert.informativeText = L("You can restore it or permanently delete it in Settings > Handoff > Archived.")
                     alert.addButton(withTitle: L("OK"))
                     alert.runModal()
                 }

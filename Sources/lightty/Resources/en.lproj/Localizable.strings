@@ -294,7 +294,7 @@
 "Restore archived Handoff tasks or permanently delete their files. CLI sessions are not affected." = "Restore archived Handoff tasks or permanently delete their files. CLI sessions are not affected.";
 "No archived tasks" = "No archived tasks";
 "Task archived" = "Task archived";
-"You can restore it or permanently delete it in Settings > Archive." = "You can restore it or permanently delete it in Settings > Archive.";
+"You can restore it or permanently delete it in Settings > Handoff > Archived." = "You can restore it or permanently delete it in Settings > Handoff > Archived.";
 "↩ Go / start Agent · esc Close" = "↩ Go / start Agent · esc Close";
 "Move project up" = "Move project up";
 "Remove folder rule" = "Remove folder rule";

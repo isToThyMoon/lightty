@@ -298,7 +298,7 @@
 "Restore archived Handoff tasks or permanently delete their files. CLI sessions are not affected." = "恢复归档的 Handoff 任务，或彻底删除其文件。不会影响 CLI 会话。";
 "No archived tasks" = "暂无归档任务";
 "Task archived" = "任务已归档";
-"You can restore it or permanently delete it in Settings > Archive." = "你可以在设置 → 归档中找回任务，或彻底删除。";
+"You can restore it or permanently delete it in Settings > Handoff > Archived." = "你可以在设置 → Handoff → 已归档中找回任务，或彻底删除。";
 "↩ Go / start Agent · esc Close" = "↩ 前往 / 启动 Agent · esc 关闭";
 "Move project up" = "上移项目";
 "Remove folder rule" = "移除目录规则";
