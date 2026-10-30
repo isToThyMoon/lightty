@@ -12,7 +12,7 @@ import Darwin
 /// 在会话事实上，这是「占用检测 / 存活进程不读进程表反推」（见 `AgentSessionProvider`）的唯一例外
 /// （`AgentProcessIdentity` 读的是 hook 自己的祖先链与 pid 复用校验，不推断会话）：
 /// 这里要回答的是 lightty 自己注入的 pane ID 在哪个进程里，Codex 没有也不会有这个接口；
-/// 会话本身的事实仍只问官方广播。不要为别的问题复用它。规则见 docs/hooks.md「Codex 共享后台进程」。
+/// 会话本身的事实仍只问官方广播。不要为别的问题复用它。规则见 docs/hooks/codex-shared-daemon.md。
 public enum ProcessInspector {
     /// 终端作业结构，全来自 `kinfo_proc`。
     public struct JobFacts: Equatable, Sendable {

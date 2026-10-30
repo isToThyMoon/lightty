@@ -3,7 +3,7 @@ import LighttyCore
 
 // lightty-hook —— agent（claude / codex）的 hook 事件 → lightty 的状态 socket
 //
-// 契约见 docs/specs/pane-status.md §4 / §6 S2 / §8。三条硬约束：
+// 契约见 docs/specs/pane-status/data-contract.md 与 docs/specs/pane-status/handoff.md。三条硬约束：
 //
 // 1. **只链 Foundation + LighttyCore**。PreToolUse 每次工具调用都触发一次进程，
 //    启动开销直接变成用户 agent 的延迟税。
@@ -34,7 +34,7 @@ private func declaredAgent() -> String? {
     return agent.rawValue
 }
 
-// MARK: - handoff 注入（§8）
+// MARK: - handoff 注入（docs/specs/pane-status/handoff.md）
 
 /// pane 当前绑定的任务文件路径。没绑 / 指针读不到 → nil。
 private func boundTaskPath(paneID: String) -> String? {

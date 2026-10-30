@@ -6,7 +6,7 @@ import LighttyCore
 /// **我们自己的文件里**。
 ///
 /// 两家 agent 都支持「插件自带 hooks」与「插件自带 skills」，且元数据位置不冲突
-/// （实测见 docs/specs/pane-status.md §2.1.1），所以一棵目录树同时服务两家：
+/// （见 docs/hooks.md「注册方式」），所以一棵目录树同时服务两家：
 ///
 /// ```
 /// ~/.lightty/marketplace/

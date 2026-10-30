@@ -87,7 +87,7 @@ public struct AgentSpec: Sendable {
     // MARK: - hook 与插件
 
     /// 我们订阅的 hook 事件。事件 key **必须是 PascalCase**（实测：snake_case /
-    /// camelCase 均不触发）。状态机映射见 docs/specs/pane-status.md §4.3。
+    /// camelCase 均不触发）。状态机映射见 docs/specs/pane-status/state-machine.md。
     public let hookEvents: [String]
 
     /// CLI 会往里写插件声明的那份文件，相对配置根。

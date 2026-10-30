@@ -2,7 +2,7 @@ import Foundation
 
 /// pane 运行时目录：lightty 与 agent hook 之间的唯一交换区。
 ///
-/// 布局（见 docs/specs/pane-status.md §4.1）：
+/// 布局（见 docs/specs/pane-status/data-contract.md「运行时目录」）：
 /// ```
 /// ~/.lightty/panes/<pane-uuid>/
 ///     owner.pid     ← lightty 写：宿主进程 pid，供 sweepStale 判活

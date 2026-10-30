@@ -75,5 +75,5 @@ Codex 的 OTel 指标 `codex.responses_api_engine_service_tbt.duration_ms` 能�
    首 token 等待占了大部分时间，所以显著偏低。这是如实测量的结果，不做校正。
 3. 侧栏截图走 `LIGHTTY_UI_SNAPSHOT_DIR`，检查最窄侧栏、深浅外观和无读数状态。
 
-局限：日志格式是两家的私有实现，见[依赖清单](../agent-dependencies.md#输出速度)。没有和服务端
+局限：日志格式是两家的私有实现，见[依赖清单](../agent-dependencies/fragility.md#输出速度)。没有和服务端
 计量做过对照。

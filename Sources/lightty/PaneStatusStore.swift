@@ -30,7 +30,7 @@ extension Notification.Name {
 /// 顺带没了：watcher、防抖、seq 去重、原子写、以及三者之间的时序坑。
 ///
 /// 数据流仍是单向的（见 docs/specs/pane-status.md §3）：hook 只发，本 store 只收。
-/// `markRead` 只改内存不回发——「用户看没看」是 lightty 侧的知识，hook 无从知晓（§4.3）。
+/// `markRead` 只改内存不回发——「用户看没看」是 lightty 侧的知识，hook 无从知晓（见 docs/specs/pane-status/state-machine.md「done 与已读」）。
 ///
 /// **线程约定：本类型只在主线程使用**（含只读属性）。
 /// 收包在私有队列上，入口处统一 `DispatchQueue.main.async` 汇流回主线程，

@@ -88,7 +88,7 @@ public struct TaskBindingTable: Equatable {
 }
 
 /// 写给 agent hook 看的 handoff 指针（`~/.lightty/panes/<uuid>/task`）与它的去重标记。
-/// hook 按这份文件把任务文档注入 agent 上下文，见 docs/hooks.md。
+/// hook 按这份文件把任务文档注入 agent 上下文，见 docs/specs/pane-status/handoff.md。
 public protocol TaskPointerStore: AnyObject {
     /// 写指针：一行任务文件绝对路径。不动去重标记——路径变了 hook 自己会重注。
     func write(taskFile: URL, for pane: UUID)

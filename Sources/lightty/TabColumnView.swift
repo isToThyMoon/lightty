@@ -1871,7 +1871,7 @@ enum TabPaneStatusPresentation {
         case .done: line = L("Agent finished")
         case .idle: return nil
         }
-        // detail 来自 hook 写的文件，长度不可信（契约 §4.2 要求读方截断）
+        // detail 来自 hook 写的文件，长度不可信（docs/specs/pane-status/data-contract.md「报文」要求读方截断）
         if let detail = status.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
             !detail.isEmpty {
             line += " · " + String(detail.prefix(120))
