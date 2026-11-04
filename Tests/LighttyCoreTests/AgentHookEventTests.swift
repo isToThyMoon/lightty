@@ -7,6 +7,24 @@ struct AgentHookEventTests {
         AgentHookEvent(try JSONSerialization.data(withJSONObject: fields))
     }
 
+    /// 只有 Stop 看后台工作；字段缺失、为空或类型不对都按普通完成。
+    @Test func stopWithRunningBackgroundWorkIsNotDone() throws {
+        let running: [[String: Any]] = [["id": "a", "type": "shell", "status": "running"],
+                                        ["id": "b", "type": "subagent", "status": "running"]]
+        let waiting = try decode(["hook_event_name": "Stop", "background_tasks": running])
+        #expect(waiting?.activity == .background)
+        #expect(waiting?.backgroundTaskCount == 2)
+
+        for value in [[], "unexpected", NSNull()] as [Any] {
+            let finished = try decode(["hook_event_name": "Stop", "background_tasks": value])
+            #expect(finished?.activity == .done)
+            #expect(finished?.backgroundTaskCount == nil)
+        }
+        let tool = try decode(["hook_event_name": "PostToolUse", "background_tasks": running])
+        #expect(tool?.activity == .thinking)
+        #expect(tool?.backgroundTaskCount == nil)
+    }
+
     /// 合成载荷：可选字段坏了不能吞掉有效的状态；新增字段也不能影响已有语义。
     @Test func optionalFieldsAreIndependentOfTheLifecycleEvent() throws {
         let cases: [(String, [String: Any], PaneActivity?)] = [

@@ -52,6 +52,17 @@ func captureSidebarVariants(_ controller: TerminalWindowController, panel: Prima
     if let entry = AppState.shared.taskBindings.store.list().tasks.first {
         pane.bind(to: entry.fileURL, name: entry.task.name)
     }
+    // 各活动状态并排，看状态文字在窄宽度与长 pane 名下的排布。
+    let activities: [(PaneActivity, Int?)] = [(.background, 12), (.background, 2), (.thinking, nil), (.attention, nil), (.done, nil)]
+    for (pane, activity) in zip(controller.panes(), activities) {
+        let status = PaneStatus(ts: Date(), state: activity.0, agent: SessionAgent.claude.rawValue,
+                                event: "Stop", backgroundTaskCount: activity.1)
+        PaneStatusDatagram(pane: pane.dragIdentifier, status: status)
+            .send(to: controller.sessionLibrary.statusSocketPath)
+        try waitUntil("fixture status arrives") {
+            controller.sessionLibrary.paneState(for: pane.dragIdentifier)?.status?.state == activity.0
+        }
+    }
     window.setContentSize(NSSize(width: 1180, height: 760))
     window.makeKeyAndOrderFront(nil)
     try waitUntil("sidebar slide finishes") { panel.frame.minX >= ShellStyle.panelInset - 0.5 }

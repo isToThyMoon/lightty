@@ -331,7 +331,7 @@ final class SessionLibrary {
             reconcilePane(id)
             guard let next = runtime.panes[id], let key = next.sessionKey else { continue }
             if next.sessionKey != previous?.sessionKey ||
-                (next.status?.state == .done && next.status != previous?.status) ||
+                ((next.status?.state == .done || next.status?.state == .background) && next.status != previous?.status) ||
                 (next.status?.state == .thinking && previous?.status?.state != .thinking) {
                 invalidateMetadata(for: key)
             }

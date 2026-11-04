@@ -321,6 +321,41 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(received.count, count, "Repeated reads do not publish another change")
     }
 
+    /// 等后台时模型停了，但活没干完：不提醒，算进行中。长驻进程等不到唤醒，到期才转成完成。
+    func testBackgroundWaitIsNotAReminderUntilTheLimit() throws {
+        store.stop()
+        store = PaneStatusStore(socketPath: socketPath, backgroundWaitLimit: 0.5)
+        XCTAssertTrue(store.start())
+        let pane = UUID()
+        attach(pane)
+
+        send(.background, to: pane, event: "Stop")
+        try waitUntil("等后台到达") { self.store.status(for: pane)?.state == .background }
+        XCTAssertNil(store.unreadActivity(for: pane))
+        XCTAssertEqual(store.unreadCount, 0)
+        XCTAssertEqual(store.activeCount, 1)
+        XCTAssertEqual(store.aggregate, .background)
+
+        try waitUntil("到期转完成") { self.store.status(for: pane)?.state == .done }
+        XCTAssertEqual(store.unreadActivity(for: pane), .done)
+    }
+
+    /// 后台结束后 Agent 开了新回合：到期的定时器不能把它改成完成。
+    func testBackgroundWakeSupersedesTheLimit() throws {
+        store.stop()
+        store = PaneStatusStore(socketPath: socketPath, backgroundWaitLimit: 0.2)
+        XCTAssertTrue(store.start())
+        let pane = UUID()
+        attach(pane)
+
+        send(.background, to: pane, event: "Stop")
+        send(.thinking, to: pane, event: "UserPromptSubmit")
+        try waitUntil("唤醒到达") { self.store.status(for: pane)?.state == .thinking }
+        // 否定式断言：压过 0.2 秒的到期窗口
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(store.status(for: pane)?.state, .thinking)
+    }
+
     func testStopUnlinksTheSocketFile() {
         XCTAssertTrue(FileManager.default.fileExists(atPath: socketPath.path))
         store.stop()

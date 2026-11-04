@@ -10,7 +10,20 @@ hook 事件如何推出 Agent 活动状态，终端标题补偿，done / attenti
 | thinking | UserPromptSubmit / PostToolUse / PostToolUseFailure | turn 进行中 |
 | tool | PreToolUse | 正在调用工具 |
 | attention | Notification / PermissionRequest | 需要用户介入 |
-| done | Stop | turn 完成、待用户查看 |
+| background | `background_tasks` 非空的 Stop（目前只有 Claude Code） | turn 已结束，后台工作结束后 Agent 会自己开新回合 |
+| done | `background_tasks` 为空或没有该字段的 Stop；background 超过 30 分钟 | turn 完成、待用户查看 |
+
+## 等待后台
+
+两家都没有这个状态，lightty 从 Claude Code `Stop` 载荷的 `background_tasks` 分出来；`session_crons` 不算。
+background 不提醒、不算未读，展示计入「进行中」。后台工作结束或被杀时，Claude Code 发
+`UserPromptSubmit`（prompt 是 `<task-notification>`），回合结束再发 `Stop`，所以走 thinking → done 正常提醒。
+2.1.318 用 `claude -p` 实测过这条路径；后台 shell 不发 `TaskCompleted`，不能拿它判断结束。
+
+- 长驻进程（如 dev server）永远等不到唤醒，超过 30 分钟转为 done 提醒一次（`PaneStatusStore.backgroundWaitLimit`）。
+  跑得更久的任务因此会多一次提醒，真正结束时还有一次。
+- 后台刚结束、通知还在排队时，`Stop` 的列表可能已经为空：会先到 done，随即被唤醒回到 thinking。
+- Codex 的 `Stop` 没有该字段，一律 done。它的 `thread/backgroundTerminals/list` 是实验接口，lightty 不打开。
 
 ## 终端标题补偿
 

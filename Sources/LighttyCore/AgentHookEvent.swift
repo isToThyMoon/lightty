@@ -10,18 +10,24 @@ public struct AgentHookEvent: Sendable {
     public let detail: String?
     public let workingDirectory: String?
     public let transcriptPath: String?
+    /// Claude Code `Stop` 载荷里 `background_tasks` 的条数：官方定义为在跑的后台工作，
+    /// 用来区分「会话结束」和「暂停等后台唤醒」。定时任务（`session_crons`）不计入。
+    public let backgroundTaskCount: Int?
     private let originalTranscriptPath: String?
 
     /// 可选字段逐个读取，保留旧 helper 的容错：一个可选字段类型变了，不丢整发状态。
     /// 不认识/不需要处理的事件以及无效 JSON 返回 nil。
     public init?(_ data: Data) {
         guard let wire = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let name = Self.string(wire["hook_event_name"]),
-              let activity = PaneActivity(hookEventName: name,
+              let name = Self.string(wire["hook_event_name"]) else { return nil }
+        let backgroundTasks = (wire["background_tasks"] as? [Any])?.count ?? 0
+        guard let activity = PaneActivity(hookEventName: name,
                   notificationType: Self.string(wire["notification_type"]),
-                  interrupted: (wire["is_interrupt"] as? Bool) == true) else { return nil }
+                  interrupted: (wire["is_interrupt"] as? Bool) == true,
+                  backgroundTasks: backgroundTasks) else { return nil }
         self.name = name
         self.activity = activity
+        backgroundTaskCount = activity == .background ? backgroundTasks : nil
         sessionID = Self.string(wire["session_id"])
         tool = Self.string(wire["tool_name"])
         workingDirectory = Self.string(wire["cwd"])

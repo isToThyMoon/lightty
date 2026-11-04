@@ -23,6 +23,7 @@ enum ShellSymbol {
     static let tab = "rectangle.on.rectangle"
     static let collapsedTab = "rectangle.fill.on.rectangle.fill"
     static let newTab = "plus.rectangle.on.rectangle"
+    static let newTabGroup = "plus.rectangle.on.folder"
     static let splitRight = "rectangle.split.2x1"
     static let splitDown = "rectangle.split.1x2"
 }

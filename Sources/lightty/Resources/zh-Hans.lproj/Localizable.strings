@@ -216,6 +216,9 @@
 
 /* agent 状态：侧栏行的状态文字 */
 "Thinking" = "思考中";
+"Waiting" = "等待后台";
+"Waiting · %d" = "等待后台 · %d";
+"Agent is waiting on background work" = "Agent 正在等待后台任务";
 "Working" = "工作中";
 "Needs you" = "待处理";
 "Finished" = "已完成";

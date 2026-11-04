@@ -12,6 +12,10 @@ final class TabPaneStatusPresentationTests: XCTestCase {
             // 需要用户处理与已完成必须分得开
             ("attention", status(.attention), L("Needs you")),
             ("done", status(.done), L("Finished")),
+            // 等后台不能读成已完成，带上数量
+            ("background", PaneStatus(ts: Date(), state: .background, backgroundTaskCount: 2),
+             L("Waiting · %d", 2)),
+            ("background without count", status(.background), L("Waiting")),
             // 空闲没有文案
             ("idle", status(.idle), nil),
         ]

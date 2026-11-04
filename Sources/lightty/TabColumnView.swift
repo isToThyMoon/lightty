@@ -42,6 +42,9 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let newTabButton = ShellIconButton(
         symbol: ShellSymbol.newTab, accessibilityLabel: L("New tab"),
         target: nil, action: nil)
+    private let newGroupButton = ShellIconButton(
+        symbol: ShellSymbol.newTabGroup, accessibilityLabel: L("New tab group"),
+        target: nil, action: nil)
     private let clearTabsButton = ShellIconButton(
         symbol: ShellSymbol.more, accessibilityLabel: L("More actions"), target: nil, action: nil)
     private let scroll = SidebarListScrollView()
@@ -88,6 +91,8 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         splitDownButton.action = #selector(splitDown)
         newTabButton.target = self
         newTabButton.action = #selector(newTab)
+        newGroupButton.target = self
+        newGroupButton.action = #selector(newGroup)
         clearTabsButton.target = self
         clearTabsButton.action = #selector(clearTabs)
 
@@ -106,7 +111,7 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
 
-        for v in [sectionLabel, clearTabsButton, splitRightButton, splitDownButton, newTabButton, scroll] {
+        for v in [sectionLabel, clearTabsButton, splitRightButton, splitDownButton, newTabButton, newGroupButton, scroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -115,9 +120,14 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             // 与第一侧栏的模式切换共享标题带，按钮在带内居中。
             newTabButton.topAnchor.constraint(equalTo: topAnchor,
                 constant: (ShellStyle.SidebarHeader.height - ShellStyle.chromeRowHeight) / 2),
-            newTabButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
+            newTabButton.trailingAnchor.constraint(equalTo: newGroupButton.leadingAnchor, constant: -1),
             newTabButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
             newTabButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+
+            newGroupButton.trailingAnchor.constraint(equalTo: clearTabsButton.leadingAnchor, constant: -1),
+            newGroupButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
+            newGroupButton.widthAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
+            newGroupButton.heightAnchor.constraint(equalToConstant: ShellStyle.chromeRowHeight),
 
             splitDownButton.trailingAnchor.constraint(
                 equalTo: newTabButton.leadingAnchor, constant: -1),
@@ -286,15 +296,15 @@ final class TabColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func clearTabs() {
         let items: [ShellMenuPopover.Item] = [
-            .action(L("New tab group"), symbol: ShellSymbol.project) { [weak self] in
-                self?.presentNewGroupEditor(from: self?.clearTabsButton)
-            },
-            .separator,
             .action(L("Close all tabs in this window"), destructive: true, symbol: ShellSymbol.close) { [weak self] in
                 self?.controller?.requestClearTabs()
             },
         ]
         ShellMenuPopover.present(from: clearTabsButton, items: items)
+    }
+
+    @objc private func newGroup() {
+        presentNewGroupEditor(from: newGroupButton)
     }
 
     private func presentNewGroupEditor(from anchor: NSView?) {
@@ -1854,6 +1864,9 @@ enum TabPaneStatusPresentation {
         switch status.state {
         case .idle: return nil
         case .thinking, .tool: return L("Thinking")
+        case .background:
+            // 行尾很窄，文字一长就把 pane 名挤没了；完整说法在 tooltip。
+            return status.backgroundTaskCount.map { L("Waiting · %d", $0) } ?? L("Waiting")
         case .attention: return L("Needs you")
         case .done: return L("Finished")
         }
@@ -1867,6 +1880,7 @@ enum TabPaneStatusPresentation {
         switch status.state {
         case .thinking: line = L("Agent is thinking")
         case .tool: line = status.tool.map { L("Running %@", $0) } ?? L("Agent is working")
+        case .background: line = L("Agent is waiting on background work")
         case .attention: line = L("Agent needs your input")
         case .done: line = L("Agent finished")
         case .idle: return nil

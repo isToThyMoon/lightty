@@ -143,7 +143,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         switch aggregate {
         case .idle:
             names = ["circle.dashed", "circle.dotted", "circle"]
-        case .thinking, .tool:
+        case .thinking, .tool, .background:
             names = ["ellipsis.circle", "circle"]
         case .done:
             names = ["checkmark.circle.fill", "checkmark.circle"]
@@ -168,7 +168,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         switch aggregate {
         case .attention: count = store.attentionCount
         case .done: count = unread
-        case .thinking, .tool: count = store.activeCount > 1 ? store.activeCount : 0
+        case .thinking, .tool, .background: count = store.activeCount > 1 ? store.activeCount : 0
         case .idle: count = 0
         }
         // 计数走标准图文对齐：给按钮设 font + 普通 title，NSButton 按 symbol
@@ -233,7 +233,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         switch state {
         case .attention: return .attention
         case .done: return .done
-        case .thinking, .tool: return .running
+        case .thinking, .tool, .background: return .running
         case .idle, nil: return .other
         }
     }

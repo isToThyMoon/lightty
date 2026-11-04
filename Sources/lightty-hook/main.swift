@@ -233,7 +233,8 @@ let status = PaneStatus(
     detail: payload.detail,
     cwd: payload.workingDirectory,
     event: event,
-    transcriptPath: payload.transcriptPath
+    transcriptPath: payload.transcriptPath,
+    backgroundTaskCount: payload.backgroundTaskCount
 )
 
 // 一发即走。结果只用于系统诊断：lightty 没在跑（ENOENT）、残留 socket（ECONNREFUSED）、

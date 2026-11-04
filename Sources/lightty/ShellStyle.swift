@@ -221,6 +221,8 @@ enum ShellStyle {
         // 工具与思考共用一个蓝：两者对用户的含义相同（它在干活，不用管），
         // 区分交给呼吸节奏（工具更快）。颜色档位少一个，剩下的橙与品红更跳得出来。
         case .tool: return statusThinking
+        // 等后台也还在跑，同一个蓝；不呼吸，表示模型此刻没在干活。
+        case .background: return statusThinking
         case .attention: return statusAttention
         case .done: return statusDone
         }

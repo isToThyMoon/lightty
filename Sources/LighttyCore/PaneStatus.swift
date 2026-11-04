@@ -12,6 +12,9 @@ public enum PaneActivity: String, Codable, Sendable {
     case thinking
     /// 正在执行工具（PreToolUse）
     case tool
+    /// 回合已结束，但 agent 有后台工作在跑，结束后会自己唤醒（带 `background_tasks` 的 Stop）。
+    /// 不算完成，不提醒。Agent 不给这个状态，是 lightty 从 Stop 的载荷分出来的；Codex 的 Stop 没有该字段。
+    case background
     /// 需要用户介入（PermissionRequest，或请求输入的 Notification）
     case attention
     /// turn 完成且**未读**——唯一的粘滞态，只由 lightty 侧清除
@@ -29,7 +32,8 @@ public enum PaneActivity: String, Codable, Sendable {
     /// 且屏幕上没有任何对话框时发 `idle_prompt`，那只是「还停在提示符上」，不能把已完成
     /// 顶成待处理；登录成功、子 agent 完成、推送这类也只是告知。这些已知的告知类型跳过，
     /// 其余一律算介入：Claude Code 以后新增的类型宁可多提醒，也不能把真卡住的漏掉。
-    public init?(hookEventName event: String, notificationType: String? = nil, interrupted: Bool = false) {
+    public init?(hookEventName event: String, notificationType: String? = nil, interrupted: Bool = false,
+                 backgroundTasks: Int = 0) {
         switch event {
         case "SessionStart", "SessionEnd", "Interrupt": self = .idle
         case "UserPromptSubmit", "PostToolUse": self = .thinking
@@ -39,7 +43,7 @@ public enum PaneActivity: String, Codable, Sendable {
         case "Notification" where notificationType.map(Self.informationalNotificationTypes.contains) == true:
             return nil
         case "Notification", "PermissionRequest": self = .attention
-        case "Stop": self = .done
+        case "Stop": self = backgroundTasks > 0 ? .background : .done
         default: return nil
         }
     }
@@ -82,9 +86,12 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     public let event: String?
     /// hook 载荷里的 `transcript_path`：这段会话的日志文件，输出速度只读不写。旧 hook 不发 → nil。
     public let transcriptPath: String?
+    /// `state == .background` 时在跑的后台工作数。旧 hook 不发 → nil。
+    public let backgroundTaskCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case v, ts, state, agent, tool, detail, cwd, event
+        case backgroundTaskCount = "background_tasks"
         case sessionID = "session_id"
         case sourceRoot = "source_root"
         case sourceConfiguration = "source_configuration"
@@ -105,7 +112,8 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         detail: String? = nil,
         cwd: String? = nil,
         event: String? = nil,
-        transcriptPath: String? = nil
+        transcriptPath: String? = nil,
+        backgroundTaskCount: Int? = nil
     ) {
         self.v = v
         self.ts = ts
@@ -120,6 +128,7 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         self.cwd = cwd
         self.event = event
         self.transcriptPath = transcriptPath
+        self.backgroundTaskCount = backgroundTaskCount
     }
 
     // MARK: - 编解码

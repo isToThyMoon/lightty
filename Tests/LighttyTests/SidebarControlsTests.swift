@@ -58,9 +58,12 @@ final class SidebarControlsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: taskDirectory) }
 
         _ = NSApplication.shared
+        let statusStore = PaneStatusStore(socketPath: URL(fileURLWithPath: "/tmp/lightty-t-\(UInt32.random(in: 0...0xFFFF_FFFF)).sock"))
+        defer { statusStore.stop() }
         let library = SessionLibrary(fileURL: taskDirectory.appendingPathComponent("sessions.json"),
             providers: [SidebarSnapshotCatalog(source: .init(agent: .codex, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path))),
-                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))])
+                        SidebarSnapshotCatalog(source: .init(agent: .claude, root: taskDirectory, executable: "/bin/false", configuration: .custom(taskDirectory.path)))],
+            statusStore: statusStore)
         AppState.shared = AppState(taskDirectory: taskDirectory, sweepStalePanes: false, sessionLibrary: library)
         ensureTerminalRuntime()
 
@@ -180,6 +183,7 @@ final class SidebarControlsTests: XCTestCase {
         XCTAssertEqual(controller.panes().map(\.dragIdentifier), paneIDs)
         XCTAssertTrue(controller.activePane === activePane, "切换资料模式不改变终端现场")
         if let directory = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {
+            XCTAssertTrue(statusStore.start())
             try captureSidebarVariants(controller, panel: taskPanel, directory: URL(fileURLWithPath: directory))
         }
     }

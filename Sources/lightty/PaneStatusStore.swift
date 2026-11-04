@@ -63,9 +63,14 @@ final class PaneStatusStore {
     /// 坏报文只记一次日志：畸形报文往往是成批的（版本不匹配的旧 hook），刷屏没有意义。
     private var loggedMalformed = false
 
+    /// 等后台最多显示多久。后台工作结束时 Agent 会自己开新回合，但 dev server 这类长驻进程
+    /// 永远等不到：过了这个时间按回合完成提醒一次，否则这种回合就再也没有完成提醒了。
+    private let backgroundWaitLimit: TimeInterval
+
     /// `socketPath` 是测试接缝：用例必须绑到临时路径，绝不能碰真实的 `~/.lightty/run`。
-    init(socketPath: URL = PaneRuntimeDirectory.socketPath()) {
+    init(socketPath: URL = PaneRuntimeDirectory.socketPath(), backgroundWaitLimit: TimeInterval = 30 * 60) {
         self.socketPath = socketPath
+        self.backgroundWaitLimit = backgroundWaitLimit
     }
 
     // MARK: - 传输层生命周期
@@ -245,7 +250,17 @@ final class PaneStatusStore {
             transcripts[datagram.pane] = (datagram.status.agent, datagram.status.sessionID, path)
         }
         watchProcess(for: datagram.pane)
+        if datagram.status.state == .background { limitBackgroundWait(datagram.status, in: datagram.pane) }
         postChange(datagram.pane)
+    }
+
+    /// 只有这一发状态还在位才到期：任何新报文（含唤醒的回合）都会换掉它，定时器不用取消。
+    private func limitBackgroundWait(_ waiting: PaneStatus, in pane: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + backgroundWaitLimit) { [weak self] in
+            guard let self, self.statuses[pane] == waiting else { return }
+            self.statuses[pane] = Self.restated(waiting, as: .done)
+            self.postChange(pane)
+        }
     }
 
     private func watchProcess(for pane: UUID) {
@@ -372,11 +387,11 @@ final class PaneStatusStore {
         return statuses.values.reduce(into: 0) { $0 += ($1.state == .done ? 1 : 0) }
     }
 
-    /// 正在跑（thinking/tool）的 pane 数。菜单栏计数用。
+    /// 正在跑（thinking/tool/等后台）的 pane 数。菜单栏计数用。
     var activeCount: Int {
         assertMain()
         return statuses.values.reduce(into: 0) {
-            $0 += ($1.state == .thinking || $1.state == .tool ? 1 : 0)
+            $0 += ($1.state == .thinking || $1.state == .tool || $1.state == .background ? 1 : 0)
         }
     }
 
@@ -388,13 +403,13 @@ final class PaneStatusStore {
 
     /// 菜单栏图标用的聚合态。
     ///
-    /// 优先级 `attention` > `done` > `tool` > `thinking` > `idle`，
+    /// 优先级 `attention` > `done` > `tool` > `thinking` > `background` > `idle`，
     /// 按「要用户做点什么」从强到弱排：`attention` 是卡住了、非人不可；
-    /// `done` 是有结果等着看；`tool`/`thinking` 只表示还活着（`tool` 信息更具体，
+    /// `done` 是有结果等着看；`tool`/`thinking`/`background` 只表示还活着（`tool` 信息更具体，
     /// 排在前面）；都没有才是 `idle`。
     var aggregate: PaneActivity {
         assertMain()
-        for state in [PaneActivity.attention, .done, .tool, .thinking]
+        for state in [PaneActivity.attention, .done, .tool, .thinking, .background]
         where statuses.values.contains(where: { $0.state == state }) {
             return state
         }
@@ -618,7 +633,8 @@ final class PaneStatusStore {
             tool: status.tool,
             detail: status.detail,
             cwd: status.cwd,
-            event: event ?? status.event
+            event: event ?? status.event,
+            backgroundTaskCount: state == .background ? status.backgroundTaskCount : nil
         )
     }
 

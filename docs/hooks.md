@@ -1,6 +1,6 @@
 # Agent 状态 hooks
 
-lightty 让 pane 显示里面的 agent 正在干什么（思考中 / 执行工具 / 需要你 / 已完成），
+lightty 让 pane 显示里面的 agent 正在干什么（思考中 / 执行工具 / 等待后台 / 需要你 / 已完成），
 并在 agent 跑完时提醒你。这一切靠给你已装的 coding agent 注册一个小 helper 实现。
 
 入口：**设置 → 通用 → Agent 状态 hooks → 管理…**。首次启动时若检测到你装了 agent 却没配过，
