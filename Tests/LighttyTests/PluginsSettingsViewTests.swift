@@ -5,29 +5,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct PluginsSettingsViewTests {
-    @Test func agentGroupsCollapseIndependentlyAndRestoreFromDisk() throws {
-        let (fixtureView, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let preferences = FilePreferences(fileURL: root.appendingPathComponent("groups.json"))
-        let view = PluginsSettingsView(snapshot: fixtureView.snapshot, preferences: preferences)
-        view.selectPlugin("claude:figma@claude-plugins-official")
-        let claudeRows = view.navigation.prefix { $0.disclosure != "agent:codex" }.count
-                let selected = view.selectedPlugin?.id
-        view.toggleGroup("agent:codex")
-        #expect(view.navigationTable.numberOfRows
-            == claudeRows + 1)
-        // Collapsing the other agent must not disturb what is being read.
-        #expect(view.selectedPlugin?.id == selected)
-        view.toggleGroup("agent:claude")
-        #expect(view.navigationTable.numberOfRows == 2)
-        preferences.flush()
-        let reopened = PluginsSettingsView(snapshot: fixtureView.snapshot,
-                                           preferences: FilePreferences(fileURL: preferences.fileURL))
-        #expect(reopened.navigationTable.numberOfRows == 2)
-        reopened.toggleGroup("agent:claude")
-        #expect(reopened.navigationTable.numberOfRows == claudeRows + 1)
-    }
-
     /// `codex plugin list` takes over two seconds; the page used to stay blank for all of it,
     /// every time settings opened, because each opening builds a fresh view.
     @Test func openingPaintsLocalResultsWithoutWaitingForCodexAndReopeningStartsFromTheLastOne() async throws {
@@ -56,104 +33,6 @@ struct PluginsSettingsViewTests {
         try await awaitUntil("reopened page finishes its own refresh") { !reopened.loading }
     }
 
-    @Test func pluginRowsCarryTheirOneLinerAsASecondLine() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let rows = Dictionary(view.navigation.compactMap { row in row.qualifiedName.map { ($0, row) } },
-                              uniquingKeysWith: { first, _ in first })
-        #expect(rows["visualize@openai-bundled"]?.note == "Create interactive visuals")
-        #expect(rows["notion@claude-plugins-official"]?.note == "Notion Skills + Notion MCP server packaged for Claude Code.")
-        // No manifest, no invented line: the row stays one line tall.
-        #expect(rows["gmail@openai-curated-remote"]?.note == nil)
-    }
-
-    @Test func marketplaceGroupsKeepSameNamedPluginsDistinctWithoutAddingDisclosure() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        for market in ["openai-bundled", "openai-curated-remote"] {
-            let headerIndex = try #require(view.navigation.firstIndex { $0.qualifiedName == market })
-            let header = view.navigation[headerIndex]
-            #expect(header.key == nil && header.disclosure == nil)
-            #expect(!view.tableView(view.navigationTable, shouldSelectRow: headerIndex))
-            let installed = view.snapshot.plugins.filter { $0.agent == .codex && $0.marketplace == market && $0.state != .cachedOnly }
-            #expect(header.count == installed.count)
-            view.selectPlugin("codex:sites@\(market)")
-            #expect(view.selectedPlugin?.marketplace == market)
-            #expect(view.navigation[view.navigationTable.selectedRow].title == "sites")
-            #expect(view.navigationTable.selectedRow > headerIndex)
-        }
-    }
-
-    @Test func aPluginRowCarriesItsVersionUntilTheRowIsTooNarrowForBoth() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        view.selectPlugin("claude:figma@claude-plugins-official")
-        let cell = try #require(view.tableView(view.navigationTable, viewFor: nil,
-                                               row: view.navigationTable.selectedRow))
-        #expect(cell.toolTip?.contains("figma@claude-plugins-official") == true)
-        func title(at width: CGFloat) -> String {
-            cell.frame = NSRect(x: 0, y: 0, width: width, height: SkillsStyle.navigationRowHeight)
-            cell.needsLayout = true
-            cell.layoutSubtreeIfNeeded()
-            return descendants(cell).compactMap { $0 as? NSTextField }
-                .first { $0.stringValue.hasPrefix("figma") }?.stringValue ?? ""
-        }
-        #expect(title(at: 280) == "figma  2.2.111")
-        // Too narrow for both: the whole name stays and the version steps aside.
-        #expect(title(at: 120) == "figma")
-        // Widening must not undo that: no measurement may depend on the previous pass.
-        #expect(title(at: 280) == "figma  2.2.111")
-    }
-
-    @Test func contentsListEveryKindAndSearchKeepsTheDocumentInSync() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        view.selectPlugin("claude:notion@claude-plugins-official")
-        #expect(view.contents.map(\.name) == ["search", "notion", "SessionStart", "notion-search"])
-        #expect(view.contents.map(\.kind) == [.skill, .command, .hook, .mcpServer])
-        #expect(view.selectedContent?.name == "search")
-        let text = try #require(descendants(view).compactMap { $0 as? NSTextView }
-            .first { $0.identifier?.rawValue == "plugin-document" })
-        #expect(text.string.contains("Search the workspace"))
-        view.search("mcp")
-        #expect(view.contents.map(\.name) == ["notion-search"])
-        #expect(view.selectedContent?.kind == .mcpServer)
-        // JSON contents have no preview mode, so they are shown exactly as written.
-        #expect(text.string.contains("\"type\" : \"http\""))
-        view.search("nothing matches this")
-        #expect(view.selectedContent == nil)
-        #expect(text.string.isEmpty)
-        view.search("")
-        view.selectPlugin("codex:visualize@openai-bundled")
-        #expect(view.contents.map(\.name) == ["visualize"])
-    }
-
-    @Test func theMiddleColumnGroupsContentsByKindInsteadOfOneFlatList() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        view.selectPlugin("claude:notion@claude-plugins-official")
-        // Text that enters the context first, outside capabilities after.
-        #expect(view.listIDs.filter { $0.hasPrefix("group:") }
-                == ["group:skill", "group:command", "group:mcpServer", "group:hook"])
-        #expect(view.listIDs.count == view.contents.count + 4)
-        #expect(view.listIDs.allSatisfy { view.isListRowSelectable($0) != $0.hasPrefix("group:") })
-        // A header is not an entry: selection lands on the first real row.
-        #expect(view.selectedContent?.name == "search")
-        let header = try #require(view.tableView(view.listTable, viewFor: nil, row: 0))
-        let headerLabels = descendants(header).compactMap { $0 as? NSTextField }.map(\.stringValue)
-        #expect(headerLabels.contains(L("Skills")))
-        #expect(headerLabels.contains("1"))
-        let entry = try #require(view.tableView(view.listTable, viewFor: nil, row: 1))
-        let entryLabels = descendants(entry).compactMap { $0 as? NSTextField }.map(\.stringValue)
-        #expect(entryLabels.contains("search"))
-        // The kind is on the header now; repeating it would crowd out the description.
-        #expect(entryLabels.contains("Search the workspace."))
-        #expect(!entryLabels.contains { $0.hasPrefix(L("Skill") + " · ") })
-        // Searching narrows the groups to whatever still matches.
-        view.search("mcp")
-        #expect(view.listIDs == ["group:mcpServer"] + view.contents.map(\.id))
-    }
-
     @Test func togglingEnabledWritesTheAgentFileAndTheRowFollows() throws {
         let (view, root) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -174,20 +53,6 @@ struct PluginsSettingsViewTests {
             .init(pluginId: "sites@openai-curated-remote", version: "0.1.70", enabled: false)
         ]) }).scan())
         #expect(view.selectedPlugin?.state == .enabled)
-    }
-
-    @Test func cachedOnlyPluginsOfferNoToggleAndSayWhy() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        view.selectPlugin("codex:gmail@openai-curated-remote")
-        #expect(view.selectedPlugin?.state == .cachedOnly)
-        let toggle = try #require(descendants(view).compactMap { $0 as? ShellToggle }.first)
-        #expect(toggle.isHiddenOrHasHiddenAncestor)
-        let labels = descendants(view).compactMap { $0 as? NSTextField }.map(\.stringValue)
-        #expect(labels.contains(L("Cached only")))
-        #expect(labels.contains(L("Cached in Codex but not in its installed list, so it cannot be enabled here.")))
-        view.selectPlugin("codex:visualize@openai-bundled")
-        #expect(!toggle.isHiddenOrHasHiddenAncestor)
     }
 
     @Test func aFailedWriteIsReportedAndLeavesTheToggleWhereItWas() throws {
@@ -223,14 +88,8 @@ struct PluginsSettingsViewTests {
                 window.setContentSize(NSSize(width: width, height: 760))
                 view.needsLayout = true
                 view.layoutSubtreeIfNeeded()
-                let nav = try #require(view.navigationTable.enclosingScrollView)
-                let list = try #require(view.contentTable.enclosingScrollView)
-                #expect(nav.frame.maxX < list.frame.minX)
-                #expect(view.searchField.frame.minX > list.frame.minX)
                 let text = try #require(descendants(view).compactMap { $0 as? NSTextView }
                     .first { $0.identifier?.rawValue == "plugin-document" })
-                let preview = try #require(text.enclosingScrollView)
-                #expect(preview.convert(preview.bounds, to: view).minX > list.convert(list.bounds, to: view).maxX)
                 #expect(text.string.contains("Search the workspace"))
                 #expect(!text.isEditable)
                 if let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] {

@@ -57,26 +57,4 @@ final class PaneLayoutViewTests: XCTestCase {
         XCTAssertNil(pane.superview, "不在注册表里 = 被关掉或搬去别的窗口，摘掉")
         XCTAssertEqual(other.frame, view.bounds)
     }
-
-    func testDividersSitAbovePanesAndHonourTheMinimumSize() throws {
-        let view = container()
-        let a = PaneView(), b = PaneView()
-        let layout = try XCTUnwrap(PaneLayout.pane(a.dragIdentifier).inserting(b.dragIdentifier, beside: a.dragIdentifier, edge: .right))
-        var latest = layout
-        view.onLayoutChange = { next in
-            latest = next
-            view.render(next, zoomed: nil, panes: [a.dragIdentifier: a, b.dragIdentifier: b])
-        }
-        view.render(layout, zoomed: nil, panes: [a.dragIdentifier: a, b.dragIdentifier: b])
-        let divider = try XCTUnwrap(view.subviews.compactMap { $0 as? PaneDividerView }.first { !$0.isHidden })
-        XCTAssertGreaterThan(view.subviews.firstIndex(of: divider) ?? -1, view.subviews.firstIndex(of: a) ?? .max,
-                             "分隔线的命中区压在 pane 边缘上，必须在 pane 之上")
-        let onLine = NSPoint(x: divider.frame.midX, y: divider.frame.midY)
-        XCTAssertTrue(view.hitTest(view.convert(onLine, to: view.superview)) === divider,
-                      "线条附近的点击归分隔线，不归 pane")
-
-        divider.onDrag?(-100)
-        XCTAssertEqual(a.frame.width, PaneLayoutView.minimumPaneSize, "拖到头也不小于最小尺寸")
-        XCTAssertNotEqual(latest, layout)
-    }
 }

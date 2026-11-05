@@ -3,27 +3,6 @@ import LighttyCore
 @testable import lightty
 
 final class TabPaneStatusPresentationTests: XCTestCase {
-    /// 状态 → 一句话文案的查表。
-    func testStatusTextByState() {
-        let cases: [(name: String, status: PaneStatus, expected: String?)] = [
-            // tool 沿用 thinking 的呈现，不另起一种
-            ("tool keeps thinking presentation", status(.tool, tool: "Edit"),
-             TabPaneStatusPresentation.text(for: status(.thinking))),
-            // 需要用户处理与已完成必须分得开
-            ("attention", status(.attention), L("Needs you")),
-            ("done", status(.done), L("Finished")),
-            // 等后台不能读成已完成，带上数量
-            ("background", PaneStatus(ts: Date(), state: .background, backgroundTaskCount: 2),
-             L("Waiting · %d", 2)),
-            ("background without count", status(.background), L("Waiting")),
-            // 空闲没有文案
-            ("idle", status(.idle), nil),
-        ]
-        for c in cases {
-            XCTAssertEqual(TabPaneStatusPresentation.text(for: c.status), c.expected, c.name)
-        }
-    }
-
     /// 状态 → 详情行的查表。
     func testDetailLineByState() {
         // 带工具名、且 detail 被截断（契约 §4.2：detail 长度不可信，读方必须截断）

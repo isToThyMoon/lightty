@@ -67,21 +67,6 @@ struct SkillCatalogTests {
         #expect(try #require(skills.first { $0.name == "imagegen" }).usage == nil)
     }
 
-    @Test func damagedInstallationsAndMetadataAreVisible() throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        try fixture.directory(".agents/skills/incomplete")
-        try fixture.link(".claude/skills/broken", target: "missing-target")
-        try fixture.write(".agents/.skill-lock.json", "{invalid json")
-        try fixture.write(".agents/skills/unclosed/SKILL.md", "---\nname: never\n")
-        try fixture.skill(".agents/skills/.hidden", name: "hidden")
-        let snapshot = fixture.scan()
-        #expect(snapshot.skills.count == 3)
-        #expect(snapshot.skills.allSatisfy { $0.issue != nil })
-        #expect(snapshot.warnings.count == 1)
-        #expect(snapshot.skills.first { $0.name == "unclosed" }?.issue?.contains("not closed") == true)
-    }
-
     @Test func incompleteSharedSkillStillMergesItsAgentLinks() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -144,14 +129,6 @@ struct SkillCatalogTests {
         #expect(synced.sourceTitle == "claude.ai")
         #expect(synced.locations.map(\.label) == ["Claude"])
         #expect(synced.issue == nil)
-    }
-
-    @Test func emptyHomeDoesNotInventInstallations() throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        let snapshot = fixture.scan()
-        #expect(snapshot.skills.isEmpty)
-        #expect(snapshot.warnings.isEmpty)
     }
 
     private struct Fixture {

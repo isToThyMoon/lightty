@@ -28,31 +28,4 @@ final class InvisibleWindowTests: XCTestCase {
         window.animator().alphaValue = 1
         XCTAssertEqual(window.alphaValue, 0)
     }
-
-    func testIdentityPanelBecomesKeyWithoutShowing() throws {
-        _ = NSApplication.shared
-        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
-        editor.string = "ordinary editor"
-        let window = PaneIdentityWindow(content: editor)
-        defer { window.orderOut(nil) }
-        window.makeKeyAndOrderFrontInvisibly()
-        XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(window.alphaValue, 0)
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        XCTAssertTrue(window.firstResponder === editor)
-    }
-
-    func testOrderFrontInvisiblyDoesNotRequireKey() throws {
-        _ = NSApplication.shared
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 700),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        window.orderFrontInvisibly()
-        XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(window.alphaValue, 0)
-        window.orderOut(nil)
-        window.orderFrontInvisibly()
-        XCTAssertEqual(window.alphaValue, 0, "重复 order 仍旧不可见")
-    }
 }

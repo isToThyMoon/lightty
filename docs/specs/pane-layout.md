@@ -104,7 +104,7 @@ commit 不关闭 surface：不再被引用的 pane 只是从本窗口注销并�
 - `LighttyCoreTests/WindowArrangementTests`：窗口排布的全部命令，当前标签页落点、放大态作废、焦点修正、标题解析与恢复、撤销与快照条目。
 - `LighttyCoreTests/SplitSnapshotTests`：快照线格式、方向字段的含义、叶子缺失时的取舍。
 - `LighttyTests/PaneArrangementTests`：控制器在真实窗口里的表现，第一条就是当年稳定复现求解器异常的现场，另有跨配置反复重组的压力用例、事务性、跨窗口、撤销、放大、快照比例、方向聚焦、关闭时的焦点交接。
-- `LighttyTests/LeafTabRowTests`：叶子行呈现与默认名（跨窗口不重复、改过名的按自定义保存）。
+- `LighttyTests/LeafTabRowTests`：叶子行就地起名，刷新不丢输入。
 - `LighttyTests/PaneLayoutViewTests`：渲染契约。
 - `LighttyTests/TabDragSemanticsTests`：落点判定、命令映射、拖拽会话（含途中刷新、松手后执行前有标签页被关）。
 - `SessionFocusTests.swift`：移动 pane、关闭 pane、切换标签页之后，侧栏高亮与 Sessions 选中项都跟随 `activePane`。

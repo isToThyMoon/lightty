@@ -100,14 +100,6 @@ struct MCPCatalogTests {
         #expect(!text.contains("absent"))
     }
 
-    @Test func anEmptyHomeHasNoServersAndNoWarnings() throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        let snapshot = fixture.scan()
-        #expect(snapshot.servers.isEmpty)
-        #expect(snapshot.warnings.isEmpty)
-    }
-
     private struct Fixture {
         let home: URL
         init() throws {

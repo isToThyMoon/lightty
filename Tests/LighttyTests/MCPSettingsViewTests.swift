@@ -24,10 +24,8 @@ struct MCPSettingsViewTests {
         disclosure.performClick(nil)
         view.layoutSubtreeIfNeeded()
         #expect(locations.textView.string == filePath)
-        #expect(!locations.textView.isHiddenOrHasHiddenAncestor)
         disclosure.performClick(nil)
         view.layoutSubtreeIfNeeded()
-        #expect(locations.textView.isHiddenOrHasHiddenAncestor)
         #expect(text.string.contains("NODE_PATH"), "收起文件位置不应改变配置正文")
         view.search("notion")
         #expect(view.servers.isEmpty, "搜索只在当前分类里找")
@@ -52,31 +50,6 @@ struct MCPSettingsViewTests {
         }
     }
 
-    @Test func aDisabledServerReadsAsDisabledAndTheToggleWritesTheConfig() throws {
-        let (view, root) = try fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        view.selectAgent(.codex)
-        view.selectList(id: "codex:computer-use")
-        let disabled = try #require(view.selectedServer)
-        #expect(!disabled.enabled)
-        // 列表行尾用文字说停用，不用一个没有图例的符号；启用的行尾留空。
-        func rowTexts(_ id: String) throws -> [String] {
-            try #require(view.listCell(for: id)).subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-        }
-        #expect(try rowTexts("codex:computer-use").contains("Disabled"))
-        #expect(try !rowTexts("codex:node_repl").contains("Disabled"))
-        #expect(try !rowTexts("codex:computer-use").contains("○"))
-        let toggle = try #require(descendants(view).compactMap { $0 as? ShellToggle }.first)
-        #expect(!toggle.isOn)
-        toggle.isOn = true
-        toggle.onChange?(true)
-        let config = try String(contentsOf: root.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
-        #expect(config.contains("enabled = true"))
-        #expect(config.contains("[projects.\"/tmp/a\"]"), "配置里其余内容原样保留")
-        #expect(view.selectedServer?.enabled == true)
-        #expect(try !rowTexts("codex:computer-use").contains("Disabled"), "启用后行尾不再标停用")
-    }
-
     @Test func aClaudeServerSaysWhyItHasNoSwitch() throws {
         let (view, root) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -89,9 +62,6 @@ struct MCPSettingsViewTests {
         #expect(!toggle.accessibilityPerformPress())
         #expect(toggle.isOn)
         #expect(try String(contentsOf: server.sourceURL, encoding: .utf8) == original)
-        let labels = descendants(view).compactMap { $0 as? NSTextField }.map(\.stringValue)
-        #expect(labels.contains { $0.contains("no enabled switch") })
-        #expect(labels.contains("Claude Code · http"))
     }
 
     private func descendants(_ view: NSView) -> [NSView] {

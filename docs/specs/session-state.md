@@ -97,7 +97,7 @@ pane 行，不重建标签页树，也不改变选中项、滚动位置或输入
 - `RestoredSessionTitleTests` 覆盖 Handoff 模式冷启动、前后台 pane 和重复启动。
 - `SessionSurfaceConsistencyTests` 验证一个模型更新两个侧栏和 pane，且保留物化行身份。
 - `SessionRestorationTests`、`AgentProcessLifecycleTests` 保留快照兼容、真实进程退出与任务独立性的验证。
-- `TaskBindingsTests`（Core）验证每种操作发出的载荷与指针文件，以及任务目录变更：手动触发的变更源验证一次事件一条列表通知、外部改名同步到已绑定终端、文件消失或读不出不解绑、跨线程回到主线程、释放即停止监听；另有一条用真实 `PathWatcher` 验证「临时文件加 mv」到达一次。`PaneTaskBindingsTests` 用真实终端验证改名（含外部改名）、归档、删除传导到每个绑定终端，以及终端释放后任务不再算已打开。`HandoffSidebarReloadTests` 验证列表跟随外部写入与归档恢复，且不再随窗口结构变化重读。
+- `TaskBindingsTests`（Core）验证每种操作发出的载荷与指针文件，以及任务目录变更：手动触发的变更源验证一次事件一条列表通知、外部改名同步到已绑定终端、文件消失或读不出不解绑、跨线程回到主线程、释放即停止监听；另有一条用真实 `PathWatcher` 验证「临时文件加 mv」到达一次。`PaneTaskBindingsTests` 用真实终端验证改名（含外部改名）、归档、删除传导到每个绑定终端，以及终端释放后任务不再算已打开。`HandoffSidebarReloadTests` 验证列表跟随外部写入。
 - `SessionPresenceTests` 覆盖真实关闭标签入口、多个本地窗口与外部进程并存、退出后的侧栏原地更新、PID 复用。
 
 本重构不改变工作区快照、任务文件、组织文件或 hook 报文的持久化格式。

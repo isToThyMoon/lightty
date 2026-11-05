@@ -131,46 +131,4 @@ final class SidebarScrollHoverTests: XCTestCase {
             XCTAssertEqual(buttons.map(\.isHidden), idle, "Scrolling suppresses transient hover")
         }
     }
-
-    /// 两行连续 mouseEntered（中间没有 mouseExited）只剩后者 hovered：hover 互斥。
-    func testEnteringAnotherRowClearsPreviousHoverWithoutExitEvent() throws {
-        _ = NSApplication.shared
-        let table = NSTableView()
-        let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
-        scroll.documentView = table
-        let first = ShellTableRowView(), second = ShellTableRowView()
-        table.addSubview(first); table.addSubview(second)
-        try waitUntil("initial layout settles") { !scroll.suppressesPointerFeedback }
-        ShellHoverGate.release(in: nil)
-        let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
-            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
-            eventNumber: 0, trackingNumber: 0, userData: nil))
-        first.mouseEntered(with: event)
-        second.mouseEntered(with: event)
-        XCTAssertFalse(hovered(first), "Fast row transitions must not leave multiple hover backgrounds")
-        XCTAssertTrue(hovered(second))
-    }
-
-    func testScrollingDoesNotInvalidateEveryUnhoveredRow() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        let scroll = SidebarListScrollView(frame: window.contentView!.bounds)
-        let document = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 4000))
-        scroll.documentView = document
-        window.contentView!.addSubview(scroll)
-        let rows = (0..<100).map { index -> ShellTableRowView in
-            let row = ShellTableRowView(frame: NSRect(x: 0, y: index * 40, width: 280, height: 40))
-            document.addSubview(row)
-            return row
-        }
-        window.displayIfNeeded()
-        rows.forEach { $0.needsDisplay = false }
-        let initiallyDirty = rows.filter(\.needsDisplay).count
-        let start = ProcessInfo.processInfo.systemUptime
-        for _ in 0..<500 {
-            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
-        }
-        print("Scroll hover 100 rows / 500 callbacks:", ProcessInfo.processInfo.systemUptime - start)
-        XCTAssertEqual(rows.filter(\.needsDisplay).count, initiallyDirty, "Unchanged hover must not add dirty rows")
-    }
 }

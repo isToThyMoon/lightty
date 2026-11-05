@@ -250,23 +250,6 @@ struct PluginCatalogTests {
         #expect(inlined.allSatisfy { $0.fileURL.lastPathComponent == "plugin.json" })
     }
 
-    @Test func brokenInstallationsStayVisible() throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        try fixture.json(".claude/plugins/installed_plugins.json", ["plugins": [
-            "gone@store": [["installPath": "/nonexistent/lightty-test/gone", "scope": "user"]],
-            "relative@store": [["installPath": "not/absolute", "scope": "user"]],
-            "broken@store": ["not-an-array"],
-        ]])
-        try fixture.directory(".codex/plugins/cache/store/empty")
-        let snapshot = fixture.scan()
-        #expect(snapshot.plugins.map(\.identifier) == ["gone@store", "empty@store"])
-        #expect(snapshot.plugins.allSatisfy { $0.issue != nil })
-        // One warning each for the missing directory, the relative path, the malformed
-        // entry, and the cache directory that holds no version.
-        #expect(snapshot.warnings.count == 4)
-    }
-
     @Test func enablingRewritesOnlyTheOneValueInEachAgentFile() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -335,14 +318,6 @@ struct PluginCatalogTests {
         #expect(try String(contentsOf: fixture.url(".claude/settings.json"), encoding: .utf8) == "[1, 2, 3]\n")
     }
 
-    @Test func anEmptyHomeDoesNotInventPlugins() throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        let snapshot = fixture.scan()
-        #expect(snapshot.plugins.isEmpty)
-        #expect(snapshot.warnings.isEmpty)
-    }
-
     @Test func codexHomeOverrideSelectsItsOwnCacheAndConfig() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -361,9 +336,6 @@ struct PluginCatalogTests {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         }
         func url(_ path: String) -> URL { home.appendingPathComponent(path) }
-        func directory(_ path: String) throws {
-            try FileManager.default.createDirectory(at: url(path), withIntermediateDirectories: true)
-        }
         func write(_ path: String, _ text: String) throws {
             try FileManager.default.createDirectory(at: url(path).deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)

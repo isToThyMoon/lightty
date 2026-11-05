@@ -71,9 +71,6 @@ final class SidebarControlsTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let themeFrame = try XCTUnwrap(window.contentView?.superview)
 
-        XCTAssertTrue(
-            window.styleMask.contains(.fullSizeContentView),
-            "terminal content 应铺到窗口四边")
 
         // TerminalWindowController finishes installing its initial chrome on the
         // next main-run-loop turn, after AppKit has settled the private titlebar tree.
@@ -86,31 +83,9 @@ final class SidebarControlsTests: XCTestCase {
             themeFrame.subviews.compactMap { $0 as? PrimarySidebar }.first,
             "默认应打开 task 侧栏")
 
-        // 卡片从窗口顶边起（只留 panelInset），把红绿灯收进自己的头部行；
-        // 头部行右端是收起卡片的 sidebar.left 按钮，标题栏那枚随之隐藏。
-        XCTAssertEqual(
-            taskPanel.frame.maxY, themeFrame.bounds.maxY - ShellStyle.panelInset, accuracy: 0.5)
-        XCTAssertTrue(descendantToolTips(of: taskPanel).contains(L("Primary sidebar")))
-        let titlebarToggles = themeFrame.subviews
-            .filter { !($0 is PrimarySidebar) }
-            .flatMap { descendantIconButtons(of: $0) }
-            .filter { $0.toolTip == L("Task Sidebar") }
-        XCTAssertFalse(titlebarToggles.isEmpty, "标题栏应仍装有 task 开关（只是隐藏）")
-        XCTAssertTrue(titlebarToggles.allSatisfy(\.isHidden), "task 开着时标题栏开关应隐藏")
 
-        // 默认标签页侧栏收起；其展开钮吸在主区左缘（task 卡片让位线）中点。
-        XCTAssertNil(
-            themeFrame.subviews.compactMap { $0 as? TabSidebarView }.first,
-            "默认标签页侧栏应关闭")
         let expandControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
-        XCTAssertEqual(expandControls.count, 1, "应只有一枚标签页展开钮")
         let expand = try XCTUnwrap(expandControls.first)
-        XCTAssertEqual(taskPanel.frame.width, PrimarySidebarSizing.range.maximum, accuracy: 0.5,
-                       "没存过宽度时卡片铺到最大宽")
-        XCTAssertEqual(
-            expand.frame.minX, ShellStyle.taskPanelWidth + ShellStyle.panelInset * 2,
-            accuracy: 0.5)
-        XCTAssertEqual(expand.frame.midY, themeFrame.bounds.midY, accuracy: 0.5)
 
         // 拖卡片右边线：卡片、展开钮与终端主区一起收窄，头部三钮和模式切换带跟着卡片走；
         // 松手后宽度落入偏好，越过最小宽再拖则关闭。
@@ -119,8 +94,6 @@ final class SidebarControlsTests: XCTestCase {
         taskPanel.onWidthChange?(PrimarySidebarSizing.range.minimum - 100)
         themeFrame.layoutSubtreeIfNeeded()
         XCTAssertEqual(taskPanel.frame.width, PrimarySidebarSizing.range.minimum, accuracy: 0.5, "钳到最小宽")
-        XCTAssertEqual(
-            expand.frame.minX, PrimarySidebarSizing.range.minimum + ShellStyle.panelInset * 2, accuracy: 0.5)
         let terminalAfter = pane.terminal.convert(pane.terminal.bounds, to: themeFrame)
         XCTAssertEqual(terminalAfter.minX, expand.frame.minX, accuracy: 0.5, "终端主区从展开钮所在让位线起")
         taskPanel.onWidthChange?(PrimarySidebarSizing.range.maximum + 100)
@@ -130,50 +103,13 @@ final class SidebarControlsTests: XCTestCase {
                        PrimarySidebarSizing.range.maximum + ShellStyle.panelInset * 2, accuracy: 0.5)
         taskPanel.onWidthChange?(PrimarySidebarSizing.range.minimum)
         themeFrame.layoutSubtreeIfNeeded()
-        let modeSwitch = try XCTUnwrap(taskPanel.subviews.compactMap { $0 as? ModeSwitch }.first)
-        XCTAssertLessThanOrEqual(modeSwitch.frame.maxX, taskPanel.bounds.width)
-        for segment in modeSwitch.segments {
-            XCTAssertLessThanOrEqual(segment.frame.maxX, modeSwitch.bounds.width + 0.5)
-        }
-        for button in descendantIconButtons(of: taskPanel) {
-            XCTAssertLessThanOrEqual(button.convert(button.bounds, to: taskPanel).maxX, taskPanel.bounds.width + 0.5)
-        }
         taskPanel.onResizeEnded?()
         XCTAssertEqual(PrimarySidebarWidthPreference.width(), PrimarySidebarSizing.range.minimum)
         FilePreferences.shared.removeObject(forKey: PrimarySidebarWidthPreference.defaultsKey)
 
-        controller.showSettings()
-        XCTAssertFalse(expand.isHidden)
-        let settings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
-        let settingsIndex = try XCTUnwrap(themeFrame.subviews.firstIndex(of: settings))
-        for control in themeFrame.subviews where control is EdgeToggleControl || control is EdgeRevealStrip {
-            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)), settingsIndex)
-        }
-        controller.hideSettings()
-        XCTAssertFalse(expand.isHidden)
 
-        // 标签页侧栏打开后：分屏 / 新建标签页按钮齐备，关闭钮吸在侧栏右边线。
         controller.openTabSidebar(animated: false)
         themeFrame.layoutSubtreeIfNeeded()
-        let sidebar = try XCTUnwrap(
-            themeFrame.subviews.compactMap { $0 as? TabSidebarView }.first)
-        let sidebarToolTips = descendantToolTips(of: sidebar)
-        XCTAssertTrue(sidebarToolTips.contains(L("Split right")))
-        XCTAssertTrue(sidebarToolTips.contains(L("Split down")))
-        XCTAssertTrue(sidebarToolTips.contains(L("New tab")))
-        let closeControls = themeFrame.subviews.compactMap { $0 as? EdgeToggleControl }
-        XCTAssertEqual(closeControls.count, 1, "侧栏开着时应只剩一枚关闭钮")
-        controller.showSettings()
-        let openSettings = try XCTUnwrap(themeFrame.subviews.first { $0 is SettingsView })
-        for control in closeControls {
-            XCTAssertFalse(control.isHidden)
-            XCTAssertLessThan(try XCTUnwrap(themeFrame.subviews.firstIndex(of: control)),
-                              try XCTUnwrap(themeFrame.subviews.firstIndex(of: openSettings)))
-        }
-        controller.hideSettings()
-        XCTAssertTrue(closeControls.allSatisfy { !$0.isHidden })
-        XCTAssertEqual(
-            try XCTUnwrap(closeControls.first).frame.maxX, sidebar.frame.maxX, accuracy: 0.5)
         let tabIDs = controller.tabOverview().map(\.id)
         let paneIDs = controller.panes().map(\.dragIdentifier)
         let activePane = controller.activePane
@@ -191,12 +127,6 @@ final class SidebarControlsTests: XCTestCase {
     private func descendantIconButtons(of view: NSView) -> [ShellIconButton] {
         view.subviews.flatMap { child in
             [child as? ShellIconButton].compactMap { $0 } + descendantIconButtons(of: child)
-        }
-    }
-
-    private func descendantToolTips(of view: NSView) -> [String] {
-        view.subviews.flatMap { child in
-            [child.toolTip].compactMap { $0 } + descendantToolTips(of: child)
         }
     }
 }

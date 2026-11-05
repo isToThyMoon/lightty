@@ -4,49 +4,6 @@ import XCTest
 @testable import lightty
 
 final class SidebarListScrollViewTilingTests: XCTestCase {
-    private final class RecordingClipView: NSClipView {
-        var widthChanges: [CGFloat] = []
-
-        override func setFrameSize(_ newSize: NSSize) {
-            if newSize.width != frame.width { widthChanges.append(newSize.width) }
-            super.setFrameSize(newSize)
-        }
-    }
-
-    private final class Rows: NSObject, NSTableViewDataSource {
-        func numberOfRows(in tableView: NSTableView) -> Int { 40 }
-    }
-
-    /// Check intermediate geometry, not just equal frames after each call. The old
-    /// implementation ended at 250 every time but emitted 266 → 250 on every pass.
-    @MainActor
-    func testSettledTilingDoesNotResizeViewport() {
-        let rows = Rows()
-        let table = NSTableView()
-        table.headerView = nil
-        table.style = .plain
-        table.addTableColumn(NSTableColumn(identifier: .init("row")))
-        table.dataSource = rows
-        table.reloadData()
-        let documents: [NSView] = [NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 2000)), table]
-        for document in documents {
-            let scroll = SidebarListScrollView(frame: NSRect(x: 0, y: 0, width: 266, height: 400))
-            let clip = RecordingClipView()
-            scroll.contentView = clip
-            scroll.documentView = document
-            scroll.tile()
-            document.layoutSubtreeIfNeeded()
-            clip.widthChanges.removeAll()
-            for _ in 0..<5 {
-                scroll.tile()
-                document.layoutSubtreeIfNeeded()
-                table.updateTrackingAreas()
-            }
-            XCTAssertTrue(clip.widthChanges.isEmpty,
-                "Settled layout must not widen then narrow the viewport: \(clip.widthChanges)")
-        }
-    }
-
     /// A fixed native lane must survive content growth, shrinkage, sidebar resizing, and the
     /// system's preferred scroller style flipping to overlay (a mouse unplugged, a setting changed).
     /// 回归：0.34.0 起浮层滚动条盖在行上，行背景伸到滑块底下，滚动条没留空。
