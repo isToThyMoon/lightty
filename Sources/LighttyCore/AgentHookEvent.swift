@@ -13,6 +13,8 @@ public struct AgentHookEvent: Sendable {
     /// Claude Code `Stop` 载荷里 `background_tasks` 的条数：官方定义为在跑的后台工作，
     /// 用来区分「会话结束」和「暂停等后台唤醒」。定时任务（`session_crons`）不计入。
     public let backgroundTaskCount: Int?
+    /// 这些后台工作的 `id`。状态报文有 4KB 上限，只带前 32 个。
+    public let backgroundTaskIDs: [String]?
     private let originalTranscriptPath: String?
 
     /// 可选字段逐个读取，保留旧 helper 的容错：一个可选字段类型变了，不丢整发状态。
@@ -28,6 +30,9 @@ public struct AgentHookEvent: Sendable {
         self.name = name
         self.activity = activity
         backgroundTaskCount = activity == .background ? backgroundTasks : nil
+        backgroundTaskIDs = activity == .background
+            ? ((wire["background_tasks"] as? [[String: Any]]) ?? []).prefix(32).compactMap { Self.string($0["id"]) }
+            : nil
         sessionID = Self.string(wire["session_id"])
         tool = Self.string(wire["tool_name"])
         workingDirectory = Self.string(wire["cwd"])

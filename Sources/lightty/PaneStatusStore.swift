@@ -66,6 +66,8 @@ final class PaneStatusStore {
     /// 等后台最多显示多久。后台工作结束时 Agent 会自己开新回合，但 dev server 这类长驻进程
     /// 永远等不到：过了这个时间按回合完成提醒一次，否则这种回合就再也没有完成提醒了。
     private let backgroundWaitLimit: TimeInterval
+    /// 每个 pane 上一次 `Stop` 时在跑的后台工作，见 `settlingBackgroundWait`。
+    private var knownBackgroundTasks: [UUID: (session: String?, ids: Set<String>)] = [:]
 
     /// `socketPath` 是测试接缝：用例必须绑到临时路径，绝不能碰真实的 `~/.lightty/run`。
     init(socketPath: URL = PaneRuntimeDirectory.socketPath(), backgroundWaitLimit: TimeInterval = 30 * 60) {
@@ -243,15 +245,29 @@ final class PaneStatusStore {
                 return // A late tool hook cannot reopen a turn the daemon has closed.
             }
         }
-        if statuses[datagram.pane] != datagram.status { readAttention.remove(datagram.pane) }
+        let status = settlingBackgroundWait(datagram.status, in: datagram.pane)
+        if statuses[datagram.pane] != status { readAttention.remove(datagram.pane) }
         diagnose(.accepted)
-        statuses[datagram.pane] = datagram.status
+        statuses[datagram.pane] = status
         if let path = datagram.status.transcriptPath {
             transcripts[datagram.pane] = (datagram.status.agent, datagram.status.sessionID, path)
         }
         watchProcess(for: datagram.pane)
-        if datagram.status.state == .background { limitBackgroundWait(datagram.status, in: datagram.pane) }
+        if status.state == .background { limitBackgroundWait(status, in: datagram.pane) }
         postChange(datagram.pane)
+    }
+
+    /// 只有本回合新启动的后台工作才算在等。早就开着的 monitor、dev server 和这一轮问答无关，
+    /// 回合结束时要照常完成并提醒，否则用户永远等不到「已完成」。
+    /// 重启后没有记录，第一发按新的算，由 `limitBackgroundWait` 兜底。
+    private func settlingBackgroundWait(_ status: PaneStatus, in pane: UUID) -> PaneStatus {
+        guard status.event == "Stop" else { return status }
+        let known = knownBackgroundTasks[pane]
+        let ids = Set(status.backgroundTaskIDs ?? [])
+        knownBackgroundTasks[pane] = (status.sessionID, ids)
+        guard status.state == .background, !ids.isEmpty,
+              known?.session == status.sessionID, ids.isSubset(of: known?.ids ?? []) else { return status }
+        return Self.restated(status, as: .done)
     }
 
     /// 只有这一发状态还在位才到期：任何新报文（含唤醒的回合）都会换掉它，定时器不用取消。
@@ -340,6 +356,7 @@ final class PaneStatusStore {
         settledCodex.removeValue(forKey: paneID)
         submittedPanes.remove(paneID)
         transcripts.removeValue(forKey: paneID)
+        knownBackgroundTasks.removeValue(forKey: paneID)
         let hadStatus = statuses.removeValue(forKey: paneID) != nil
         PaneRuntimeDirectory.destroy(paneID: paneID.uuidString)
         if hadStatus { postChange(paneID) }
@@ -634,7 +651,8 @@ final class PaneStatusStore {
             detail: status.detail,
             cwd: status.cwd,
             event: event ?? status.event,
-            backgroundTaskCount: state == .background ? status.backgroundTaskCount : nil
+            backgroundTaskCount: state == .background ? status.backgroundTaskCount : nil,
+            backgroundTaskIDs: state == .background ? status.backgroundTaskIDs : nil
         )
     }
 

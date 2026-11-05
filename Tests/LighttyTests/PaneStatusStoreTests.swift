@@ -340,6 +340,35 @@ final class PaneStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.unreadActivity(for: pane), .done)
     }
 
+    /// 监视任务开着时照常对答：回合结束是「已完成」，只有本回合新启动的任务才算在等。
+    /// 回归：一个长驻 monitor 让每次问答结束都显示等待后台，用户收不到完成提醒。
+    func testOnlyTasksStartedThisTurnCountAsWaiting() throws {
+        let pane = UUID()
+        attach(pane)
+        func stop(_ ids: [String], session: String = "s1") throws -> PaneActivity? {
+            send(.thinking, to: pane, event: "UserPromptSubmit")
+            try waitUntil("回合开始") { self.store.status(for: pane)?.state == .thinking }
+            PaneStatusDatagram(pane: pane, status: PaneStatus(
+                ts: Date(), state: ids.isEmpty ? .done : .background, agent: "claude", sessionID: session,
+                event: "Stop", backgroundTaskCount: ids.isEmpty ? nil : ids.count,
+                backgroundTaskIDs: ids.isEmpty ? nil : ids)).send(to: socketPath)
+            try waitUntil("回合结束") { self.store.status(for: pane)?.state != .thinking }
+            return store.status(for: pane)?.state
+        }
+        let cases: [(ids: [String], session: String, expected: PaneActivity, why: String)] = [
+            (["monitor"], "s1", .background, "本回合启动，Agent 在等它"),
+            (["monitor"], "s1", .done, "下一轮普通问答：任务早就在跑，照常完成"),
+            (["monitor", "build"], "s1", .background, "这一轮又启动了新任务"),
+            (["monitor"], "s1", .done, "新任务结束后唤醒的回合，只剩旧任务"),
+            ([], "s1", .done, "全部结束"),
+            (["monitor"], "s1", .background, "结束后再次启动同 id 也算新的"),
+            (["monitor"], "s2", .background, "换了会话，记录不沿用"),
+        ]
+        for c in cases {
+            XCTAssertEqual(try stop(c.ids, session: c.session), c.expected, c.why)
+        }
+    }
+
     /// 后台结束后 Agent 开了新回合：到期的定时器不能把它改成完成。
     func testBackgroundWakeSupersedesTheLimit() throws {
         store.stop()

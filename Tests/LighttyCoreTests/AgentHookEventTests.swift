@@ -14,6 +14,7 @@ struct AgentHookEventTests {
         let waiting = try decode(["hook_event_name": "Stop", "background_tasks": running])
         #expect(waiting?.activity == .background)
         #expect(waiting?.backgroundTaskCount == 2)
+        #expect(waiting?.backgroundTaskIDs == ["a", "b"])
 
         for value in [[], "unexpected", NSNull()] as [Any] {
             let finished = try decode(["hook_event_name": "Stop", "background_tasks": value])

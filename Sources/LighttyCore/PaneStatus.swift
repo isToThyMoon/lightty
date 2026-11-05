@@ -88,10 +88,14 @@ public struct PaneStatus: Codable, Sendable, Equatable {
     public let transcriptPath: String?
     /// `state == .background` 时在跑的后台工作数。旧 hook 不发 → nil。
     public let backgroundTaskCount: Int?
+    /// 这些后台工作的 `id`。store 比对上一次 `Stop`，分辨本回合新启动的和早就在跑的。
+    /// 旧 hook 不发 → nil，读方按「都是新的」处理。
+    public let backgroundTaskIDs: [String]?
 
     enum CodingKeys: String, CodingKey {
         case v, ts, state, agent, tool, detail, cwd, event
         case backgroundTaskCount = "background_tasks"
+        case backgroundTaskIDs = "background_task_ids"
         case sessionID = "session_id"
         case sourceRoot = "source_root"
         case sourceConfiguration = "source_configuration"
@@ -113,7 +117,8 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         cwd: String? = nil,
         event: String? = nil,
         transcriptPath: String? = nil,
-        backgroundTaskCount: Int? = nil
+        backgroundTaskCount: Int? = nil,
+        backgroundTaskIDs: [String]? = nil
     ) {
         self.v = v
         self.ts = ts
@@ -129,6 +134,7 @@ public struct PaneStatus: Codable, Sendable, Equatable {
         self.event = event
         self.transcriptPath = transcriptPath
         self.backgroundTaskCount = backgroundTaskCount
+        self.backgroundTaskIDs = backgroundTaskIDs
     }
 
     // MARK: - 编解码
