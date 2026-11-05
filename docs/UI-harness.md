@@ -16,16 +16,7 @@
 
 ## 基础语义
 
-[ShellStyle](../Sources/lightty/ShellStyle.swift) 是壳层 token 入口。优先按用途选择，而不是寻找恰好等值的常量。
-
-| 类别 | 选择依据 |
-| --- | --- |
-| 文字 | `Font.listTitle` 用于资料条目，`groupTitle` 用于树容器，`body` 用于普通正文/终端叶子名称，`section` 用于分组标题。`caption` / `captionStrong` 是元信息，`hint` 是说明，`count` 是数量。`compactTitle` / `compactBody` 留给 terminal 身份行与紧凑面板；`statusEmphasis` 表达需要注意的状态。 |
-| 文字颜色 | `primaryText` 为主要内容，`secondaryText` 为说明，`tertiaryText` 为较弱的辅助信息。颜色层级与字号层级独立选择。 |
-| 表面与状态 | `sidebarBackground` / `titlebarBackground` 为壳层底色，`raisedSurface` 为浮起面；`controlFill`、`inputFill` 对应控件与输入区域。hover、pressed、selection 各有已有 token。浮卡里需要成段归组的连续行（Sessions 的已打开会话）用 `trayFill` 凹托：比 `raisedSurface` 暗一档，整段一块、不加框线，每行画自己那一截（行框含行间空隙，首尾收圆角），挪行动画时随行滑动；托内 hover / 选中照常叠画并缩进一圈。 |
-| 导航与活动 | `activeContainerFill` / `activeItemFill` 区分所在容器与当前终端（当前终端为实心导航色，前景取 `onNavigationAccent`）；`navigationAccent` 表达位置，`accent` 表达控件强调。任务绑定与 agent 活动通过 `dotColor` / `statusColor` 取色，避免混同导航与活动状态。 |
-| 间距 | `textLineGap` 属于同一文本块，`inlineGap` 属于相邻元素，`rowVerticalInset` 是行内留白，`listRowGap` 是行间留白。`sidebarHorizontalInset`、`sectionInset`、`chromeGap` 分别服务于行内容、分组内容和 chrome 区块。 |
-| 尺寸与圆角 | `chromeRowHeight` 是工具栏/终端头部的共同模数；`listActionSize` 是侧栏行内操作（⋯、✕、详情）的统一热区，字形大小另取、不随热区放大。第二侧栏的行比热区高，⋯ / ✕ 的可点范围再扩到整行高、✕ 延伸到行的右缘，字形仍在 `listActionSize` 槽位里；行尾按钮浮在铺到行尾的标题上，命中时显示着的按钮优先。`panelCornerRadius`、`rowCornerRadius`、`compactRowCornerRadius`、`controlCornerRadius`、`capsuleCornerRadius` 按容器角色选择。 |
+token 的值和选择依据见 [DESIGN.md](../DESIGN.md)，壳层 token 入口是 [ShellStyle](../Sources/lightty/ShellStyle.swift)。
 
 两级侧栏的模式/标题带共用 `ShellStyle.SidebarHeader`，对齐头部中心和列表起点；第一侧栏的模式说明放在 tooltip 与空状态，不常驻占一行。第一侧栏保留浮卡的外框与阴影，窗口外轮廓由系统负责。行内更多操作在悬停、键盘聚焦或菜单打开时显示，操作槽位始终保留。
 
@@ -40,8 +31,6 @@
 不加卡片或边框，不占终端内容区域；没有读数时不显示数字，精灵静止。它的动画只表示 Agent 正在生成，
 不表示服务器健康，也不随速度加速。隐藏 / 遮挡时停轮询（失焦仍跟随当前 pane），减少动态效果时不播放动画。
 数据边界见 [输出速度方案](specs/output-speed.md)。
-
-Terminal 的前景、背景、透明度和终端字体由 Ghostty 拥有；壳层 token 不覆盖这些配置。胶囊以终端前景派生弱化文字及 hover 色，状态点仍共享应用语义。动态 `NSColor` 转为 layer 的 `CGColor` 后，参考 `ShellBackdropView` 在外观变化时重新解析。
 
 ## 分组与嵌套
 

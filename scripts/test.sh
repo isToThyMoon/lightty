@@ -3,6 +3,7 @@
 # 用法：scripts/test.sh [swift-test-filter]
 #   成功：一行 PASS（XCTest / Swift Testing 数量、耗时、日志路径）+ 跳过用例清单
 #   失败：失败用例及其 file:line 错误、编译错误、崩溃时的日志尾部，最后是日志路径
+#   超时：默认 600 秒（含编译，LIGHTTY_TEST_TIMEOUT 可改），算失败，并列出卡住的用例
 # 会清掉从 lightty 窗格继承来的 LIGHTTY_PANE_ID / LIGHTTY_SOCK（否则测试行为异常）。
 # filter 匹配到 0 个用例同样视为失败。
 set -euo pipefail
@@ -21,7 +22,7 @@ if [ -n "$FILTER" ]; then ARGS=(--filter "$FILTER"); fi
 
 START=$SECONDS
 set +e
-swift test ${ARGS[@]+"${ARGS[@]}"} >"$LOG" 2>&1
+"$ROOT/scripts/with-timeout.sh" "${LIGHTTY_TEST_TIMEOUT:-600}" swift test ${ARGS[@]+"${ARGS[@]}"} >"$LOG" 2>&1
 STATUS=$?
 set -e
 ELAPSED=$((SECONDS - START))
@@ -103,6 +104,12 @@ if status == 0 and total > 0 and not failed:
     sys.exit(0)
 
 print(f"FAIL: {nfail} failing test(s), {xc_total} XCTest + {st_total} Swift Testing run, {elapsed}s, swift test exit {status}")
+if status == 124:
+    started = re.findall(r"Test Case '-\[(\S+ \S+)\]' started", text) + re.findall(r"^◇ Test (.+?) started", text, re.M)
+    ended = re.findall(r"Test Case '-\[(\S+ \S+)\]' (?:passed|failed|skipped)", text) + re.findall(r"^[✔✘➜↩] Test (.+?) (?:passed|failed|skipped)", text, re.M)
+    stuck = [t for t in started if t not in ended]
+    print(f"TIMEOUT: killed after {elapsed}s. Stuck in: {', '.join(stuck) or 'build or before the first test'}")
+    print("  Hangs in ghostty_surface_free: see docs/testing.md#终端运行时与-surface")
 if total == 0 and status == 0:
     print(f"No tests matched filter '{flt}'." if flt else "No tests were run.")
 for n in order:

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 交付前的一条命令：build -> tests -> terminal adapter parity -> localization -> docs drift。
+# 交付前的一条命令：build -> tests -> terminal adapter parity -> localization -> ui tokens -> docs drift。
 # 用法：scripts/check.sh
 # 每步一行状态（✓/✗），build 失败即停止；其余步骤失败后继续，最后汇总并以非零退出。
 # 不含 check-config-parity.sh（它会迁移用户真实的 ~/.lightty 数据）。
@@ -14,10 +14,13 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 echo "→ build"
-if swift build >"$SCRATCH/build.log" 2>&1; then
+scripts/with-timeout.sh "${LIGHTTY_BUILD_TIMEOUT:-900}" swift build >"$SCRATCH/build.log" 2>&1
+BUILD_STATUS=$?
+if [ "$BUILD_STATUS" -eq 0 ]; then
     echo "✓ build"
 else
     echo "✗ build"
+    [ "$BUILD_STATUS" -eq 124 ] && echo "TIMEOUT: swift build killed after ${LIGHTTY_BUILD_TIMEOUT:-900}s"
     sed 's/\x1b\[[0-9;]*m//g' "$SCRATCH/build.log" | grep -E '^/.*: error:|^error:' | sort -u | head -40
     echo "FAIL: build failed (stopped; tests and checks not run)"
     exit 1
@@ -41,6 +44,7 @@ run_step() {
 run_step tests scripts/test.sh
 run_step terminal-adapter-parity scripts/check-terminal-adapter-parity.sh
 run_step localization python3 scripts/check-localization.py
+run_step ui-tokens python3 scripts/check-ui-tokens.py
 run_step docs python3 scripts/check-docs.py
 
 if [ ${#FAILED[@]} -eq 0 ]; then

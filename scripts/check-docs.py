@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SKIP_DIRS = {"vendor", ".build", "node_modules", ".git"}
-ENTRY_FILES = {"AGENTS.md", "CLAUDE.md", "CONTEXT.md", "docs/agent-dependencies.md", "docs/UI-harness.md", "docs/testing.md"}
+ENTRY_FILES = {"AGENTS.md", "CLAUDE.md", "CONTEXT.md", "DESIGN.md", "docs/agent-dependencies.md", "docs/UI-harness.md", "docs/testing.md"}
 ENTRY_DIRS = (".claude/", ".agents/", "docs/agent-dependencies/")
 PATH_PREFIXES = ("Sources/", "Tests/", "scripts/", "docs/")
 # 运行期产物 / 不在仓库里的目录，路径检查不适用。
