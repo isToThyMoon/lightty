@@ -134,31 +134,278 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertEqual(picked?.lastPathComponent, expectedTask)
     }
 
-    /// 还没绑任务时，面板一打开就把列表摊开；已经绑了就保持两行。
-    func testTaskListOpensOnItsOwnOnlyWhenNoTaskIsBound() {
-        _ = NSApplication.shared
-        for (taskName, expectsOpen) in [(String?.none, true), (.some("Some task"), false)] {
-            let panel = PaneIdentityPanel()
-            panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
-                                 height: PaneIdentityPanel.maxHeight)
-            panel.taskProvider = {
-                [.init(name: "Some task", fileURL: URL(fileURLWithPath: "/tmp/t.md"),
-                       running: false, current: taskName != nil)]
-            }
-            panel.update(paneName: "Terminal", taskName: taskName, dot: .systemGray, agent: nil)
-            panel.expandTaskListForFirstUse()
-            XCTAssertEqual(panel.currentIslandHeight > PaneIdentityPanel.baseHeight,
-                           expectsOpen, "taskName = \(String(describing: taskName))")
+    /// 任务选择器的路径：无论绑没绑都能作为入口打开；esc 从入口进来时直接回终端，
+    /// 从详情态进来时只退回详情态。
+    func testEscLeavesThePickerAccordingToHowItWasOpened() throws {
+        for asEntryPoint in [true, false] {
+            let (panel, search, _) = try makeTaskList(openWith: { asEntryPoint ? $0.openTaskPicker() : $0.toggleTaskList() })
+            var dismissed = 0
+            panel.onDismiss = { dismissed += 1 }
+            _ = panel.control(search, textView: NSTextView(),
+                              doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+            XCTAssertFalse(panel.isTaskListOpen)
+            XCTAssertEqual(dismissed, asEntryPoint ? 1 : 0)
         }
     }
 
-    /// 行只看「点了没」，不看事件内容——但 `NSEvent()` 是个空壳，构造一个真的更稳。
+    /// 回车绑定高亮行、⌘回车新建；输入与已有任务模糊匹配时也必须能新建。
+    /// 真实按键走字段编辑器：⌘回车没有默认命令，漏处理就是按了没反应。
+    func testPartialMatchStillAllowsCreatingANewTask() throws {
+        let (panel, search, _) = try makeTaskList()
+        let window = PaneIdentityWindow(content: panel)
+        defer { window.orderOut(nil) }
+        window.makeKeyAndOrderFrontInvisibly()
+        panel.focusInitialField()
+        filter("Task 1", panel: panel, search: search)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.string = "Task 1"
+
+        var bound: URL?, created: String?, dismissed = 0
+        panel.onBindTask = { bound = $0 }
+        panel.onCreateTask = { created = $0 }
+        panel.onDismiss = { dismissed += 1 }
+        let commandReturn = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        NSApp.sendEvent(commandReturn)
+
+        XCTAssertEqual(created, "Task 1")
+        XCTAssertNil(bound)
+        XCTAssertEqual(dismissed, 1, "选定后回到终端")
+    }
+
+    /// 没有匹配时普通回车就是新建。
+    func testReturnCreatesWhenNothingMatches() throws {
+        let (panel, search, _) = try makeTaskList()
+        filter("zzz", panel: panel, search: search)
+        var created: String?
+        panel.onCreateTask = { created = $0 }
+        _ = panel.control(search, textView: NSTextView(),
+                          doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertEqual(created, "zzz")
+    }
+
+    func testChoicesRankByRelevanceToThisTerminal() {
+        func choice(_ name: String, _ folder: String, nearby: Bool = false) -> PaneIdentityPanel.TaskChoice {
+            .init(name: name, fileURL: URL(fileURLWithPath: "/tmp/\(name).md"), running: false, current: false,
+                  directory: "/work/\(folder)", nearby: nearby)
+        }
+        let choices = [choice("alpha", "web"), choice("beta", "api", nearby: true), choice("gamma", "alpha-app")]
+        let cases: [(query: String, expected: [String], why: String)] = [
+            ("", ["beta", "alpha", "gamma"], "无输入：此目录的任务提前，其余保持最近更新序"),
+            ("alpha", ["alpha", "gamma"], "名字命中排在目录命中之前"),
+            ("api", ["beta"], "可以按目录搜到任务"),
+            ("work", [], "只匹配末级目录，否则路径前缀让什么都能搜到"),
+        ]
+        for c in cases {
+            XCTAssertEqual(PaneIdentityPanel.rank(choices, query: c.query).map(\.name), c.expected, c.why)
+        }
+    }
+
+    /// 选择器开着时详情让位；关上后回来。Agent 写回后 update 带来新摘要。
+    func testDetailShowsTheHandoffAndYieldsToThePicker() {
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth, height: PaneIdentityPanel.maxHeight)
+        var summary = "First summary"
+        panel.taskDetailProvider = { .init(directory: "/work/app", updated: "1h", summary: summary) }
+        panel.taskProvider = { [] }
+        panel.update(paneName: "Terminal", taskName: "Bound", dot: .systemGray, agent: nil)
+        func visibleTexts() -> [String] {
+            panel.descendants.filter { !$0.isHiddenOrHasHiddenAncestor }.compactMap { ($0 as? NSTextField)?.stringValue }
+        }
+        XCTAssertTrue(visibleTexts().contains("First summary"))
+
+        panel.toggleTaskList()
+        XCTAssertFalse(visibleTexts().contains("First summary"))
+        panel.toggleTaskList()
+
+        summary = "Updated by agent"
+        panel.update(paneName: "Terminal", taskName: "Bound", dot: .systemGray, agent: nil)
+        XCTAssertTrue(visibleTexts().contains("Updated by agent"))
+    }
+
+    /// 胶囊两块点击区分流，任务区收窄时只收文字、不消失（否则入口又藏起来了）。
+    func testCapsuleRoutesClicksAndKeepsTheTaskEntryWhenNarrow() throws {
+        _ = NSApplication.shared
+        ensureTerminalRuntime()
+        let header = PaneHeaderView()
+        header.title = "Terminal"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView?.addSubview(header)
+        header.frame = NSRect(x: 0, y: 0, width: 600, height: PaneHeaderView.height)
+        header.layoutSubtreeIfNeeded()
+        XCTAssertEqual(header.taskChipText, L("Task"))
+
+        var opened: [String] = []
+        header.onTaskChipTapped = { opened.append("chip") }
+        header.onIdentityTapped = { opened.append("name") }
+        header.dispatchTap(atWindowPoint: header.taskChipCenterInWindow)
+        let dot = NSPoint(x: header.capsuleFrame.minX + PaneIdentityMetrics.dotLeading, y: header.capsuleFrame.midY)
+        header.dispatchTap(atWindowPoint: header.convert(dot, to: nil))
+        XCTAssertEqual(opened, ["chip", "name"])
+
+        header.setTaskName("A rather long task name that cannot fit")
+        header.frame.size.width = 90
+        header.layoutSubtreeIfNeeded()
+        XCTAssertEqual(header.taskChipText, "", "窄时只留图标")
+        opened = []
+        header.dispatchTap(atWindowPoint: header.taskChipCenterInWindow)
+        XCTAssertEqual(opened, ["chip"], "窄到只剩图标也能点")
+    }
+
+    /// 侧栏「绑定到当前终端」：目标是活动终端，已绑着这个任务时不提供。
+    func testSidebarBindTargetIsTheActivePaneUnlessAlreadyBound() throws {
+        _ = NSApplication.shared
+        ensureTerminalRuntime()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bind-target-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let previous = AppState.shared
+        defer { AppState.shared = previous }
+        AppState.shared = AppState(taskDirectory: root, sweepStalePanes: false)
+        let pane = PaneView()
+        let controller = TerminalWindowController(initialPane: pane)
+        defer { controller.window?.close() }
+        let first = try AppState.shared.taskBindings.store.create(name: "First", workdir: "/tmp")
+        let second = try AppState.shared.taskBindings.store.create(name: "Second", workdir: "/tmp")
+        XCTAssertNil(HandoffSidebarContent.bindTarget(for: first.fileURL, in: nil), "没有窗口就没有目标")
+        XCTAssertTrue(HandoffSidebarContent.bindTarget(for: first.fileURL, in: controller) === pane)
+
+        pane.bind(to: first.fileURL, name: "First")
+        XCTAssertNil(HandoffSidebarContent.bindTarget(for: first.fileURL, in: controller))
+        XCTAssertTrue(HandoffSidebarContent.bindTarget(for: second.fileURL, in: controller) === pane, "换绑其他任务")
+    }
+
+    /// 看外观用：scripts/snapshot.sh PaneIdentityPanelTests/testCaptureSnapshots
+    func testCaptureSnapshots() throws {
+        guard let path = ProcessInfo.processInfo.environment["LIGHTTY_UI_SNAPSHOT_DIR"] else { return }
+        _ = NSApplication.shared
+        ensureTerminalRuntime()
+        let directory = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        func save(_ view: NSView, _ name: String) throws {
+            view.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent(name + ".png"))
+        }
+        var windows: [NSWindow] = []
+        defer { windows.forEach { $0.orderOut(nil) } }
+        let now = Date()
+        let choices: [PaneIdentityPanel.TaskChoice] = [
+            .init(name: "mobile 开发", fileURL: URL(fileURLWithPath: "/tmp/a.md"), running: true, current: false,
+                  directory: "/work/foodmaxapp", updated: now, nearby: true),
+            .init(name: "检查搜索页键盘遮挡与商卡 title 对齐的很长任务名", fileURL: URL(fileURLWithPath: "/tmp/b.md"), running: false, current: true,
+                  directory: "/work/foodmaxapp", updated: now.addingTimeInterval(-7200), nearby: true),
+            .init(name: "backend-java 领域语言学习", fileURL: URL(fileURLWithPath: "/tmp/c.md"), running: false, current: false,
+                  directory: "/work/backend-java-service-with-long-name", updated: now.addingTimeInterval(-172800)),
+            .init(name: "lightty 优化", fileURL: URL(fileURLWithPath: "/tmp/d.md"), running: false, current: false,
+                  directory: "/work/lightty", updated: now.addingTimeInterval(-259200)),
+        ]
+        let summary = "**现状 (2026-09-21 核实)**：main 在 `dd674ed`，与 origin 同步\n\n1. **等用户真机验证通知改动**（v0.20.2 里已包含，尚未验收，这一行故意写得很长看折行效果）\n   - 同一个 pane 连着完成两次 → 通知中心里只剩最新一条。\n2. **`RefreshButtonTests.customGlyphRendersLikeNative`** 偶发失败\n3. 通知相关\n4. 第四项\n5. 第五项\n6. 第六项"
+        for (appearanceName, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let aqua = NSAppearance(named: appearance)
+            func makePanel(task: String?, knownAgent: Bool = true) -> (PaneIdentityPanel, NSView) {
+                let panel = PaneIdentityPanel()
+                panel.appearance = aqua
+                panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth, height: PaneIdentityPanel.maxHeight)
+                panel.taskProvider = { choices }
+                panel.taskDetailProvider = { .init(directory: "/Users/example/project/foodmaxapp", updated: "2 小时前", summary: summary) }
+                panel.handoffActionProvider = { knownAgent ? .ready : nil }
+                panel.update(paneName: "搜索结果页商卡 title 对齐", taskName: task, dot: .systemGreen, agent: .claude)
+                panel.onIslandHeightChange = { [weak panel] height in
+                    guard let panel else { return }
+                    panel.applyIslandFrame(PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: height), duration: 0)
+                }
+                panel.applyIslandFrame(PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: panel.currentIslandHeight), duration: 0)
+                let backdrop = NSView(frame: panel.bounds.insetBy(dx: -16, dy: -16))
+                backdrop.appearance = aqua
+                backdrop.wantsLayer = true
+                backdrop.layer?.backgroundColor = (appearance == .aqua ? NSColor.white : NSColor(white: 0.13, alpha: 1)).cgColor
+                panel.frame.origin = NSPoint(x: 16, y: 16)
+                backdrop.addSubview(panel)
+                // 文字量度依赖窗口的 backing，离屏量出来的宽度和绘制对不上。
+                let window = NSWindow(contentRect: backdrop.bounds, styleMask: .borderless,
+                                      backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = backdrop
+                window.orderFrontRegardless()
+                windows.append(window)
+                return (panel, backdrop)
+            }
+            let (detail, detailHost) = makePanel(task: "mobile 开发")
+            _ = detail
+            try save(detailHost, "identity-detail-\(appearanceName)")
+            let (_, noAgentHost) = makePanel(task: "lightty 优化", knownAgent: false)
+            try save(noAgentHost, "identity-detail-no-agent-\(appearanceName)")
+
+            let (picker, pickerHost) = makePanel(task: "mobile 开发")
+            picker.openTaskPicker()
+            try save(pickerHost, "identity-picker-\(appearanceName)")
+            let search = try XCTUnwrap(picker.descendants.compactMap { $0 as? NSTextField }
+                .first { $0.placeholderAttributedString?.string == L("Search name or folder, or type a new name") })
+            filter("mobile", panel: picker, search: search)
+            try save(pickerHost, "identity-picker-query-\(appearanceName)")
+
+            for (name, width, task, title) in [
+                ("wide-bound", 900.0, "mobile 开发", "搜索结果页商卡 title 对齐"),
+                ("wide-unbound", 900.0, nil, "Terminal 3"),
+                ("mid-long", 420.0, "检查搜索页键盘遮挡与商卡 title 对齐", "ai-search-service 和 image-audit 接口日志查询"),
+                ("narrow", 170.0, "mobile 开发", "ai-search-service 和 image-audit"),
+            ] as [(String, CGFloat, String?, String)] {
+                let header = PaneHeaderView()
+                header.appearance = aqua
+                header.applyTerminalTheme(background: appearance == .aqua ? .white : NSColor(white: 0.13, alpha: 1),
+                                          foreground: appearance == .aqua ? .black : .white)
+                header.frame = NSRect(x: 0, y: 0, width: width, height: PaneHeaderView.height)
+                header.sessionAgent = .claude
+                header.title = title
+                header.setTaskName(task)
+                let window = NSWindow(contentRect: header.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView?.addSubview(header)
+                window.orderFrontRegardless()
+                windows.append(window)
+                try save(header, "capsule-\(name)-\(appearanceName)")
+            }
+        }
+    }
+
+    /// 按钮在 mouseUp 触发，落点要在按钮里。
     private func click(_ view: NSView) throws {
-        let event = try XCTUnwrap(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: .zero, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
-            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-        view.mouseDown(with: event)
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        view.mouseDown(with: try event(.leftMouseDown))
+        view.mouseUp(with: try event(.leftMouseUp))
+    }
+
+    /// 摘要是预览：去标记符、去空行、限行数。Agent 写的 handoff 动辄几十行，
+    /// 不限就会把岛体撑出面板，底部按钮被裁掉。
+    func testHandoffSummaryIsAPlainBoundedPreview() {
+        let markdown = "**现状**：main 在 `dd674ed`\n\n## Next\n1. **`Foo.bar` 未验证**\n" + (2...30).map { "\($0). item" }.joined(separator: "\n")
+        let text = HandoffSummaryText.attributed(markdown, font: ShellStyle.Font.compactBody, color: .labelColor).string
+        let lines = text.components(separatedBy: "\n")
+        XCTAssertEqual(lines.count, HandoffSummaryText.maximumLines)
+        XCTAssertEqual(lines[0], "现状：main 在 dd674ed")
+        XCTAssertEqual(lines[1], "1. Foo.bar 未验证")
+        XCTAssertEqual(HandoffSummaryText.attributed("a **b `c", font: ShellStyle.Font.compactBody, color: .labelColor).string,
+                       "a **b `c", "配不上对的标记保留原文")
+
+        _ = NSApplication.shared
+        let panel = PaneIdentityPanel()
+        panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth, height: PaneIdentityPanel.maxHeight)
+        let wrapping = String(repeating: "很长的一行摘要会折行 ", count: 200)
+        panel.taskDetailProvider = { .init(directory: "/work", updated: "1h", summary: wrapping) }
+        panel.handoffActionProvider = { .ready }
+        panel.update(paneName: "Terminal", taskName: "Bound", dot: .systemGray, agent: .claude)
+        XCTAssertLessThanOrEqual(panel.currentIslandHeight, PaneIdentityPanel.maxHeight)
     }
 
     /// 「让 Agent 总结」在第一层，点一次胶囊就能看到、不必先展开任务列表。
@@ -321,7 +568,7 @@ final class PaneIdentityPanelTests: XCTestCase {
         XCTAssertTrue(hoverRects.allSatisfy { $0.contains(point) }, "\(hoverRects) vs capsule \(header.capsuleFrame)")
     }
 
-    private func makeTaskList() throws -> (PaneIdentityPanel, NSTextField, NSScrollView) {
+    private func makeTaskList(openWith open: (PaneIdentityPanel) -> Void = { $0.toggleTaskList() }) throws -> (PaneIdentityPanel, NSTextField, NSScrollView) {
         _ = NSApplication.shared
         let panel = PaneIdentityPanel()
         panel.frame = NSRect(x: 0, y: 0, width: PaneIdentityPanel.panelWidth,
@@ -332,10 +579,10 @@ final class PaneIdentityPanelTests: XCTestCase {
                                 running: false, current: false) }
         }
         panel.layoutSubtreeIfNeeded()
-        panel.toggleTaskList()
+        open(panel)
         panel.layoutSubtreeIfNeeded()
         let search = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSTextField }
-            .first { $0.placeholderAttributedString?.string == L("Search, or type a new task name and press Return") })
+            .first { $0.placeholderAttributedString?.string == L("Search name or folder, or type a new name") })
         let scroll = try XCTUnwrap(panel.descendants.compactMap { $0 as? NSScrollView }.first)
         return (panel, search, scroll)
     }

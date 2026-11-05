@@ -250,6 +250,7 @@ final class PaneView: NSView {
         }
 
         header.onIdentityTapped = { [weak self] in self?.toggleIdentityPanel() }
+        header.onTaskChipTapped = { [weak self] in self?.toggleTaskPicker() }
         // ✕ 走内核关闭流程（与 cmd+W 同路），最终回到 close_surface_cb
         header.onCloseRequested = { [weak self] in self?.terminal.requestCloseFromUser() }
         // 进程对账归窗口控制器的关闭入口，所有关闭路径只做一次。
@@ -275,6 +276,9 @@ final class PaneView: NSView {
             name: .lighttySessionLibraryDidChange, object: sessionLibrary)
         NotificationCenter.default.addObserver(self, selector: #selector(taskBindingsDidChange(_:)),
             name: .lighttyTaskBindingsDidChange, object: taskBindings)
+        // Agent 写回 handoff 时，展开着的灵动岛要显示新摘要。
+        NotificationCenter.default.addObserver(self, selector: #selector(tasksDidChange),
+            name: .lighttyTasksDidChange, object: nil)
     }
 
     deinit {
@@ -319,6 +323,8 @@ final class PaneView: NSView {
         refreshIdentityPanel()
         onMetadataChange?(self)
     }
+
+    @objc private func tasksDidChange() { refreshIdentityPanel() }
 
     /// 建档写入的 `cwd` = 任务创建现场。首选 shell 的 OSC PWD：agent 全屏期间
     /// 它「停」在最后一次提示符的目录——正是用户敲 `claude` 的地方，即 agent
@@ -390,6 +396,22 @@ final class PaneView: NSView {
         }
     }
 
+    /// 胶囊任务区与 keybind 的共同入口：没开就连同选择器一起展开；开着但在详情态就切到
+    /// 选择器；选择器已开就收起。
+    func toggleTaskPicker() {
+        guard let panel = identityPanel else {
+            showIdentityPanel(openingTaskPicker: true)
+            return
+        }
+        if panel.isTaskListOpen {
+            dismissIdentityPanel()
+            focusTerminal()
+        } else {
+            panel.openTaskPicker()
+            panel.focusInitialField()
+        }
+    }
+
     /// 形变展开（灵动岛式）：面板从胶囊 frame 生长到展开尺寸，内容渐显；
     /// 收起反向缩回。frame 驱动动画，不用 Auto Layout 钉面板位置。
     /// 岛体在面板内的 rect：顶边恒对齐面板顶边，高度 h（非翻转坐标）。
@@ -397,7 +419,7 @@ final class PaneView: NSView {
         PaneIdentityMorphGeometry.expandedIslandFrame(in: panel.bounds, height: height)
     }
 
-    private func showIdentityPanel() {
+    private func showIdentityPanel(openingTaskPicker: Bool = false) {
         let panel = PaneIdentityPanel()
         // 第一行显示的是「有会话就用会话标题」，所以改的也应该是会话名——否则用户
         // 打了个名字、存进了终端名，却被会话标题盖住，看不见。没有 hook、显示的是 agent
@@ -414,6 +436,8 @@ final class PaneView: NSView {
         panel.taskProvider = { [weak self] in
             guard let self else { return [] }
             let current = self.taskFileURL?.standardizedFileURL
+            let directory = self.terminal.currentWorkingDirectory ?? self.sessionState.status?.cwd
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
             return self.taskBindings.store.list().tasks
                 .sorted { $0.task.updated > $1.task.updated }
                 .map { entry in
@@ -422,7 +446,13 @@ final class PaneView: NSView {
                         fileURL: entry.fileURL,
                         running: !self.taskBindings.panes(for: entry.fileURL)
                             .subtracting([self.dragIdentifier]).isEmpty,
-                        current: current == entry.fileURL.standardizedFileURL)
+                        current: current == entry.fileURL.standardizedFileURL,
+                        directory: entry.task.workdir,
+                        updated: entry.task.updated,
+                        nearby: directory.map {
+                            TaskDirectoryMatch.isRelated(
+                                taskDirectory: entry.task.workdir, terminalDirectory: $0, home: home)
+                        } ?? false)
                 }
         }
         panel.onBindTask = { [weak self] url in
@@ -444,6 +474,11 @@ final class PaneView: NSView {
             }
         }
         panel.onUnbindTask = { [weak self] in self?.unbind() }
+        panel.onOpenTaskDocument = { [weak self] in
+            guard let url = self?.taskFileURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        panel.taskDetailProvider = { [weak self] in self?.currentTaskDetail() }
         // 送没送出去要如实回给面板：pane 没了当没送出去，面板会重建那一行而不是关掉列表。
         panel.onUpdateHandoff = { [weak self] in self?.updateHandoff() ?? false }
         panel.handoffActionProvider = { [weak self] in
@@ -457,15 +492,6 @@ final class PaneView: NSView {
                 // 而且那点宽度正是标题需要的（面板只有 272 宽）。
                 : .blocked(reason: L("Busy"))
         }
-        panel.onTaskRenameCommit = { [weak self] name in
-            guard let self, let url = self.taskFileURL else { return }
-            do {
-                try self.taskBindings.renameTask(at: url, to: name)
-            } catch {
-                NSSound.beep()
-                NSLog("task rename failed: \(error)")
-            }
-        }
         panel.onDismiss = { [weak self] in
             self?.dismissIdentityPanel()
             self?.focusTerminal()
@@ -474,7 +500,7 @@ final class PaneView: NSView {
             background: GhosttyRuntime.shared.configValues.backgroundColor,
             foreground: header.terminalForeground)
         refresh(panel: panel)
-        panel.expandTaskListForFirstUse()
+        if openingTaskPicker { panel.openTaskPicker() }
 
         // 面板挂到窗口 contentView（所有 split 之上）：挂在 pane 里会被
         // clipsToBounds 和相邻 pane 的更高兄弟层级裁剪/遮盖。
@@ -493,6 +519,9 @@ final class PaneView: NSView {
         // 起点与胶囊逐像素同构：岛体就是胶囊那块矩形，内容被裁得只剩胶囊里那一行。
         panel.setIdentityAnchorOffset(collapsedFrame.minX)
         panel.applyIslandFrame(collapsedFrame, duration: 0)
+        if let chip = header.taskChipSnapshot() {
+            panel.installTaskChipGhost(chip.image, frameInCapsule: chip.frame)
+        }
 
         hostWindow.addChildWindow(identityWindow, ordered: .above)
         identityWindow.makeFirstResponder(identityWindow)
@@ -506,6 +535,7 @@ final class PaneView: NSView {
         }
         panel.layoutSubtreeIfNeeded()
         header.setCapsuleHidden(true)
+        panel.fadeTaskChipGhost(visible: false, duration: 0.14)
         panel.applyIslandFrame(
             islandRect(in: panel, height: panel.currentIslandHeight), duration: 0.24
         ) { [weak self, weak panel] in
@@ -545,6 +575,7 @@ final class PaneView: NSView {
         // End field editing before shrinking; the field editor is window-owned.
         window.makeFirstResponder(nil)
         panel.setIdentityAnchorOffset(islandEnd.minX)
+        panel.fadeTaskChipGhost(visible: true, duration: 0.18)
         panel.applyIslandFrame(islandEnd, duration: 0.18) { [weak self, weak window] in
             // 缩回到位后瞬时交接回胶囊（第一行同构，标题不闪）
             if self?.identityPanel == nil { self?.header.setCapsuleHidden(false) }
@@ -558,6 +589,18 @@ final class PaneView: NSView {
     private func refreshIdentityPanel() {
         guard let panel = identityPanel else { return }
         refresh(panel: panel)
+    }
+
+    /// 岛体详情：读绑定任务的文件。文件暂时读不出来时只显示任务行，不影响绑定（见 task-format）。
+    private func currentTaskDetail() -> PaneIdentityPanel.TaskDetail? {
+        guard let url = taskFileURL, let task = try? taskBindings.store.load(at: url) else { return nil }
+        let summary = LaunchComposer.summarize(task.body)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .drop { $0.hasPrefix("## ") || $0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: "\n")
+        return .init(directory: task.workdir,
+                     updated: RelativeTime.text(task.updated, localize: { L($0) }),
+                     summary: summary)
     }
 
     private func refresh(panel: PaneIdentityPanel) {

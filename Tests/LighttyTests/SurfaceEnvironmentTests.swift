@@ -54,6 +54,35 @@ final class SurfaceEnvironmentTests: XCTestCase {
         }
     }
 
+    /// 焦点在分组外的 pane 上，新标签页也要落在分组最后一个 pane 的目录。
+    /// 走真 shell：core 继承的目录来自 shell 集成报的 OSC 7。
+    func testNewTabInGroupStartsInTheGroupsLastPaneDirectory() throws {
+        func pane(in name: String) throws -> PaneView {
+            let path = directory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            var configuration = TerminalSurfaceConfiguration()
+            configuration.workingDirectory = path.path
+            return PaneView(surfaceConfiguration: configuration)
+        }
+        let focused = try pane(in: "focused"), last = try pane(in: "last")
+        let controller = TerminalWindowController(initialPane: focused)
+        try withExtendedLifetime(controller) {
+            controller.addTab(initialPane: last, select: false)
+            let tab = try XCTUnwrap(controller.tabOverview().first { $0.panes.contains { $0 === last } }).id
+            controller.createSidebarGroup(containing: tab, named: "g")
+            let group = try XCTUnwrap(controller.sidebarGroups().first).id
+            try waitUntil("both shells report their directory", timeout: 15) {
+                focused.terminal.currentWorkingDirectory != nil && last.terminal.currentWorkingDirectory != nil
+            }
+
+            controller.addTab(toGroup: group)
+
+            let created = try XCTUnwrap(controller.panes().last)
+            XCTAssertFalse(created === last)
+            XCTAssertEqual(created.terminal.launchConfiguration.workingDirectory?.hasSuffix("/last"), true)
+        }
+    }
+
     private struct DumpedEnvironment {
         let paneID: UUID
         let lines: [String]

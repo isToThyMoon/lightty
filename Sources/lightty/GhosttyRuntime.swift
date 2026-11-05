@@ -786,9 +786,15 @@ final class GhosttyRuntime {
         case GHOSTTY_ACTION_EXPORT_TERMINAL_IO:
             return false
 
+        // lightty 没有 Ghostty.app 的命令面板，这个 keybind（默认 cmd+shift+p，可在 config 改绑）
+        // 给任务选择器：它是壳层最高频的键盘入口，也不必为此给 core 加新 action。
+        case GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE:
+            guard let (_, pane) = locate() else { return false }
+            DispatchQueue.main.async { pane.toggleTaskPicker() }
+            return true
+
         // 这些是 Ghostty.app 自己的产品壳功能。
-        case GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
-             GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
+        case GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
              GHOSTTY_ACTION_CHECK_FOR_UPDATES:
             return false
 

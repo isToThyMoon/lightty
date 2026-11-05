@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyKit
 import LighttyCore
 
 /// 标签页默认名（「标签页 N」）的序号源，跨窗口共享：标签页是语义单元、窗口只是
@@ -577,8 +578,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
         close(panes: Set(panes))
     }
 
+    /// 新标签页跟着分组走：从分组最后一个 pane 继承 cwd/font，而不是当前焦点 pane。
+    /// 不传继承配置时，core 会回落到它记录的焦点 surface（`apprt/surface.zig` 的 `newConfig`）。
     func addTab(toGroup groupID: UUID) {
-        let pane = PaneView()
+        let source = arrangement.lastPane(inGroup: groupID).flatMap { paneRegistry[$0]?.terminal.surface }
+        let pane = PaneView(surfaceConfiguration: source.map {
+            TerminalSurfaceConfiguration(inheriting: $0, context: GHOSTTY_SURFACE_CONTEXT_TAB)
+        } ?? .init())
         install(pane: pane)
         guard let next = arrangement.appendingTab(
             UUID(), layout: .pane(pane.dragIdentifier), title: .numbered(tabNumbering.upcoming),

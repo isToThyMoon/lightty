@@ -128,11 +128,19 @@
 
 /* 灵动岛 */
 "Name this terminal" = "命名这个终端";
-"Search, or type a new task name and press Return" = "搜索或新建任务";
+"Search name or folder, or type a new name" = "搜索任务名或目录，或输入新任务名";
+"Choose or create a task (default shortcut ⇧⌘P)" = "选择或新建任务（默认快捷键 ⇧⌘P）";
+"Bind to current terminal" = "绑定到当前终端";
+"This folder" = "此目录";
+"Other folders" = "其他目录";
+"Open document" = "打开文档";
+"↩ Bind · esc Close" = "↩ 绑定 · esc 关闭";
+"↩ Bind · ⌘↩ New · esc Close" = "↩ 绑定 · ⌘↩ 新建 · esc 关闭";
+"↩ New · esc Close" = "↩ 新建 · esc 关闭";
+"esc Close" = "esc 关闭";
 "Task" = "任务";
 "Not set" = "未选择";
 "Choose task" = "选择任务";
-"Rename this task…" = "重命名这个任务…";
 "Rename session…" = "重命名会话…";
 "Rename session" = "重命名会话";
 "Enter a session name." = "请输入会话名。";

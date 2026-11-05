@@ -20,6 +20,7 @@
 
 ## Handoff 模式的归档与搜索
 
+- 任务行「⋯」菜单提供「绑定到当前终端」，目标是当前窗口的活动终端；它已绑着这个任务时不显示。另一条路径是终端胶囊的任务区，见 [UI harness](../UI-harness.md)。
 - 首次成功归档任务时提示可在设置里找回或彻底删除（`handoffArchiveNoticeShown`）；失败不消耗这次提示。已归档任务的恢复与彻底删除在设置的 Handoff 页，见 [Handoff 设置页](handoff-settings.md)。
 - 任务搜索（`SearchPaletteView`）右侧保留正文滚动预览，下方嵌入 `LaunchComposer` 的 Agent、已打开位置、目的地与启动按钮；默认新标签页，回车优先前往已打开位置，否则按当前选择启动。启动区独立滚动，最多占预览区 70%，长正文或多个已打开位置不遮住控件。
 

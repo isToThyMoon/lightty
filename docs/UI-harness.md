@@ -31,6 +31,8 @@
 
 两级侧栏的列表由 AppKit 原生常驻滚动条预留独立槽位；内容区尺寸只由系统布局计算，不在 `tile()` 后手工收窄。长列表的轨道可点击翻页，短列表的空槽仍可用于拖动侧栏边线。
 
+身份胶囊分两块可点区域：点 pane 名展开灵动岛的详情态（改名、绑定任务的目录与更新时间、handoff 摘要、让 Agent 总结、打开文档、解除绑定）；点右侧任务区（未绑定「+ 任务」，已绑定任务名与箭头，窄时收成图标但不消失）直接进任务选择器。选择器也响应 `toggle_command_palette`（默认 ⇧⌘P，可在 Ghostty config 改绑）。选择器把与终端当前目录相关的任务排在前面（`TaskDirectoryMatch`），搜索匹配任务名和目录末级；有输入就常驻新建行，回车绑定高亮行，⌘回车新建；选定后岛体收起回到终端。第一行与胶囊的名字部分逐像素同构；任务区在形变时用位图淡出，不参与同构。
+
 两级侧栏共享颜色与文字角色，允许列表密度不同。第一侧栏多行列表与第二侧栏紧凑树行的行高、缩进和操作区域不必相同。`PaneIdentityMetrics` 则同时服务胶囊与展开面板，它们的身份行需要保持同构。
 
 第二侧栏底部固定一行（`chromeRowHeight`）承载 `AgentOutputMeterView`：按 Agent 取形象的像素精灵（`AgentSpec.sprite`，原创致敬图案，品牌色固定、通用精灵跟随次级文字色）与当前终端 Agent 最近几次请求的输出速度。
@@ -87,6 +89,7 @@ Terminal 的前景、背景、透明度和终端字体由 Ghostty 拥有；壳�
 | Sessions 会话行菜单 | `PrimarySidebarTests/testMoveToRecentMenu` | `session-menu-*` |
 | Sessions 列表（项目与会话行、展开 / 收起） | `PrimarySidebarTests/testRapidDisclosure` | `disclosure-*` |
 | Sessions 会话搜索 | `PrimarySidebarTests/testProjectsCollapse` | `session-search.png` |
+| 身份胶囊（宽 / 窄 / 长文本）、灵动岛详情态与任务选择器 | `PaneIdentityPanelTests/testCaptureSnapshots` | `capsule-*`、`identity-*`，明暗各一套 |
 | 设置：MCP / Skills / Plugins | `MCPSettingsViewTests` / `SkillsSettingsViewTests` / `PluginsSettingsViewTests` | 各页明暗与状态 |
 
 截图时测试窗口会短暂上屏。`PrimarySidebarTests` 写在 `SessionCatalogTests.swift` 里，过滤按类名。新区域要截图时，在该区域的场景测试里按 `LIGHTTY_UI_SNAPSHOT_DIR` 分支加一张，并补进上表。

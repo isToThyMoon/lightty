@@ -25,6 +25,18 @@ final class WindowArrangementTests: XCTestCase {
 
     // MARK: - 构造与查询
 
+    /// 看标签页顺序和分屏树序，不看当前选中项；没有成员的分组没有答案。
+    func testLastPaneInGroupFollowsTabAndTreeOrder() throws {
+        let group = UUID(), splitPane = UUID()
+        let grouped = try XCTUnwrap(four(active: t3)
+            .creatingGroup(group, title: "g", containing: t0)?
+            .movingTab(t1, intoGroup: group))
+        XCTAssertEqual(grouped.lastPane(inGroup: group), b)
+        let split = try XCTUnwrap(grouped.insertingPane(splitPane, beside: b, edge: .right))
+        XCTAssertEqual(split.lastPane(inGroup: group), splitPane)
+        XCTAssertNil(split.lastPane(inGroup: UUID()))
+    }
+
     func testInitFallsBackToTheFirstTabAndStaysWellFormed() {
         XCTAssertEqual(four().activeTabID, t0)
         XCTAssertEqual(four(active: UUID()).activeTabID, t0, "不在列表里的当前标签页不算数")

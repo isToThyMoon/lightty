@@ -315,6 +315,13 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
 
+    /// 「绑定到当前终端」的目标：当前窗口的活动终端；它已经绑着这个任务时没有可做的事。
+    static func bindTarget(for fileURL: URL, in controller: TerminalWindowController?) -> PaneView? {
+        guard let pane = controller?.activePane,
+              pane.taskFileURL?.standardizedFileURL != fileURL.standardizedFileURL else { return nil }
+        return pane
+    }
+
     // MARK: - 行「⋯」菜单（自绘气泡；纯管理动作，跳转走单击气泡/双击）
 
     @objc private func showRowMenu(_ sender: NSButton) {
@@ -340,6 +347,12 @@ final class HandoffSidebarContent: NSView, NSTableViewDataSource, NSTableViewDel
             },
             .separator,
         ]
+        if let pane = Self.bindTarget(for: entry.fileURL, in: AppState.shared.keyWindowController) {
+            items.append(.action(L("Bind to current terminal"), symbol: "link") { [weak pane] in
+                pane?.bind(to: entry.fileURL, name: entry.task.name)
+            })
+            items.append(.separator)
+        }
         // 状态不提供手动修改也不展示：活跃/休眠由 pane 绑定派生；
         // 文件 status 字段已弃用（见 docs/task-format.md）。
         items.append(.action(L("Open handoff document"), symbol: "doc.text") {

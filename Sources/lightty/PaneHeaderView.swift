@@ -17,10 +17,126 @@ enum PaneIdentityMetrics {
     static let iconGap: CGFloat = 4
 }
 
-/// 每 pane 一条 chromeRowHeight 高的 header：身份胶囊（状态点 + pane 名 [+ 任务名]）。
-/// 胶囊是唯一常驻身份对象（灵动岛式）：点击向下展开
-/// PaneIdentityPanel 编辑 pane 名 / 查看与操作任务；宽度富余时任务名以次要色
-/// 并入胶囊，窄时只剩点 + pane 名，信息由展开面板承载。
+/// 胶囊右侧的任务区：未绑定显示「+ 任务」，已绑定显示任务名和箭头，窄时只剩图标。
+/// 点击落点由 `PaneHeaderView.mouseDown` 判定（header 的 hitTest 把点击都收给自己，
+/// 拖动才能从胶囊任意位置开始）；这里只管外观与 hover。
+final class PaneTaskChip: NSView {
+    static let compactWidth: CGFloat = 18
+    private static let textInset: CGFloat = 7
+    private static let iconSlot: CGFloat = 12
+    private static let chevronSlot: CGFloat = 11
+    /// NSTextField 单行文字两侧的固有内边距，量文字时要算上，否则刚好放不下。
+    private static let labelPadding: CGFloat = 5
+
+    let label = NSTextField(labelWithString: "")
+    private let divider = NSView()
+    private let icon = NSImageView()
+    private let chevron = NSImageView()
+    private var labelLeading: NSLayoutConstraint!
+    private var chevronWidth: NSLayoutConstraint!
+    private var taskName: String?
+    private var compact = false
+    private var foreground = NSColor.white
+    private var hovered = false { didSet { applyFill() } }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = ShellStyle.capsuleCornerRadius
+        divider.wantsLayer = true
+        label.font = ShellStyle.Font.caption
+        label.lineBreakMode = .byTruncatingTail
+        // 低于 pane 名（249）：长任务名不能撑大 pane 的最小宽度，宽度由 taskChipWidth 决定。
+        label.setContentCompressionResistancePriority(.init(rawValue: 248), for: .horizontal)
+        chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 7, weight: .semibold))
+        for view in [divider, icon, label, chevron] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        labelLeading = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset)
+        chevronWidth = chevron.widthAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            divider.centerYAnchor.constraint(equalTo: centerYAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.heightAnchor.constraint(equalToConstant: 10),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset - 1),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labelLeading,
+            chevronWidth,
+            label.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        render()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    var fullWidth: CGFloat {
+        let text = ceil((displayText as NSString).size(withAttributes: [.font: label.font as Any]).width)
+        return Self.textInset + (taskName == nil ? Self.iconSlot : Self.chevronSlot) + text + Self.labelPadding
+    }
+
+    private var displayText: String { taskName ?? L("Task") }
+
+    func apply(taskName: String?, compact: Bool) {
+        guard self.taskName != taskName || self.compact != compact else { return }
+        self.taskName = taskName
+        self.compact = compact
+        render()
+    }
+
+    func apply(foreground: NSColor) {
+        self.foreground = foreground
+        render()
+    }
+
+    private func render() {
+        label.stringValue = compact ? "" : displayText
+        label.isHidden = compact
+        label.textColor = foreground.withAlphaComponent(taskName == nil ? 0.55 : 0.7)
+        chevron.isHidden = compact || taskName == nil
+        chevronWidth.constant = chevron.isHidden ? 0 : Self.chevronSlot
+        chevron.contentTintColor = foreground.withAlphaComponent(0.5)
+        icon.isHidden = !compact && taskName != nil
+        icon.image = NSImage(systemSymbolName: taskName == nil ? "plus" : "checklist",
+                             accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+        icon.contentTintColor = foreground.withAlphaComponent(0.55)
+        labelLeading.constant = Self.textInset + (taskName == nil ? Self.iconSlot : 0)
+        divider.layer?.backgroundColor = foreground.withAlphaComponent(0.18).cgColor
+        toolTip = (taskName.map { $0 + "\n" } ?? "") + L("Choose or create a task (default shortcut ⇧⌘P)")
+        setAccessibilityLabel(taskName ?? L("Choose task"))
+        applyFill()
+    }
+
+    private func applyFill() {
+        layer?.backgroundColor = hovered ? foreground.withAlphaComponent(0.1).cgColor : NSColor.clear.cgColor
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    /// 灵动岛展开时胶囊瞬间隐身，这张位图留在原位淡出，任务区不会突然消失。
+    func snapshot() -> NSImage? {
+        guard bounds.width > 0, let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
+    }
+}
+
+/// 每 pane 一条 chromeRowHeight 高的 header：身份胶囊（状态点 + pane 名 + 任务区）。
+/// 胶囊是唯一常驻身份对象（灵动岛式），分两块可点区域：点 pane 名向下展开
+/// PaneIdentityPanel（改名、看 handoff 详情）；点任务区直接打开任务选择器。
+/// 任务区不随宽度消失，窄时收成图标，否则入口又藏起来了。
 /// 它紧贴 terminal surface，底色/文字仍取 Ghostty config 的
 /// background/foreground + background-opacity；应用标题栏/侧栏则使用独立 ShellStyle。
 /// ⚠️ 必须 clipsToBounds：layer 化后自绘内容会落在超出 bounds 的 ContentLayer 上，
@@ -44,6 +160,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     var onSelect: (() -> Void)?
     /// 点击身份胶囊：展开/收起 PaneIdentityPanel。
     var onIdentityTapped: (() -> Void)?
+    /// 点击胶囊右侧任务区：直接打开任务选择器。
+    var onTaskChipTapped: (() -> Void)?
     var onDragEnded: (() -> Void)?
     /// Ghostty SurfaceDragSource 的轻量 AppKit 对应：UUID 只用于进程内定位现有 pane。
     var dragIdentifier: UUID?
@@ -69,7 +187,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             agentIconGap.constant = sessionAgent == nil ? 0 : PaneIdentityMetrics.iconGap
         }
     }
-    private let taskHintLabel = NSTextField(labelWithString: "")
+    private let taskChip = PaneTaskChip()
+    private var taskChipWidth: NSLayoutConstraint!
+    private var taskChipGap: NSLayoutConstraint!
     private var capsuleTracking: NSTrackingArea?
     private var headerTracking: NSTrackingArea?
     private var capsuleHovered = false {
@@ -147,10 +267,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         attentionRing?.frame = capsule.frame.insetBy(dx: -4, dy: -4)
     }
 
-    /// 绑定任务名；nil = 未绑定。宽度富余时以「 · 任务名」并入胶囊。
+    /// 绑定任务名；nil = 未绑定。
     func setTaskName(_ name: String?) {
         boundTaskName = name
-        updateTaskHint()
+        taskChip.apply(taskName: name, compact: false)
+        needsLayout = true
     }
 
     private var boundTaskName: String?
@@ -188,11 +309,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .init(rawValue: NSLayoutConstraint.Priority.defaultLow.rawValue - 1),
             for: .horizontal)
 
-        taskHintLabel.font = ShellStyle.Font.caption
-        taskHintLabel.lineBreakMode = .byTruncatingTail
-        taskHintLabel.setContentCompressionResistancePriority(
-            .defaultLow, for: .horizontal)
-
         closeButton.image = NSImage(
             systemSymbolName: ShellSymbol.close, accessibilityDescription: L("Close pane"))?
             .withSymbolConfiguration(.init(pointSize: ShellStyle.closeIconSize, weight: .bold))
@@ -214,13 +330,16 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         capsuleTracking = capsuleArea
 
         addSubview(capsule)
-        for v in [dotView, closeButton, agentIcon, nameLabel, taskHintLabel] {
+        for v in [dotView, closeButton, agentIcon, nameLabel, taskChip] {
             v.translatesAutoresizingMaskIntoConstraints = false
             capsule.addSubview(v)
         }
         capsule.translatesAutoresizingMaskIntoConstraints = false
         agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
         agentIconGap = nameLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
+        taskChipWidth = taskChip.widthAnchor.constraint(equalToConstant: 0)
+        taskChipGap = taskChip.leadingAnchor.constraint(
+            equalTo: nameLabel.trailingAnchor, constant: Self.taskChipLeadingGap)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
@@ -268,10 +387,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             agentIconGap,
             nameLabel.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
 
-            taskHintLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
-            taskHintLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-            taskHintLabel.trailingAnchor.constraint(
-                equalTo: capsule.trailingAnchor, constant: -7),
+            taskChipGap,
+            taskChipWidth,
+            taskChip.topAnchor.constraint(equalTo: capsule.topAnchor),
+            taskChip.bottomAnchor.constraint(equalTo: capsule.bottomAnchor),
+            taskChip.trailingAnchor.constraint(
+                equalTo: capsule.trailingAnchor, constant: -Self.capsuleTrailingInset),
+            taskChip.label.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
         ])
 
         // 状态动画的开关条件（key / 遮挡）都是窗口级事件。object 传 nil 收全部窗口的，
@@ -312,43 +434,41 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     // MARK: - 胶囊内容与 hover
 
-    /// 任务名 hint 的完整宽度（并入胶囊时的需求），layout 判定用。
-    private var fullHintWidth: CGFloat = 0
+    private static let taskChipLeadingGap: CGFloat = 7
+    private static let capsuleTrailingInset: CGFloat = 7
+    /// 名字和任务名都要截断时，名字至少留这么宽才值得保留文字任务区，否则任务区收成图标。
+    private static let minimumNameWidth: CGFloat = 72
+    private static let minimumChipTextWidth: CGFloat = 86
 
-    /// 任务名 hint：宽度富余时以次要色并入胶囊；窄时 layout 置空收回
-    /// （隐藏 label 仍参与约束会把胶囊撑宽，必须置空文本）。
-    private func updateTaskHint() {
-        let text = boundTaskName.map { " · \($0)" } ?? ""
-        fullHintWidth = text.isEmpty ? 0 : ceil(
-            (text as NSString).size(withAttributes: [
-                .font: taskHintLabel.font ?? ShellStyle.Font.caption,
-            ]).width)
-        needsLayout = true
-    }
-
+    /// 宽度仲裁放在 `super.layout()` 之前，本轮布局就用上新约束。
     override func layout() {
+        if bounds.width > 0 { arbitrateTaskChipWidth() }
         super.layout()
         guard bounds.width > 0 else { return }
-        // 预算按胶囊自己的上限算，不是整条 header——胶囊最多占 pane 的
-        // capsuleWidthRatio，居中摆放两侧各留一段气口，长标题下它仍然读作一枚
-        // chip 而不是横幅。
-        let chrome = PaneIdentityMetrics.dotLeading + PaneIdentityMetrics.dotSize
-            + PaneIdentityMetrics.iconLeading + agentIconWidth.constant
-            + agentIconGap.constant + 7  // 胶囊内边距 + 点 + 图标 + 右内边距
-        let budget = min(bounds.width - 8, floor(bounds.width * Self.capsuleWidthRatio))
-        let room = max(0, budget - chrome)
-        let title = ceil(nameLabel.intrinsicContentSize.width)
-        // 放不下时先整条收回任务 hint（pane 名常显）；截成省略号的任务名没有
-        // 信息量，而"本可以收掉任务名保住完整标题"的情况也不该反过来截标题。
-        let fits = title + fullHintWidth <= room
-        let want = (fits && boundTaskName != nil)
-            ? " · \(boundTaskName ?? "")" : ""
-        if taskHintLabel.stringValue != want {
-            taskHintLabel.stringValue = want
-        }
         syncAttentionRingFrame()
         // 胶囊宽度随文案变，手型矩形要跟着重算
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// 预算按胶囊自己的上限算，不是整条 header：长标题下它仍然读作一枚 chip 而不是横幅。
+    private func arbitrateTaskChipWidth() {
+        let chrome = PaneIdentityMetrics.dotLeading + PaneIdentityMetrics.dotSize
+            + PaneIdentityMetrics.iconLeading + agentIconWidth.constant
+            + agentIconGap.constant + Self.taskChipLeadingGap + Self.capsuleTrailingInset
+        let budget = min(bounds.width - 8, floor(bounds.width * Self.capsuleWidthRatio))
+        let room = max(0, budget - chrome)
+        let title = ceil(nameLabel.intrinsicContentSize.width)
+        let full = taskChip.fullWidth
+        let width: CGFloat
+        if title + full <= room {
+            width = full
+        } else {
+            // 放不下时两边都让：任务区最多占四成，名字拿其余；再窄就收成图标。
+            let shared = max(min(full, Self.minimumChipTextWidth), min(full, floor(room * 0.4)))
+            width = room - shared >= Self.minimumNameWidth ? shared : PaneTaskChip.compactWidth
+        }
+        taskChip.apply(taskName: boundTaskName, compact: width == PaneTaskChip.compactWidth)
+        if taskChipWidth.constant != width { taskChipWidth.constant = width }
     }
 
     private func applyCapsuleFill() {
@@ -414,7 +534,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             .withAlphaComponent(opacity).cgColor
         nameLabel.textColor = terminalForeground
         agentIcon.contentTintColor = terminalForeground
-        taskHintLabel.textColor = terminalForeground.withAlphaComponent(0.55)
+        taskChip.apply(foreground: terminalForeground)
         applyCloseButtonTint()
         applyCapsuleFill()
         attentionRing?.layer?.borderColor = terminalForeground
@@ -525,7 +645,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     /// 工具名/摘要只进 tooltip，不进胶囊。
     ///
-    /// 胶囊里唯一有弹性的槽位是任务名 hint，`layout()` 的宽度仲裁就是围着它写的。
+    /// 胶囊里唯一有弹性的槽位是任务区，`layout()` 的宽度仲裁就是围着它写的。
     /// 把工具名塞进去要么和任务名抢那一个槽（`PreToolUse` 的频率下等于让文字
     /// 不停跳变——比呼吸的圆点扎眼得多，正好和「不打扰」相反），要么再加一段
     /// 仲裁逻辑去挤 pane 名。两条都比这点信息量贵，所以走 tooltip。
@@ -619,7 +739,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         // event-tracking loop 内区分 click 与 drag：拖动超过 3pt 启动拖拽 session；
-        // 普通点击在 mouseUp 时按落点分流——胶囊内 = 展开身份面板，其余 = 选中 pane。
+        // 普通点击在 mouseUp 时按落点分流——任务区 = 任务选择器，胶囊其余 = 展开身份面板，
+        // 胶囊外 = 只选中 pane。
         let origin = event.locationInWindow
         let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
         while let next = NSApp.nextEvent(
@@ -637,16 +758,31 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                 return
             case .leftMouseUp:
                 onSelect?()
-                let point = capsule.convert(next.locationInWindow, from: nil)
-                if capsule.bounds.contains(point) {
-                    onIdentityTapped?()
-                }
+                dispatchTap(atWindowPoint: next.locationInWindow)
                 return
             default:
                 continue
             }
         }
     }
+
+    /// 点击落点分流。独立出来，测试不必合成一轮 event-tracking 循环。
+    func dispatchTap(atWindowPoint point: NSPoint) {
+        if taskChip.bounds.contains(taskChip.convert(point, from: nil)) {
+            onTaskChipTapped?()
+        } else if capsule.bounds.contains(capsule.convert(point, from: nil)) {
+            onIdentityTapped?()
+        }
+    }
+
+    /// 任务区在胶囊坐标系里的位置和位图，交给灵动岛做淡出。
+    func taskChipSnapshot() -> (image: NSImage, frame: NSRect)? {
+        taskChip.snapshot().map { ($0, taskChip.frame) }
+    }
+
+    /// 测试用：任务区中心的窗口坐标与当前文案。
+    var taskChipCenterInWindow: NSPoint { taskChip.convert(NSPoint(x: taskChip.bounds.midX, y: taskChip.bounds.midY), to: nil) }
+    var taskChipText: String { taskChip.label.stringValue }
 
     override func mouseDragged(with event: NSEvent) {
         beginPaneDrag(with: event)

@@ -121,6 +121,11 @@ public struct WindowArrangement: Sendable, Equatable {
     /// 全部 pane，按标签页、再按树序。
     public var panes: [UUID] { tabs.flatMap(\.layout.panes) }
 
+    /// 分组里最后一个标签页的最后一个 pane（树序），即侧栏里这个分组的最后一行。
+    public func lastPane(inGroup id: UUID) -> UUID? {
+        tabs.last { $0.groupID == id }?.layout.panes.last
+    }
+
     /// 默认名里用到的最大序号；新标签页的默认名要从它之后接着编。
     public var highestTitleNumber: Int { tabs.compactMap(\.title.number).max() ?? 0 }
 

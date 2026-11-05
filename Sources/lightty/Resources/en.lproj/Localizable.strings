@@ -128,11 +128,19 @@
 
 /* 灵动岛 */
 "Name this terminal" = "Name this terminal";
-"Search, or type a new task name and press Return" = "Search or create a task";
+"Search name or folder, or type a new name" = "Search name or folder, or type a new name";
+"Choose or create a task (default shortcut ⇧⌘P)" = "Choose or create a task (default shortcut ⇧⌘P)";
+"Bind to current terminal" = "Bind to current terminal";
+"This folder" = "This folder";
+"Other folders" = "Other folders";
+"Open document" = "Open document";
+"↩ Bind · esc Close" = "↩ Bind · esc Close";
+"↩ Bind · ⌘↩ New · esc Close" = "↩ Bind · ⌘↩ New · esc Close";
+"↩ New · esc Close" = "↩ New · esc Close";
+"esc Close" = "esc Close";
 "Task" = "Task";
 "Not set" = "Not set";
 "Choose task" = "Choose task";
-"Rename this task…" = "Rename this task…";
 "Rename session…" = "Rename session…";
 "Rename session" = "Rename session";
 "Enter a session name." = "Enter a session name.";

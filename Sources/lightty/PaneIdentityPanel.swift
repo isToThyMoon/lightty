@@ -5,42 +5,60 @@ import LighttyCore
 /// 面板本体与第一行身份内容保持静止，背景从其周围形变。结构：
 ///   [●] pane 名（无框编辑，回车提交；与 header 胶囊逐像素同构，不能加任何前缀）
 ///   ─────────────────────────
-///   任务  <当前任务 / 未选择>              ⌄   （点击 → 岛体向下长出选择列表）
-///   让 Agent 总结并更新 handoff                （绑了任务且认得出 agent 时才有）
-///   （列表态）搜索输入 + 过滤列表：回车执行高亮行；无匹配回车 = 以输入文本
-///   新建任务并绑定。列表底部是当前任务的两个操作：重命名、解除绑定。
+///   任务  <当前任务 / 未选择>              ⌄   （点击 → 切到选择器）
+///   详情态（绑了任务）：目录 · 更新时间、handoff 摘要、让 Agent 总结（认得出 agent
+///   时才有）、打开文档、解除绑定。任务改名走第一侧栏的任务菜单。
+///   选择器态：搜索输入 + 候选（此目录的任务在前）+ 常驻底栏（有输入就有「新建」行、键位提示）。
+///   回车执行高亮行，⌘回车总是以输入文本新建；选定后整个岛收起。
 ///
 /// 两行长得不一样是刻意的：第一行是「点了直接打字」，第二行是「点了弹出列表」，
 /// 行为不同就不能同一张脸。第二行常驻浅底加箭头，不靠 hover 才暗示可点。
-/// 没绑任务时面板一打开就把列表摊开——那时用户十有八九就是来挑任务的。
+/// 胶囊的两块点击区对应两个入口：点名字进详情态，点任务区直接进选择器。
 final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 基础两行的高度；列表展开时岛体高度 = base + 列表实高。
     static let baseHeight: CGFloat = 62
     /// 「让 Agent 总结」那一行占的高度（间距 6 + 行高 24）。这一行是**条件出现**的，
     /// 所以它不能并进 `baseHeight`——没有它的时候岛体不该凭空多出一块空白。
     static let handoffRowSpace: CGFloat = 30
-    static let panelWidth: CGFloat = 272
+    /// 放得下候选行里的「名字 + 目录 + 时间」。
+    static let panelWidth: CGFloat = 340
     /// 任务行的标识，供测试定位。
     static let taskFieldIdentifier = NSUserInterfaceItemIdentifier("paneIdentity.taskField")
     /// 「让 Agent 总结」那一行的标识，供测试定位。
     static let handoffRowIdentifier = NSUserInterfaceItemIdentifier("paneIdentity.handoffRow")
-    /// 面板常驻 frame 高度上限（岛体在其中生长，面板本身永不动画）：
-    /// 固定两行 + 可选的总结行 + 搜索行 34 + 七行候选 + 底栏（分隔线与两个操作）+ 留白。
+    /// 选择器固定展示的候选视口高度：七行。
+    private static let choiceViewportHeight: CGFloat = 7 * 26
+    private static let hintHeight: CGFloat = 18
+    /// 候选视口与底栏分隔线的间距：高亮行不能贴着线。
+    private static let footerGap: CGFloat = 3
+    /// 面板常驻 frame 高度上限（岛体在其中生长，面板本身永不动画）：选择器态是最高的
+    /// 一态（详情态最多六行摘要加两行操作，矮于它）。
     static let maxHeight: CGFloat =
-        baseHeight + handoffRowSpace + 34 + 7 * 26 + 5 + 2 * 26 + 8
+        baseHeight + 34 + choiceViewportHeight + footerGap + 5 + 26 + hintHeight + 8
 
     struct TaskChoice {
         let name: String
         let fileURL: URL
         let running: Bool
         let current: Bool
+        var directory: String? = nil
+        var updated: Date? = nil
+        /// 与这个终端的当前目录相关（`TaskDirectoryMatch`）。
+        var nearby = false
+    }
+
+    /// 详情态展示的绑定任务信息，由 PaneView 在每次刷新时从任务文件读取。
+    struct TaskDetail: Equatable {
+        let directory: String
+        let updated: String
+        let summary: String
     }
 
     var onPaneNameCommit: ((String) -> Void)?
     var onBindTask: ((URL) -> Void)?
     var onCreateTask: ((String) -> Void)?
     var onUnbindTask: (() -> Void)?
-    var onTaskRenameCommit: ((String) -> Void)?
+    var onOpenTaskDocument: (() -> Void)?
     /// 让 pane 里的 agent 按交接协议重写这份任务的正文。
     ///
     /// 返回值是**真的送出去了没有**。送不出去的情形是真实存在的：面板开着的时候
@@ -53,6 +71,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     var onIslandHeightChange: ((CGFloat) -> Void)?
     /// 任务数据源（每次打开列表时拉取）。
     var taskProvider: (() -> [TaskChoice])?
+    /// 绑定任务的详情。每次 `update` 问一次，读文件的代价只发生在内容可能变化时。
+    var taskDetailProvider: (() -> TaskDetail?)?
 
     /// 「更新交接文档」这一行现在能不能点。
     ///
@@ -89,17 +109,36 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let nameField = NSTextField()
     private let separator = NSView()
     private let taskField = TaskFieldRow()
-    private let taskEditor = NSTextField()
     /// 「让 Agent 总结并更新 handoff」——第一层，任务行正下方。
     ///
     /// 原先它在任务列表底部，路径是「点胶囊 → 点任务行展开列表 → 才看得见」。
     /// 这是任务进行中反复要做的动作，两次点击太深；改名和解绑是管归属的事，
     /// 偶尔做一次，留在列表底部正合适。
-    private var handoffRow: TaskRowView?
+    private var handoffRow: IslandActionButton?
     /// 上一次这一行在不在。只用来判断「要不要通知岛体改高度」，见 `refreshHandoffRow`。
-    private var handoffRowWasShown = false
+    private var lastReportedIslandHeight: CGFloat?
     private let handoffSlot = NSView()
     private var handoffSlotHeight: NSLayoutConstraint!
+    private var handoffSlotTop: NSLayoutConstraint!
+    // —— 详情态
+    private var taskDetail: TaskDetail?
+    private let detailSlot = NSView()
+    private var detailSlotHeight: NSLayoutConstraint!
+    private let metaLabel = NSTextField(labelWithString: "")
+    private let summaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let actionSlot = NSStackView()
+    private var actionSlotHeight: NSLayoutConstraint!
+    private var actionSlotTop: NSLayoutConstraint!
+    private lazy var actionButtons: [IslandActionButton] = {
+        let open = IslandActionButton(title: L("Open document"), symbol: "doc.text", style: .secondary)
+        open.onTap = { [weak self] in self?.onOpenTaskDocument?() }
+        let unbind = IslandActionButton(title: L("Unbind"), symbol: "minus.circle", style: .destructive)
+        unbind.onTap = { [weak self] in self?.onUnbindTask?() }
+        actionSlot.addView(open, in: .leading)
+        actionSlot.addView(unbind, in: .trailing)
+        return [open, unbind]
+    }()
+    private var taskChipGhost: NSView?
     private var fixedContentHeight: NSLayoutConstraint!
 
     // —— 内联任务选择器
@@ -107,9 +146,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     private let searchField = NSTextField()
     private let listSeparator = NSView()
     private let taskScrollView = WheelAwareScrollView()
-    /// 当前任务的操作（重命名、解除绑定）钉在列表底部，不跟候选一起滚——
-    /// 任务一多它们就会被挤到滚动区外面，等于又藏起来了。
+    /// 新建行和键位提示钉在列表底部，不跟候选一起滚——任务一多它们就会被挤到滚动区
+    /// 外面，等于又藏起来了。
     private let listFooter = NSView()
+    private let hintLabel = NSTextField(labelWithString: "")
     private let footerSeparator = NSView()
     private var footerHeightConstraint: NSLayoutConstraint?
     private let taskRowsView = FlippedRowsView()
@@ -119,10 +159,17 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// 滚动区里的候选行数、底栏里的操作行数。高度和滚动文档尺寸都靠这两个数。
     private var choiceRowCount = 0
     private var footerRowCount = 0
+    /// 滚动文档的内容高度：候选行加分组标题。
+    private var choiceContentHeight: CGFloat = 0
     private var choices: [TaskChoice] = []
     private var filtered: [TaskChoice] = []
     private var highlighted = 0
     private var listOpen = false
+    /// 选择器是不是这次展开的入口（点任务区 / 快捷键）。是的话 esc 直接收起整个岛，
+    /// 否则用户要按两次才回到终端。
+    private var listIsEntryPoint = false
+
+    var isTaskListOpen: Bool { listOpen }
 
     private var foreground = NSColor.white
     private var background = NSColor.black
@@ -144,19 +191,23 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     var titleOffsetFromDot: CGFloat { nameField.frame.minX - dotView.frame.maxX }
 
     var currentIslandHeight: CGFloat {
-        let base = Self.baseHeight + (handoffRow == nil ? 0 : Self.handoffRowSpace)
-        return listOpen ? base + listHeight : base
+        listOpen ? fixedAreaHeight + listHeight : fixedAreaHeight
+    }
+
+    private var fixedAreaHeight: CGFloat {
+        Self.baseHeight + detailSlotHeight.constant
+            + (handoffRow == nil ? 0 : Self.handoffRowSpace)
+            + (actionSlot.isHidden ? 0 : Self.handoffRowSpace)
     }
 
     private var listHeight: CGFloat {
-        // 搜索行 34 + 候选行数 × 26 + 固定底栏 + 底部留白
-        let rows = CGFloat(min(max(choiceRowCount, 1), 7))
-        return 34 + rows * 26 + footerHeight + 8
+        // 搜索行 34 + 候选视口 + 固定底栏 + 底部留白
+        34 + min(max(choiceContentHeight, 26), Self.choiceViewportHeight) + Self.footerGap + footerHeight + 8
     }
 
-    /// 底栏：分隔线 1 + 间距 4 + 每行 26。没有操作时整条收成 0。
+    /// 底栏：分隔线 1 + 间距 4 + 每行 26 + 键位提示。
     private var footerHeight: CGFloat {
-        footerRowCount == 0 ? 0 : 5 + CGFloat(footerRowCount) * 26
+        5 + CGFloat(footerRowCount) * 26 + Self.hintHeight
     }
 
     init() {
@@ -187,10 +238,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         dotView.wantsLayer = true
         dotView.layer?.cornerRadius = PaneIdentityMetrics.dotSize / 2
 
-        // 三个输入框都是单行编辑器：usesSingleLineMode 只管显示截断，编辑态
+        // 两个输入框都是单行编辑器：usesSingleLineMode 只管显示截断，编辑态
         // 还要 wraps=false + isScrollable=true——否则长文本（尤其 CJK）在 20pt
         // 行高里折成两行，每行都被竖向裁一半，两行都看不清。
-        for field in [nameField, taskEditor, searchField] {
+        for field in [nameField, searchField] {
             ShellTextFieldStyle.configure(field)
         }
 
@@ -202,13 +253,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
         taskField.identifier = PaneIdentityPanel.taskFieldIdentifier
         taskField.onTap = { [weak self] in self?.toggleTaskList() }
-
-        taskEditor.font = ShellStyle.Font.compactBody
-        taskEditor.isBordered = false
-        taskEditor.drawsBackground = false
-        taskEditor.focusRingType = .none
-        taskEditor.isHidden = true
-        taskEditor.delegate = self
 
         // —— 内联任务选择器（默认隐藏；打开时岛体向下生长露出）
         listContainer.isHidden = true
@@ -247,13 +291,31 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
         agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
         agentIconGap = nameField.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
-        for v in [separator, taskField, taskEditor, handoffSlot] {
+        for v in [separator, taskField, detailSlot, handoffSlot, actionSlot] {
             v.translatesAutoresizingMaskIntoConstraints = false
             extras.addSubview(v)
         }
+        metaLabel.font = ShellStyle.Font.caption
+        metaLabel.lineBreakMode = .byTruncatingHead
+        summaryLabel.font = ShellStyle.Font.compactBody
+        summaryLabel.maximumNumberOfLines = HandoffSummaryText.maximumLines
+        summaryLabel.cell?.truncatesLastVisibleLine = true
+        summaryLabel.preferredMaxLayoutWidth = Self.summaryWidth
+        for v in [metaLabel, summaryLabel] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            detailSlot.addSubview(v)
+        }
+        detailSlot.clipsToBounds = true
+        actionSlot.orientation = .horizontal
+        actionSlot.spacing = 6
+        actionSlot.isHidden = true
         listContainer.translatesAutoresizingMaskIntoConstraints = false
         contentHost.addSubview(listContainer)
         footerSeparator.wantsLayer = true
+        hintLabel.font = .systemFont(ofSize: 9.5)
+        hintLabel.lineBreakMode = .byTruncatingTail
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+        listFooter.addSubview(hintLabel)
         for v in [listSeparator, searchField, taskScrollView, listFooter] {
             v.translatesAutoresizingMaskIntoConstraints = false
             listContainer.addSubview(v)
@@ -276,6 +338,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         fixedContentHeight = fixedContent.heightAnchor.constraint(
             equalToConstant: Self.baseHeight)
         handoffSlotHeight = handoffSlot.heightAnchor.constraint(equalToConstant: 0)
+        detailSlotHeight = detailSlot.heightAnchor.constraint(equalToConstant: 0)
+        actionSlotHeight = actionSlot.heightAnchor.constraint(equalToConstant: 0)
+        handoffSlotTop = handoffSlot.topAnchor.constraint(equalTo: detailSlot.bottomAnchor)
+        actionSlotTop = actionSlot.topAnchor.constraint(equalTo: handoffSlot.bottomAnchor)
         NSLayoutConstraint.activate([
             fixedContent.topAnchor.constraint(equalTo: contentHost.topAnchor),
             fixedContentLeadingConstraint,
@@ -317,17 +383,29 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             taskField.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
             taskField.heightAnchor.constraint(equalToConstant: 24),
 
-            taskEditor.leadingAnchor.constraint(equalTo: taskField.valueLeadingAnchor),
-            taskEditor.trailingAnchor.constraint(equalTo: taskField.trailingAnchor, constant: -10),
-            taskEditor.centerYAnchor.constraint(equalTo: taskField.centerYAnchor),
+            detailSlot.leadingAnchor.constraint(equalTo: extras.leadingAnchor),
+            detailSlot.trailingAnchor.constraint(equalTo: extras.trailingAnchor),
+            detailSlot.topAnchor.constraint(equalTo: taskField.bottomAnchor),
+            detailSlotHeight,
+            metaLabel.topAnchor.constraint(equalTo: detailSlot.topAnchor, constant: Self.detailTopGap),
+            metaLabel.leadingAnchor.constraint(equalTo: detailSlot.leadingAnchor, constant: Self.detailInset),
+            metaLabel.widthAnchor.constraint(lessThanOrEqualToConstant: Self.summaryWidth),
+            summaryLabel.topAnchor.constraint(equalTo: metaLabel.bottomAnchor, constant: Self.detailLineGap),
+            summaryLabel.leadingAnchor.constraint(equalTo: detailSlot.leadingAnchor, constant: Self.detailInset),
+            summaryLabel.widthAnchor.constraint(equalToConstant: Self.summaryWidth),
 
             // 总结行的槽位：与任务行同一套左右缩进，紧跟其下 6pt。刻意不钉底边——
             // 固定区的高度由 `fixedContentHeight` 说了算，槽位空着时高度收成 0，
             // 不会从下面把 extras 顶开。
             handoffSlot.leadingAnchor.constraint(equalTo: extras.leadingAnchor, constant: 8),
             handoffSlot.trailingAnchor.constraint(equalTo: extras.trailingAnchor, constant: -8),
-            handoffSlot.topAnchor.constraint(equalTo: taskField.bottomAnchor, constant: 6),
+            handoffSlotTop,
             handoffSlotHeight,
+
+            actionSlot.leadingAnchor.constraint(equalTo: extras.leadingAnchor, constant: 8),
+            actionSlot.trailingAnchor.constraint(equalTo: extras.trailingAnchor, constant: -8),
+            actionSlotTop,
+            actionSlotHeight,
 
             // —— 列表区：紧接 base 区之下（岛体没长到时 isHidden 遮蔽）
             listContainer.topAnchor.constraint(equalTo: fixedContent.bottomAnchor),
@@ -344,7 +422,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
             searchField.topAnchor.constraint(equalTo: listContainer.topAnchor, constant: 9),
             searchField.leadingAnchor.constraint(
-                equalTo: listContainer.leadingAnchor, constant: 12),
+                equalTo: listContainer.leadingAnchor, constant: Self.detailInset),
             searchField.trailingAnchor.constraint(
                 equalTo: listContainer.trailingAnchor, constant: -12),
             searchField.heightAnchor.constraint(equalToConstant: 20),
@@ -354,7 +432,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 equalTo: listContainer.leadingAnchor, constant: SidebarListScrollView.leadingMargin),
             taskScrollView.trailingAnchor.constraint(
                 equalTo: listContainer.trailingAnchor, constant: -SidebarListScrollView.trailingMargin),
-            taskScrollView.bottomAnchor.constraint(equalTo: listFooter.topAnchor),
+            taskScrollView.bottomAnchor.constraint(equalTo: listFooter.topAnchor, constant: -Self.footerGap),
 
             listFooter.leadingAnchor.constraint(equalTo: taskScrollView.leadingAnchor),
             listFooter.trailingAnchor.constraint(
@@ -369,6 +447,10 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             footerSeparator.trailingAnchor.constraint(
                 equalTo: listFooter.trailingAnchor, constant: -4),
             footerSeparator.heightAnchor.constraint(equalToConstant: 1),
+
+            hintLabel.leadingAnchor.constraint(equalTo: listFooter.leadingAnchor, constant: 7),
+            hintLabel.trailingAnchor.constraint(lessThanOrEqualTo: listFooter.trailingAnchor, constant: -4),
+            hintLabel.bottomAnchor.constraint(equalTo: listFooter.bottomAnchor),
         ])
     }
 
@@ -435,6 +517,7 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
     /// `nameEditable` 为 false 时第一行只读：没有 hook 绑定、显示的是 agent 自己写的标题时，
     /// lightty 既改不了它（那是 agent 的会话名），也不该把用户打的字存成看不见的 pane 名。
     func update(paneName: String, taskName: String?, dot: NSColor, agent: SessionAgent?, nameEditable: Bool = true) {
+        taskDetail = taskName == nil ? nil : taskDetailProvider?()
         nameField.stringValue = paneName
         nameField.isEditable = nameEditable
         boundTaskName = taskName
@@ -442,7 +525,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         agentIcon.image = agent.flatMap { AgentSessionIcon.image(for: $0) }
         agentIconWidth.constant = agent == nil ? 0 : PaneIdentityMetrics.iconSize
         agentIconGap.constant = agent == nil ? 0 : PaneIdentityMetrics.iconGap
-        endTaskRename(commit: false)
         applyColors()
     }
 
@@ -493,6 +575,9 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         separator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         listSeparator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
         footerSeparator.layer?.backgroundColor = foreground.withAlphaComponent(0.08).cgColor
+        metaLabel.textColor = foreground.withAlphaComponent(0.45)
+        summaryLabel.textColor = foreground.withAlphaComponent(0.75)
+        hintLabel.textColor = foreground.withAlphaComponent(0.4)
         nameField.textColor = foreground
         nameField.placeholderAttributedString = NSAttributedString(
             string: L("Name this terminal"),
@@ -501,19 +586,95 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 .foregroundColor: foreground.withAlphaComponent(0.3),
             ])
         agentIcon.contentTintColor = foreground
-        taskEditor.textColor = foreground
         searchField.textColor = foreground
         searchField.placeholderAttributedString = NSAttributedString(
-            string: L("Search, or type a new task name and press Return"),
+            string: L("Search name or folder, or type a new name"),
             attributes: [
                 .font: searchField.font ?? ShellStyle.Font.compactBody,
                 .foregroundColor: foreground.withAlphaComponent(0.3),
             ])
         taskField.apply(taskName: boundTaskName, isOpen: listOpen, foreground: foreground)
-        taskField.isHidden = !taskEditor.isHidden
         // 放在最后：`foreground` 是这个函数定下来的，在它之前建行会拿到上一轮的颜色。
         // 明暗切换、主题切换、状态变化全都经过这里，这一行的颜色也就跟着对。
+        refreshDetailArea()
+    }
+
+    // MARK: - 详情态
+
+    private static let detailInset: CGFloat = 18
+    private static let detailTopGap: CGFloat = 7
+    private static let detailLineGap: CGFloat = 4
+    private static let detailBottomGap: CGFloat = 4
+    /// 摘要按面板基准宽度折行，高度才不依赖面板何时拿到 frame；胶囊特别宽时右侧留白。
+    private static let summaryWidth = panelWidth - 2 * detailInset
+
+    /// 刷新详情态。选择器开着时整块收起：两者同时摊开岛体会过高，用户此刻也只在挑任务。
+    private func refreshDetailArea() {
+        guard handoffSlotHeight != nil, detailSlotHeight != nil else { return }
+        let detail = listOpen ? nil : taskDetail
+        if let detail {
+            let folder = (detail.directory as NSString).abbreviatingWithTildeInPath
+            metaLabel.stringValue = "\(folder)  ·  \(detail.updated)"
+            metaLabel.toolTip = detail.directory
+            summaryLabel.attributedStringValue = HandoffSummaryText.attributed(
+                detail.summary, font: ShellStyle.Font.compactBody,
+                color: foreground.withAlphaComponent(0.75))
+            let lines = ceil(summaryLabel.intrinsicContentSize.height)
+            detailSlotHeight.constant = Self.detailTopGap + ceil(metaLabel.intrinsicContentSize.height)
+                + Self.detailLineGap + lines + Self.detailBottomGap
+        } else {
+            detailSlotHeight.constant = 0
+        }
+        detailSlot.isHidden = detail == nil
+        rebuildActionRow(visible: detail != nil)
         refreshHandoffRow()
+        fixedContentHeight.constant = fixedAreaHeight
+        needsLayout = true
+        window?.invalidateCursorRects(for: self)
+        reportIslandHeight()
+    }
+
+    /// 打开文档靠左，解除绑定单独靠右：破坏性操作不和常用操作挨着。
+    /// 按钮只建一次：`applyColors` 调得很勤，重建会打断正在 hover 的按钮。
+    private func rebuildActionRow(visible: Bool) {
+        actionSlot.isHidden = !visible
+        actionSlotHeight.constant = visible ? IslandActionButton.height : 0
+        actionSlotTop.constant = visible ? 6 : 0
+        guard visible else { return }
+        actionButtons.forEach { $0.apply(foreground: foreground) }
+    }
+
+    /// 岛体高度真的变了才通知：`applyColors` 调得很勤（明暗切换、每次状态推送），
+    /// 每次都喊一嗓子会在形变过程中和动画抢方向盘。
+    private func reportIslandHeight() {
+        let height = currentIslandHeight
+        guard height != lastReportedIslandHeight else { return }
+        lastReportedIslandHeight = height
+        onIslandHeightChange?(height)
+    }
+
+    /// 胶囊任务区的位图：胶囊隐身后留在原位淡出，第一行右侧才不会突然空掉。
+    func installTaskChipGhost(_ image: NSImage, frameInCapsule frame: NSRect) {
+        taskChipGhost?.removeFromSuperview()
+        let ghost = PassthroughImageView(image: image)
+        ghost.wantsLayer = true
+        ghost.translatesAutoresizingMaskIntoConstraints = false
+        fixedContent.addSubview(ghost)
+        NSLayoutConstraint.activate([
+            ghost.leadingAnchor.constraint(equalTo: fixedContent.leadingAnchor, constant: frame.minX),
+            ghost.centerYAnchor.constraint(equalTo: dotView.centerYAnchor),
+            ghost.widthAnchor.constraint(equalToConstant: frame.width),
+            ghost.heightAnchor.constraint(equalToConstant: frame.height),
+        ])
+        taskChipGhost = ghost
+    }
+
+    func fadeTaskChipGhost(visible: Bool, duration: TimeInterval) {
+        guard let taskChipGhost else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
+            taskChipGhost.animator().alphaValue = visible ? 1 : 0
+        }
     }
 
     // MARK: - 让 Agent 总结
@@ -533,17 +694,16 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         handoffRow?.removeFromSuperview()
         handoffRow = nil
 
-        if boundTaskName != nil, let availability = handoffActionProvider?() {
+        if !listOpen, boundTaskName != nil, let availability = handoffActionProvider?() {
             let blockedReason: String? = {
                 guard case .blocked(let reason) = availability else { return nil }
                 return reason
             }()
-            let row = TaskRowView(
-                title: L("Have the Agent summarize it"), detail: blockedReason,
-                checked: false, role: .action, foreground: foreground,
-                enabled: blockedReason == nil)
+            let row = IslandActionButton(
+                title: L("Have the Agent summarize it"), symbol: "sparkles", style: .primary,
+                detail: blockedReason, enabled: blockedReason == nil)
+            row.apply(foreground: foreground)
             row.identifier = Self.handoffRowIdentifier
-            row.restsFilled = true
             row.translatesAutoresizingMaskIntoConstraints = false
             handoffSlot.addSubview(row)
             NSLayoutConstraint.activate([
@@ -573,18 +733,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
         let shown = handoffRow != nil
         handoffSlot.isHidden = !shown
-        handoffSlotHeight.constant = shown ? 24 : 0
-        fixedContentHeight.constant =
-            Self.baseHeight + (shown ? Self.handoffRowSpace : 0)
-        needsLayout = true
-        window?.invalidateCursorRects(for: self)
-        // 出现/消失会改变岛体该有的高度，得让 PaneView 把岛重新长到位，否则新行
-        // 被裁在岛外面。只在真的变了时才通知：`applyColors` 调得很勤（明暗切换、
-        // 每次状态推送），每次都喊一嗓子会在形变过程中和动画抢方向盘。
-        if shown != handoffRowWasShown {
-            handoffRowWasShown = shown
-            onIslandHeightChange?(currentIslandHeight)
-        }
+        handoffSlotHeight.constant = shown ? IslandActionButton.height : 0
+        handoffSlotTop.constant = shown ? 6 : 0
     }
 
     // MARK: - 内联任务选择器
@@ -594,10 +744,17 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         listOpen ? closeTaskList() : openTaskList()
     }
 
+    /// 以选择器作为这次展开的入口：胶囊任务区或快捷键。
+    func openTaskPicker() {
+        listIsEntryPoint = true
+        if !listOpen { openTaskList() }
+    }
+
     private func openTaskList() {
         choices = taskProvider?() ?? []
         searchField.stringValue = ""
         listOpen = true
+        refreshDetailArea()
         // Build the final list geometry before revealing it through the island clip.
         applyFilter("")
         listContainer.isHidden = false
@@ -607,42 +764,51 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     private func closeTaskList() {
         listOpen = false
+        listIsEntryPoint = false
         scrollSettle?.cancel()
         scrollSettle = nil
         isScrolling = false
         pointerScrolled = false
         listContainer.isHidden = true
         applyColors()
-        onIslandHeightChange?(currentIslandHeight)
         window?.invalidateCursorRects(for: self)
     }
 
     private func applyFilter(_ query: String) {
         pointerScrolled = false
         noteScrollActivity()
-        if query.isEmpty {
-            filtered = choices
-        } else {
-            filtered = choices
-                .compactMap { choice -> (TaskChoice, Int)? in
-                    guard let score = FuzzyMatch.score(
-                        pattern: query, in: choice.name) else { return nil }
-                    return (choice, score)
-                }
-                .sorted { $0.1 > $1.1 }
-                .map { $0.0 }
-        }
+        filtered = Self.rank(choices, query: query)
         rebuildRows()
     }
 
+    /// 候选排序。无输入：此目录的在前，其余保持传入序（最近更新）。有输入：名字命中排在
+    /// 目录命中之前，同档按匹配分，再把此目录的提前。目录只匹配末级，整条路径里到处
+    /// 都是 `/Users/…` 的字母，匹配它等于什么都能搜到。
+    static func rank(_ choices: [TaskChoice], query: String) -> [TaskChoice] {
+        let keyed = choices.enumerated().compactMap { offset, choice -> (TaskChoice, [Int])? in
+            let nearby = choice.nearby ? 0 : 1
+            if query.isEmpty { return (choice, [nearby, offset]) }
+            if let score = FuzzyMatch.score(pattern: query, in: choice.name) {
+                return (choice, [0, -score, nearby, offset])
+            }
+            let folder = choice.directory.map { ($0 as NSString).lastPathComponent } ?? ""
+            guard let score = FuzzyMatch.score(pattern: query, in: folder) else { return nil }
+            return (choice, [1, -score, nearby, offset])
+        }
+        return keyed.sorted { $0.1.lexicographicallyPrecedes($1.1) }.map(\.0)
+    }
+
     private func rebuildRows() {
+        taskRowsView.subviews.filter { !($0 is TaskRowView) }.forEach { $0.removeFromSuperview() }
+        choiceContentHeight = 0
         rowViews.forEach { $0.removeFromSuperview() }
         rowViews = []
         rowActions = []
         choiceRowCount = 0
         footerRowCount = 0
 
-        listFooter.subviews.filter { $0 !== footerSeparator }.forEach { $0.removeFromSuperview() }
+        listFooter.subviews.filter { $0 !== footerSeparator && $0 !== hintLabel }
+            .forEach { $0.removeFromSuperview() }
         var previousChoice: NSView?
         var previousAction: NSView?
         // 行和它的动作一起登记：回车、点击、上下键走同一张表，不再靠下标反推
@@ -661,59 +827,65 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                        gap: previousChoice == nil ? 0 : 2)
                 previousChoice = row
                 choiceRowCount += 1
+                choiceContentHeight += 26
             }
             rowViews.append(row)
             rowActions.append(action)
         }
 
+        /// 分组标题和空状态只是文字，不进 `rowViews`：上下键和回车都够不着它。
+        func addCaption(_ text: String) {
+            let caption = NSTextField(labelWithString: text)
+            caption.font = .systemFont(ofSize: 9.5, weight: .medium)
+            caption.textColor = foreground.withAlphaComponent(0.4)
+            let holder = NSView()
+            caption.translatesAutoresizingMaskIntoConstraints = false
+            holder.addSubview(caption)
+            NSLayoutConstraint.activate([
+                caption.leadingAnchor.constraint(equalTo: holder.leadingAnchor, constant: 7),
+                caption.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            ])
+            attach(row: holder, to: taskRowsView, below: previousChoice, gap: previousChoice == nil ? 0 : 2)
+            previousChoice = holder
+            choiceContentHeight += 26
+        }
+
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
+        // 只有两组都有内容时才分组，否则标题不提供任何信息。搜索时按匹配度排，也不分组。
+        let groups = query.isEmpty && filtered.contains(where: \.nearby) && filtered.contains { !$0.nearby }
         for (index, choice) in filtered.enumerated() {
+            if groups, index == 0 { addCaption(L("This folder")) }
+            if groups, index > 0, filtered[index - 1].nearby, !choice.nearby { addCaption(L("Other folders")) }
             add(TaskRowView(
                 title: choice.name,
-                detail: choice.running ? L("Active") : nil,
+                detail: Self.rowDetail(for: choice),
                 checked: choice.current,
                 role: .choice,
                 foreground: foreground)) { [weak self] in self?.pick(index) }
+            rowViews.last?.toolTip = choice.directory
         }
-        // 无匹配：显式给出"回车新建"行（可点击）
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
-        if filtered.isEmpty, !query.isEmpty {
+        if filtered.isEmpty {
+            addCaption(query.isEmpty ? L("No tasks yet") : L("No matching tasks."))
+        }
+        // 有输入就常驻新建行。模糊匹配很宽，只在零匹配时给新建，用户就建不了名字相近的任务。
+        if !query.isEmpty {
             add(TaskRowView(
                 title: L("New task “%@”", query),
-                detail: L("Return"), checked: false, role: .action,
-                foreground: foreground)) { [weak self] in self?.createFromQuery() }
+                detail: filtered.isEmpty ? "↩" : "⌘↩", checked: false, role: .action,
+                foreground: foreground), toFooter: true) { [weak self] in self?.createFromQuery() }
         }
-        // 已绑定：底部放当前任务的两个操作。改名原本挂在任务行右边一支 20×20、
-        // 半透明的铅笔上，没人找得到；挪到这里和解绑并排——用户点开列表本来就是
-        // 在管任务归属，两个同类操作放在一处。
-        //
-        // 「让 Agent 总结」不在这儿：它是任务进行中反复要做的动作，藏在列表里要点
-        // 两次才够得着，已经提到第一层了（见 `refreshHandoffRow`）。
-        if boundTaskName != nil {
-            add(TaskRowView(
-                title: L("Rename this task…"), detail: nil, checked: false,
-                role: .action, foreground: foreground), toFooter: true) { [weak self] in
-                guard let self else { return }
-                self.closeTaskList()
-                self.beginTaskRename()
-            }
-            add(TaskRowView(
-                title: L("Unbind"), detail: nil, checked: false, role: .destructive,
-                foreground: foreground), toFooter: true) { [weak self] in
-                self?.onUnbindTask?()
-                self?.closeTaskList()
-            }
-        }
+        hintLabel.stringValue = {
+            if query.isEmpty { return filtered.isEmpty ? L("esc Close") : L("↩ Bind · esc Close") }
+            return filtered.isEmpty ? L("↩ New · esc Close") : L("↩ Bind · ⌘↩ New · esc Close")
+        }()
         // 岛体最多展示七行候选；更多任务留在原生滚动视口内，不能继续撑高面板。
         taskRowsView.frame = NSRect(
             x: 0, y: 0, width: taskScrollView.contentSize.width,
-            height: max(CGFloat(choiceRowCount) * 26 - 2, 0))
-        footerSeparator.isHidden = footerRowCount == 0
+            height: max(choiceContentHeight - 2, 0))
         footerHeightConstraint?.constant = footerHeight
         listHeightConstraint?.constant = listHeight
 
-        if listOpen {
-            onIslandHeightChange?(currentIslandHeight)
-        }
+        if listOpen { reportIslandHeight() }
         layoutSubtreeIfNeeded()
         setHighlight(firstEnabledRow(), scroll: true)
         window?.invalidateCursorRects(for: self)
@@ -721,7 +893,15 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     private var listHeightConstraint: NSLayoutConstraint?
 
-    private func attach(row: TaskRowView, to container: NSView,
+    /// 候选行尾注：活跃优先于时间，因为另一个终端正开着它比「多久前改过」更影响选择。
+    private static func rowDetail(for choice: TaskChoice) -> String? {
+        let folder = choice.directory.map { ($0 as NSString).lastPathComponent }
+        let time = choice.running ? L("Active") : choice.updated.map { RelativeTime.text($0, localize: { L($0) }) }
+        let parts = [folder, time].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func attach(row: NSView, to container: NSView,
                         below previous: NSView?, gap: CGFloat) {
         row.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(row)
@@ -816,10 +996,12 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// 挑完就回到终端：这是一次性动作，留着岛体只会挡住刚要开始干活的终端。
     private func pick(_ index: Int) {
         guard filtered.indices.contains(index) else { return }
         onBindTask?(filtered[index].fileURL)
         closeTaskList()
+        onDismiss?()
     }
 
     private func createFromQuery() {
@@ -827,9 +1009,19 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         guard !query.isEmpty else { return }
         onCreateTask?(query)
         closeTaskList()
+        onDismiss?()
     }
 
-    /// 回车语义：有匹配 → 绑定高亮项；无匹配 → 以输入文本新建并绑定。
+    /// esc 与点外面同义：这次是从任务区直接进来的就整个收起，否则退回详情态。
+    private func leaveTaskList() {
+        if listIsEntryPoint {
+            closeTaskList()
+            onDismiss?()
+        } else {
+            closeTaskList()
+        }
+    }
+
     /// 回车：执行当前高亮行登记的动作。空列表（没有任务、也没输入）时直接收起。
     private func commitList() {
         guard rowActions.indices.contains(highlighted) else {
@@ -841,16 +1033,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
 
     // MARK: - 交互
 
-    /// 面板展开到位后，还没绑任务就把列表摊开：用户点开胶囊八成就是来挑任务的，
-    /// 不该还要先发现第二行能点。已经绑了就保持收起——那时多半只是想扫一眼是哪个。
-    ///
-    /// Prepare before presenting the window, so opening reveals the complete list
-    /// in one transition and does not focus an editor halfway through the morph.
-    func expandTaskListForFirstUse() {
-        guard boundTaskName == nil, !listOpen else { return }
-        toggleTaskList()
-    }
-
     /// 展开动画收尾时把光标放到该放的地方：列表开着就是搜索框，否则是 pane 名。
     func focusInitialField() {
         if listOpen {
@@ -858,26 +1040,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         } else {
             window?.makeFirstResponder(nameField)
             nameField.currentEditor()?.selectAll(nil)
-        }
-    }
-
-    @objc private func beginTaskRename() {
-        guard let boundTaskName else { return }
-        if listOpen { closeTaskList() }
-        taskEditor.stringValue = boundTaskName
-        taskEditor.isHidden = false
-        taskField.isHidden = true
-        window?.makeFirstResponder(taskEditor)
-        taskEditor.currentEditor()?.selectAll(nil)
-    }
-
-    private func endTaskRename(commit: Bool) {
-        guard !taskEditor.isHidden else { return }
-        let name = taskEditor.stringValue.trimmingCharacters(in: .whitespaces)
-        taskEditor.isHidden = true
-        taskField.isHidden = false
-        if commit, !name.isEmpty, name != boundTaskName {
-            onTaskRenameCommit?(name)
         }
     }
 
@@ -897,8 +1059,6 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
                 let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty { onPaneNameCommit?(name) }
                 onDismiss?()
-            } else if control === taskEditor {
-                endTaskRename(commit: true)
             } else if control === searchField {
                 commitList()
             }
@@ -910,10 +1070,8 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
             setHighlight(nextEnabledRow(from: highlighted, step: -1), scroll: true)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
-            if control === taskEditor {
-                endTaskRename(commit: false)
-            } else if control === searchField {
-                closeTaskList()
+            if control === searchField {
+                leaveTaskList()
             } else {
                 onDismiss?()
             }
@@ -923,14 +1081,187 @@ final class PaneIdentityPanel: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// ⌘回车在字段编辑器里没有默认命令，走按键等价路径。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        guard listOpen, isReturn, event.modifierFlags.contains(.command) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        createFromQuery()
+        return true
+    }
+
     override func cancelOperation(_ sender: Any?) {
         if listOpen {
-            closeTaskList()
+            leaveTaskList()
         } else {
             onDismiss?()
         }
     }
 
+}
+
+/// 岛体详情态的按钮：常驻底色和图标，不靠 hover 才看出能点。
+final class IslandActionButton: NSView {
+    static let height: CGFloat = 26
+    enum Style { case primary, secondary, destructive }
+
+    var onTap: (() -> Void)?
+    private let style: Style
+    private let enabled: Bool
+    private let icon = NSImageView()
+    private let label: NSTextField
+    private let detailLabel: NSTextField
+    private var foreground = NSColor.labelColor
+    private var hovered = false { didSet { applyColors() } }
+    private var pressed = false { didSet { applyColors() } }
+
+    init(title: String, symbol: String, style: Style, detail: String? = nil, enabled: Bool = true) {
+        self.style = style
+        self.enabled = enabled
+        label = NSTextField(labelWithString: title)
+        detailLabel = NSTextField(labelWithString: detail ?? "")
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        if enabled { HoverCursor.installPointingHand(on: self) }
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        label.font = style == .primary ? .systemFont(ofSize: 11, weight: .medium) : ShellStyle.Font.compactBody
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        detailLabel.font = .systemFont(ofSize: 9.5)
+        for view in [icon, label, detailLabel] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 13),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(
+                lessThanOrEqualTo: detail == nil ? trailingAnchor : detailLabel.leadingAnchor,
+                constant: detail == nil ? -10 : -8),
+            detailLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+        setAccessibilityEnabled(enabled)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(foreground: NSColor) {
+        self.foreground = foreground
+        applyColors()
+    }
+
+    private func applyColors() {
+        let appearance = effectiveAppearance
+        let accent: NSColor
+        let fill: CGFloat
+        switch style {
+        case .primary:
+            accent = ShellStyle.navigationAccent
+            fill = pressed ? 0.28 : hovered ? 0.22 : 0.14
+        case .secondary:
+            accent = foreground.withAlphaComponent(0.82)
+            fill = pressed ? 0.15 : hovered ? 0.11 : 0.06
+        case .destructive:
+            accent = .systemRed
+            // 平时不铺底：它不该和常用操作一样显眼，指上去才确认这是个按钮。
+            fill = pressed ? 0.2 : hovered ? 0.12 : 0
+        }
+        let base = style == .secondary ? foreground : accent
+        layer?.backgroundColor = base.withAlphaComponent(enabled ? fill : 0.04)
+            .shellResolvedCGColor(for: appearance)
+        let text = enabled ? accent : foreground.withAlphaComponent(0.3)
+        label.textColor = text
+        icon.contentTintColor = text
+        detailLabel.textColor = foreground.withAlphaComponent(0.4)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
+    override func mouseEntered(with event: NSEvent) { if enabled { hovered = true } }
+    override func mouseExited(with event: NSEvent) { hovered = false; pressed = false }
+
+    // 点不动的按钮也吃掉 mouseDown：穿下去会关掉面板，看着像"点了没反应"。
+    override func mouseDown(with event: NSEvent) {
+        guard enabled else { return }
+        pressed = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard enabled, pressed else { return }
+        pressed = false
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onTap?() }
+    }
+}
+
+/// 把 handoff 摘要的 Markdown 排成岛体里的文字：Agent 写的是给下一个 Agent 看的 Markdown，
+/// 标记符原样显示很吵，但这里只是预览，不需要完整渲染器（完整内容走「打开文档」）。
+enum HandoffSummaryText {
+    static let maximumLines = 6
+
+    /// 去掉空行和节头，只留前几行。摘要是预览，空行在六行的额度里太奢侈。
+    static func lines(of markdown: String) -> [String] {
+        markdown.split(separator: "\n").map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("#") }
+            .prefix(maximumLines).map { $0 }
+    }
+
+    /// `**粗体**` 与 `` `代码` `` 转成字体变化，配不上对的标记按原文保留。
+    static func attributed(_ markdown: String, font: NSFont, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 2
+        paragraph.lineBreakMode = .byWordWrapping
+        let bold = NSFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+        let code = NSFont.monospacedSystemFont(ofSize: font.pointSize - 0.5, weight: .regular)
+        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
+        let result = NSMutableAttributedString()
+        let pattern = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*|`([^`]+)`")
+        let text = lines(of: markdown).joined(separator: "\n") as NSString
+        var cursor = 0
+        for match in pattern.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
+            result.append(NSAttributedString(
+                string: text.substring(with: NSRange(location: cursor, length: match.range.location - cursor)),
+                attributes: base))
+            var attributes = base
+            let inner: String
+            if match.range(at: 1).location != NSNotFound {
+                inner = text.substring(with: match.range(at: 1)).replacingOccurrences(of: "`", with: "")
+                attributes[.font] = bold
+            } else {
+                inner = text.substring(with: match.range(at: 2))
+                attributes[.font] = code
+            }
+            result.append(NSAttributedString(string: inner, attributes: attributes))
+            cursor = match.range.location + match.range.length
+        }
+        result.append(NSAttributedString(string: text.substring(from: cursor), attributes: base))
+        return result
+    }
+}
+
+/// 不接收鼠标的图片：只用来显示，点击落到下面的控件。
+private final class PassthroughImageView: NSImageView {
+    convenience init(image: NSImage) {
+        self.init(frame: .zero)
+        self.image = image
+        imageScaling = .scaleNone
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// NSScrollView 的文档坐标从上向下增长，任务排序与键盘移动因此保持直观。
@@ -953,8 +1284,7 @@ private final class TaskRowView: NSView {
 
     /// 点不动的行：文字压暗、不给手型光标、不高亮、`onTap` 不触发。
     /// 只用在「这个操作现在做不了，但值得让用户看见它存在」——理由写在 `detail`
-    /// 里，藏掉整行等于让用户以为功能不存在。现在的唯一用户是第一层那条
-    /// 「让 Agent 总结」（agent 正忙时禁用）。
+    /// 里，藏掉整行等于让用户以为功能不存在。
     ///
     /// 面板要读它来跳过键盘高亮（见 `nextEnabledRow`），所以不是 private。
     let enabled: Bool
@@ -986,9 +1316,12 @@ private final class TaskRowView: NSView {
         }
         if !enabled { label.textColor = foreground.withAlphaComponent(0.3) }
 
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
         let detailLabel = NSTextField(labelWithString: detail ?? "")
         detailLabel.font = .systemFont(ofSize: 9.5)
         detailLabel.textColor = foreground.withAlphaComponent(0.4)
+        detailLabel.lineBreakMode = .byTruncatingMiddle
 
         for v in [check, label, detailLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -1001,10 +1334,12 @@ private final class TaskRowView: NSView {
 
             label.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 5),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // 没有尾注时文字用满整行，空标签也不占位。
             label.trailingAnchor.constraint(
-                lessThanOrEqualTo: detailLabel.leadingAnchor, constant: -8),
+                lessThanOrEqualTo: detail == nil ? trailingAnchor : detailLabel.leadingAnchor, constant: -8),
 
             detailLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            detailLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
             detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         applyFill()
@@ -1013,29 +1348,11 @@ private final class TaskRowView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// 禁用行即便被标成高亮也不上底色：上了色它就跟可点的行长得一样，
-    /// 而按下去什么都不会发生。这条与上面那句「不高亮」的注释配套。
-    /// 常驻浅底：列表里的行不需要它——上下文本身就说明那是一排可选项；单独站在
-    /// 第一层的那一行需要，否则只是一串带颜色的文字，用户不会把鼠标移上去试。
-    /// 与任务行（`TaskFieldRow`）同一套数值：静止 0.06、指上去 0.11、圆角 6。
-    var restsFilled = false {
-        didSet {
-            layer?.cornerRadius = restsFilled ? 6 : 0
-            applyFill()
-        }
-    }
-
+    /// 而按下去什么都不会发生。
     private func applyFill() {
-        let alpha: CGFloat
-        switch (highlighted && enabled, restsFilled, enabled) {
-        case (true, _, _): alpha = restsFilled ? 0.11 : 0.1
-        case (false, true, true): alpha = 0.06
-        // 点不动时底色也要压下去：留着满格的浅底，它看着仍然像能点。
-        case (false, true, false): alpha = 0.03
-        default: alpha = 0
-        }
-        layer?.backgroundColor = alpha == 0
-            ? NSColor.clear.cgColor
-            : rowForeground.withAlphaComponent(alpha).cgColor
+        layer?.backgroundColor = highlighted && enabled
+            ? rowForeground.withAlphaComponent(0.1).cgColor
+            : NSColor.clear.cgColor
     }
 
     override func updateTrackingAreas() {
@@ -1050,18 +1367,10 @@ private final class TaskRowView: NSView {
     }
 
     // 点不动的行照样吃掉 mouseDown：让它穿到底下去会关掉面板，看着像"点了没反应"。
-    //
-    // 高亮的归属分两种：列表里的行由面板统一管（移到哪一行、上下键走到哪一行），
-    // 所以这里只发 `onHover`；常驻浅底的那一行不在列表里，没人接它的 `onHover`，
-    // 得自己管进出。
+    // 高亮由面板统一管（移到哪一行、上下键走到哪一行），这里只发 `onHover`。
     override func mouseEntered(with event: NSEvent) {
         guard enabled else { return }
-        if restsFilled { highlighted = true }
         onHover?()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        if restsFilled { highlighted = false }
     }
 
     override func mouseDown(with event: NSEvent) { guard enabled else { return }; onTap?() }
@@ -1086,9 +1395,6 @@ private final class TaskFieldRow: NSView {
     private var hovered = false { didSet { applyFill() } }
     private var restingFill = NSColor.clear
     private var hoverFill = NSColor.clear
-
-    /// 内联改名的编辑框要和值对齐，位置由这里给出。
-    var valueLeadingAnchor: NSLayoutXAxisAnchor { value.leadingAnchor }
 
     init() {
         super.init(frame: .zero)
