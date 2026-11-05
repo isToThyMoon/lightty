@@ -93,6 +93,7 @@ enum PluginWriteError: LocalizedError {
     case unreadable(path: String, reason: String)
     case unsupportedShape(path: String, detail: String)
     case notApplied(path: String)
+    case backupFailed(path: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -104,6 +105,8 @@ enum PluginWriteError: LocalizedError {
             return "\(path) has a shape this editor will not rewrite: \(detail). The file was left untouched."
         case .notApplied(let path):
             return "The edit to \(path) did not take effect. The file was left untouched."
+        case .backupFailed(let path, let reason):
+            return "Cannot create the backup \(path): \(reason). The file was left untouched."
         }
     }
 }

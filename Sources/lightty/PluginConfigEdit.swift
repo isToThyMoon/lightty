@@ -59,10 +59,11 @@ enum JSONTextEdit {
     private static func insert(key: String, literal: String, into node: Node, chars: [Character]) -> [Character] {
         var chars = chars
         let member = "\"\(escape(key))\": \(literal)"
+        let newline = chars.contains(Character("\r\n")) ? "\r\n" : "\n"
         if let first = node.members.first {
             // 成员各占一行时沿用它们的缩进，挤在一行里时也跟着挤在一行里。
             if let indent = ownLineIndent(before: first.keyStart, in: chars) {
-                chars.insert(contentsOf: Array(member + ",\n" + indent), at: first.keyStart)
+                chars.insert(contentsOf: Array(member + "," + newline + indent), at: first.keyStart)
             } else {
                 chars.insert(contentsOf: Array(member + ", "), at: first.keyStart)
             }
@@ -70,14 +71,14 @@ enum JSONTextEdit {
         }
         let outer = lineIndent(containing: node.start, in: chars)
         chars.replaceSubrange((node.start + 1)..<(node.end - 1),
-                              with: Array("\n" + outer + "  " + member + "\n" + outer))
+                              with: Array(newline + outer + "  " + member + newline + outer))
         return chars
     }
 
     /// 行首到 `position` 只有空白时返回那段空白；否则返回 nil，表示这一行还有别的内容。
     private static func ownLineIndent(before position: Int, in chars: [Character]) -> String? {
         var start = position
-        while start > 0, chars[start - 1] != "\n" { start -= 1 }
+        while start > 0, !chars[start - 1].isNewline { start -= 1 }
         let prefix = chars[start..<position]
         guard prefix.allSatisfy({ $0 == " " || $0 == "\t" }) else { return nil }
         return String(prefix)
@@ -85,7 +86,7 @@ enum JSONTextEdit {
 
     private static func lineIndent(containing position: Int, in chars: [Character]) -> String {
         var start = position
-        while start > 0, chars[start - 1] != "\n" { start -= 1 }
+        while start > 0, !chars[start - 1].isNewline { start -= 1 }
         var end = start
         while end < chars.count, chars[end] == " " || chars[end] == "\t" { end += 1 }
         return String(chars[start..<end])
@@ -197,20 +198,28 @@ enum JSONTextEdit {
 /// 对 Codex `config.toml` 的按行定点编辑：找到（或补出）`[plugins."<id>"]` 一张表，
 /// 只动里面的 `enabled`。仓库没有 TOML 依赖，也不该为一个布尔值把整份文档往返一遍——
 /// 那会连注释、键序和用户自己的排版一起丢掉。
+///
+/// 文件可能是 CRLF：按 `\n` 切开后每行还带着 `\r`，解析一律先去掉，改写和新增的行沿用文件的换行。
 enum TOMLTextEdit {
     /// 配置里登记过的插件。值是 `enabled`；表在但没写 `enabled` 记为 false，
     /// 不替 Codex 猜一个默认开启。表不在则整个键不存在，那是「只有缓存」。
     static func plugins(in text: String) -> [String: Bool] {
         var result: [String: Bool] = [:]
         var current: String?
+        var section: String?
         for line in text.components(separatedBy: "\n") {
             if let header = header(of: line) {
+                section = header
                 current = pluginID(inHeader: header)
                 if let current { result[current] = result[current] ?? false }
                 continue
             }
-            guard let current, let value = enabledValue(in: line) else { continue }
-            result[current] = value
+            if let current {
+                if let value = enabledValue(in: line) { result[current] = value }
+            } else if let declared = pluginDeclaration(in: line, section: section),
+                      declared.rest == ["enabled"], let value = booleanValue(in: line) {
+                result[declared.id] = value
+            }
         }
         return result
     }
@@ -219,21 +228,24 @@ enum TOMLTextEdit {
 
     static func setPluginEnabled(_ value: Bool, id: String, in text: String) throws -> String {
         var lines = text.components(separatedBy: "\n")
-        let literal = value ? "true" : "false"
         var tableStart: Int?
         var tableEnd = lines.count
-        var insidePlainPlugins = false
+        var section: String?
         for (index, line) in lines.enumerated() {
             guard let header = header(of: line) else {
-                // `[plugins]` 里用行内表写同一个插件的文件不在我们的编辑口径内：
-                // 再追加一张同名表就是重复键。宁可报错，也不把用户的配置改坏。
-                if insidePlainPlugins, key(of: line) == id {
+                // 表外的写法（根层点号、`[plugins]` 里的点号或行内表）不在我们的编辑口径内：
+                // 再追加一张同名表就是重复定义，Codex 会读不了整份配置。宁可报错，也不改坏。
+                if section == nil, keyPath(of: line) == ["plugins"] {
                     throw PluginWriteError.unsupportedShape(
-                        path: "config.toml", detail: "\(id) is declared inside a [plugins] table")
+                        path: "config.toml", detail: "plugins is declared as an inline table")
+                }
+                if pluginDeclaration(in: line, section: section)?.id == id {
+                    throw PluginWriteError.unsupportedShape(
+                        path: "config.toml", detail: "\(id) is declared outside its own table")
                 }
                 continue
             }
-            insidePlainPlugins = header == "plugins"
+            section = header
             if tableStart != nil {
                 tableEnd = index
                 break
@@ -241,21 +253,13 @@ enum TOMLTextEdit {
             if pluginID(inHeader: header) == id { tableStart = index }
         }
         guard let tableStart else {
+            let newline = lineEnding(of: text)
             var result = text
-            if !result.isEmpty, !result.hasSuffix("\n") { result += "\n" }
-            if !result.isEmpty { result += "\n" }
-            return result + "[plugins.\"\(id)\"]\nenabled = \(literal)\n"
+            if !result.isEmpty, !result.hasSuffix("\n"), !result.hasSuffix("\r\n") { result += newline }
+            if !result.isEmpty { result += newline }
+            return result + "[plugins.\"\(id)\"]" + newline + "enabled = \(value)" + newline
         }
-        // 按键名认，不按值认：值写成别的东西时也该被改写，而不是再补一行重复键。
-        for index in (tableStart + 1)..<tableEnd where key(of: lines[index]) == "enabled" {
-            let line = lines[index]
-            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
-            // 行尾注释是用户写给自己的，跟着保留。
-            let comment = line.firstIndex(of: "#").map { " " + String(line[$0...]) } ?? ""
-            lines[index] = indent + "enabled = " + literal + comment
-            return lines.joined(separator: "\n")
-        }
-        lines.insert("enabled = " + literal, at: tableStart + 1)
+        setEnabled(value, in: &lines, table: tableStart, end: tableEnd, newline: lineEnding(of: text))
         return lines.joined(separator: "\n")
     }
 
@@ -277,7 +281,7 @@ enum TOMLTextEdit {
                 }
             }
             guard let current, let slot = slots[current] else { continue }
-            result[slot].lines.append(line)
+            result[slot].lines.append(line.hasSuffix("\r") ? String(line.dropLast()) : line)
         }
         return result
     }
@@ -300,7 +304,6 @@ enum TOMLTextEdit {
 
     static func setMCPEnabled(_ value: Bool, name: String, in text: String) throws -> String {
         var lines = text.components(separatedBy: "\n")
-        let literal = value ? "true" : "false"
         var tableStart: Int?
         var tableEnd = lines.count
         for (index, line) in lines.enumerated() {
@@ -313,15 +316,27 @@ enum TOMLTextEdit {
             throw PluginWriteError.unsupportedShape(path: "config.toml",
                                                     detail: "\(name) has no [mcp_servers] table")
         }
-        for index in (tableStart + 1)..<tableEnd where key(of: lines[index]) == "enabled" {
-            let line = lines[index]
-            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
-            let comment = line.firstIndex(of: "#").map { " " + String(line[$0...]) } ?? ""
-            lines[index] = indent + "enabled = " + literal + comment
-            return lines.joined(separator: "\n")
-        }
-        lines.insert("enabled = " + literal, at: tableStart + 1)
+        setEnabled(value, in: &lines, table: tableStart, end: tableEnd, newline: lineEnding(of: text))
         return lines.joined(separator: "\n")
+    }
+
+    /// 按键名认，不按值认：值写成别的东西时也该被改写，而不是再补一行重复键。
+    /// `lines` 是按 `\n` 切开的，CRLF 文件的每行结尾还留着 `\r`。
+    private static func setEnabled(_ value: Bool, in lines: inout [String], table: Int, end: Int, newline: String) {
+        for index in (table + 1)..<end where key(of: lines[index]) == "enabled" {
+            let carriage = lines[index].hasSuffix("\r") ? "\r" : ""
+            let line = carriage.isEmpty ? lines[index] : String(lines[index].dropLast())
+            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
+            // 行尾注释是用户写给自己的，跟着保留。
+            let comment = line.firstIndex(of: "#").map { " " + String(line[$0...]) } ?? ""
+            lines[index] = indent + "enabled = \(value)" + comment + carriage
+            return
+        }
+        lines.insert("enabled = \(value)" + (newline == "\r\n" ? "\r" : ""), at: table + 1)
+    }
+
+    private static func lineEnding(of text: String) -> String {
+        text.contains("\r\n") ? "\r\n" : "\n"
     }
 
     private static func isServerTable(_ header: String, name: String) -> Bool {
@@ -342,7 +357,7 @@ enum TOMLTextEdit {
 
     /// 表头文字，不含方括号；不是表头返回 nil。
     private static func header(of line: String) -> String? {
-        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("[") else { return nil }
         if let comment = commentStart(of: trimmed) {
             trimmed = String(trimmed[..<comment]).trimmingCharacters(in: .whitespaces)
@@ -362,7 +377,7 @@ enum TOMLTextEdit {
 
     /// 赋值行的键，带引号的去引号；不是赋值行返回 nil。
     private static func key(of line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else { return nil }
         let raw = String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
         for quote in ["\"", "'"] where raw.hasPrefix(quote) && raw.hasSuffix(quote) && raw.count >= 2 {
@@ -371,9 +386,52 @@ enum TOMLTextEdit {
         return raw
     }
 
+    /// 赋值行的键路径：`plugins."a@b".enabled` 是三段，引号里的点不分段。
+    private static func keyPath(of line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasPrefix("#"), !trimmed.hasPrefix("[") else { return nil }
+        var path: [String] = []
+        var segment = ""
+        var quote: Character?
+        for character in trimmed {
+            if let open = quote {
+                if character == open { quote = nil } else { segment.append(character) }
+                continue
+            }
+            switch character {
+            case "\"", "'": quote = character
+            case ".", "=":
+                path.append(segment.trimmingCharacters(in: .whitespaces))
+                segment = ""
+                if character == "=" { return path }
+            default: segment.append(character)
+            }
+        }
+        return nil
+    }
+
+    /// 不在 `[plugins."<id>"]` 自己的表里、却声明了某个插件的赋值行。
+    /// 只有根层和 `[plugins]` 里算数，别的 section 里同名的路径是另一回事。
+    private static func pluginDeclaration(in line: String, section: String?) -> (id: String, rest: [String])? {
+        guard let path = keyPath(of: line) else { return nil }
+        let relative: ArraySlice<String>
+        if section == nil, path.first == "plugins" {
+            relative = path.dropFirst()
+        } else if section == "plugins" {
+            relative = path[...]
+        } else {
+            return nil
+        }
+        guard let id = relative.first else { return nil }
+        return (id, Array(relative.dropFirst()))
+    }
+
     private static func enabledValue(in line: String) -> Bool? {
-        guard key(of: line) == "enabled" else { return nil }
-        let value = line.drop { $0 != "=" }.dropFirst().trimmingCharacters(in: .whitespaces)
+        key(of: line) == "enabled" ? booleanValue(in: line) : nil
+    }
+
+    private static func booleanValue(in line: String) -> Bool? {
+        let value = line.drop { $0 != "=" }.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
         let token = value.split(whereSeparator: { $0 == " " || $0 == "#" }).first.map(String.init)
         guard token == "true" || token == "false" else { return nil }
         return token == "true"
@@ -396,15 +454,19 @@ enum TOMLTextEdit {
 
 /// Agent 配置文件的写入口径，插件与 MCP server 共用。
 enum ConfigFile {
-    /// 备份一次、改一次、验一次、原子换一次。验不过就整份丢弃，绝不落地半成品。
+    /// 备份一次、改一次、验一次、原子换一次。验不过就整份丢弃，绝不落地半成品；
+    /// 留不下备份就不写，用户才不会以为有退路。
+    /// 配置是符号链接（dotfile 管理常见）时写穿到目标、链接不动；备份留在链接旁边，是一份真文件。
     static func rewrite(_ url: URL, empty: String,
                          edit: (String) throws -> String,
                          verify: (String) -> Bool) throws {
         let files = FileManager.default
         var text = empty
-        if files.fileExists(atPath: url.path) {
+        let exists = files.fileExists(atPath: url.path)
+        let target = exists ? url.resolvingSymlinksInPath() : url
+        if exists {
             do {
-                text = try String(contentsOf: url, encoding: .utf8)
+                text = try String(contentsOf: target, encoding: .utf8)
             } catch {
                 throw PluginWriteError.unreadable(path: url.path, reason: error.localizedDescription)
             }
@@ -412,20 +474,24 @@ enum ConfigFile {
             let backup = url.deletingLastPathComponent()
                 .appendingPathComponent(url.lastPathComponent + ".lightty-backup")
             if !files.fileExists(atPath: backup.path) {
-                try? files.copyItem(at: url, to: backup)
+                do {
+                    try files.copyItem(at: target, to: backup)
+                } catch {
+                    throw PluginWriteError.backupFailed(path: backup.path, reason: error.localizedDescription)
+                }
             }
         }
         let updated = try edit(text)
         guard verify(updated) else { throw PluginWriteError.notApplied(path: url.path) }
-        try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let temp = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(url.lastPathComponent).lightty-\(UUID().uuidString)")
+        try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let temp = target.deletingLastPathComponent()
+            .appendingPathComponent(".\(target.lastPathComponent).lightty-\(UUID().uuidString)")
         do {
             try Data(updated.utf8).write(to: temp)
-            if files.fileExists(atPath: url.path) {
-                _ = try files.replaceItemAt(url, withItemAt: temp)
+            if exists {
+                _ = try files.replaceItemAt(target, withItemAt: temp)
             } else {
-                try files.moveItem(at: temp, to: url)
+                try files.moveItem(at: temp, to: target)
             }
         } catch {
             try? files.removeItem(at: temp)

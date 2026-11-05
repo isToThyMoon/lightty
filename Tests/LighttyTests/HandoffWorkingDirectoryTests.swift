@@ -80,7 +80,7 @@ extension SessionAssociationTests {
         directory.frame = NSRect(x: 10, y: 10, width: 200, height: 28)
         host.contentView?.addSubview(directory)
         host.contentView?.layoutSubtreeIfNeeded()
-        host.makeKeyAndOrderFront(nil)
+        host.makeKeyAndOrderFrontInvisibly()
         defer { host.orderOut(nil) }
         host.makeFirstResponder(directory.field)
         let editor = try #require(directory.field.currentEditor() as? NSTextView)
