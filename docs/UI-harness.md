@@ -16,7 +16,7 @@
 
 ## 基础语义
 
-token 的值和选择依据见 [DESIGN.md](../DESIGN.md)，壳层 token 入口是 [ShellStyle](../Sources/lightty/ShellStyle.swift)。
+token 的选择依据见 [DESIGN.md](../DESIGN.md)，壳层 token 入口是 [ShellStyle](../Sources/lightty/ShellStyle.swift)。
 
 两级侧栏的模式/标题带共用 `ShellStyle.SidebarHeader`，对齐头部中心和列表起点；第一侧栏的模式说明放在 tooltip 与空状态，不常驻占一行。第一侧栏保留浮卡的外框与阴影，窗口外轮廓由系统负责。行内更多操作在悬停、键盘聚焦或菜单打开时显示，操作槽位始终保留。
 

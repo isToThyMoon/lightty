@@ -8,7 +8,7 @@
 
 - 构建：`swift build`。首次运行前 `node scripts/prepare-claude-helper.mjs` 准备 Claude SDK helper。只重建 Swift，改内核走 `ghostty-kernel` 技能。
 - 测试：`scripts/test.sh [过滤]`，只输出失败项与 `file:line`。
-- 改完跑检查，通过才算完成：`scripts/check.sh`（构建、全量测试、终端适配门禁、本地化、UI token、文档核对）。
+- 改完跑检查，通过才算完成：`scripts/check.sh`（构建、全量测试、终端适配门禁、本地化、文档核对）。
 - 看界面：`scripts/snapshot.sh <过滤>`，渲染截图到 `.build/ui-snapshots/`（测试窗口会短暂上屏）；各区域的过滤见 [UI harness](docs/UI-harness.md#工作与验证)。
 - 打包与发布：`scripts/package-app.sh`，流程见 [发布](docs/releasing.md)。
 
@@ -55,7 +55,7 @@
 ## 按任务读
 
 - 写或改测试：[测试约定](docs/testing.md)。
-- 改 UI（布局、文字层级、颜色、图标、交互状态）：token 的值与选择依据见 [DESIGN.md](DESIGN.md)，区域、组件与行为见 [UI harness](docs/UI-harness.md) 的相关部分。样式引用 `ShellStyle` 的语义 token，缺合适的颜色 token 时先加 token 再用。侧栏结构与行为见 [双侧栏](docs/specs/double-sidebar.md)、[标签页分组](docs/specs/tab-groups.md)、[第一侧栏模式](docs/specs/primary-sidebar-modes.md)。
+- 改 UI（布局、文字层级、颜色、图标、交互状态）：风格与 token 的选择依据见 [DESIGN.md](DESIGN.md)，区域、组件与行为见 [UI harness](docs/UI-harness.md) 的相关部分。样式引用 `ShellStyle` 的语义 token，缺合适的颜色 token 时先加 token 再用。侧栏结构与行为见 [双侧栏](docs/specs/double-sidebar.md)、[标签页分组](docs/specs/tab-groups.md)、[第一侧栏模式](docs/specs/primary-sidebar-modes.md)。
 - 动标签页与分屏树（移动、关闭、放大、撤销）：[pane 排布](docs/specs/pane-layout.md)。
 - 新开终端、终端与 Agent 会话 / 任务的关联、重启恢复：[终端关联契约](docs/terminal-associations.md)。
 - 动任何 Claude Code / Codex 接触点（命令、hook、文件、安装方式）：先看 [依赖清单](docs/agent-dependencies.md)；状态与上下文注入见 [状态契约](docs/specs/pane-status.md) 与 [hooks](docs/hooks.md)。接入新 Agent 用 `add-agent` 技能，检查对接兼容性用 `agent-compat` 技能。

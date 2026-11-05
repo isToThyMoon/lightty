@@ -5,7 +5,7 @@
 ## 运行
 
 - `scripts/test.sh [过滤]`：清掉继承的 `LIGHTTY_PANE_ID` / `LIGHTTY_SOCK` 后跑 `swift test`，只输出失败项与 `file:line`，完整日志留在 `.build/test-logs/`。跳过的测试单独列出，跳过不算通过。默认 600 秒超时（含编译，`LIGHTTY_TEST_TIMEOUT` 可改），超时算失败并列出卡住的用例。
-- `scripts/check.sh`：改完跑的总检查（构建、全量测试、终端适配门禁、本地化、UI token、文档核对）。
+- `scripts/check.sh`：改完跑的总检查（构建、全量测试、终端适配门禁、本地化、文档核对）。
 - `scripts/snapshot.sh <过滤>`：带 `LIGHTTY_UI_SNAPSHOT_DIR` 跑测试并列出截图，外观改动用它看渲染结果，入口见 [UI harness](UI-harness.md#工作与验证)。
 - Agent 对接的 schema 契约：`scripts/test.sh AgentContractTests`（本机没装那一家就跳过）。新用到 app-server 方法、字段、枚举值时补充契约表。
 
