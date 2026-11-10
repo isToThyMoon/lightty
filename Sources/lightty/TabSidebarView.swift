@@ -1,18 +1,12 @@
 import AppKit
 
-/// 侧栏可拖宽度区间：边线在 [minimum, maximum] 之间实时改宽；
-/// 到达最小宽后还要再向左拖 closeOvershoot 才关闭，避免想调窄时误收起。
+/// 侧栏可拖宽度区间：边线在 [minimum, maximum] 之间实时改宽。拖动只调宽，
+/// 不关闭侧栏：拖过最小宽就停在最小宽，开关只走按钮与菜单。
 struct SidebarWidthRange: Equatable {
     var minimum: CGFloat
     var maximum: CGFloat
-    var closeOvershoot: CGFloat = 40
-
     func clamped(_ width: CGFloat) -> CGFloat {
         min(max(width, minimum), maximum)
-    }
-
-    func shouldClose(rawWidth: CGFloat) -> Bool {
-        rawWidth < minimum - closeOvershoot
     }
 }
 
@@ -39,10 +33,8 @@ enum TabSidebarSizing {
         minimum: ShellStyle.tabColumnWidth, maximum: ShellStyle.tabColumnWidth * 2)
     static var minimumWidth: CGFloat { range.minimum }
     static var maximumWidth: CGFloat { range.maximum }
-    static var closeOvershoot: CGFloat { range.closeOvershoot }
 
     static func clampedWidth(_ width: CGFloat) -> CGFloat { range.clamped(width) }
-    static func shouldClose(rawWidth: CGFloat) -> Bool { range.shouldClose(rawWidth: rawWidth) }
 }
 
 enum TabSidebarWidthPreference {
@@ -63,9 +55,8 @@ enum TabSidebarWidthPreference {
 /// 标签页侧栏（docked，默认展开）：承载 标签页›pane 两级树。
 /// 与 task 浮层卡片是两套独立面板——标签页↔pane 是严格层级，task↔pane
 /// 是绑定关系，UI 上不呈现并列/嵌套感。
-/// 开关在标题栏侧栏按钮；右边线可调宽，越过最小宽度继续左拖则关闭。
+/// 开关在标题栏侧栏按钮；右边线只调宽。
 final class TabSidebarView: NSView {
-    var onCloseRequested: (() -> Void)?
     var onResizeBegan: (() -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
     var onResizeEnded: (() -> Void)?
@@ -78,7 +69,6 @@ final class TabSidebarView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
 
-        dragStrip.onDragClose = { [weak self] in self?.onCloseRequested?() }
         dragStrip.onResizeBegan = { [weak self] in self?.onResizeBegan?() }
         dragStrip.onWidthChange = { [weak self] width in self?.onWidthChange?(width) }
         dragStrip.onResizeEnded = { [weak self] in self?.onResizeEnded?() }
@@ -307,8 +297,8 @@ final class EdgeRevealStrip: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽；到达最小宽后继续
-/// 向左拖过阈值即关闭。同时保留边缘 hover 感应。两侧栏共用，区间由宿主给。
+/// 侧栏右边线的拖动条：最小宽到最大宽之间实时改宽，越界钳在端点，不关闭侧栏。
+/// 同时保留边缘 hover 感应。两侧栏共用，区间由宿主给。
 final class EdgeDragStrip: NSView {
     var range: SidebarWidthRange
     /// 贴边这一带不让给滚动条，在滑块外侧（滑块画在槽中线、6pt 宽）。
@@ -357,7 +347,6 @@ final class EdgeDragStrip: NSView {
         (hitTest(point) === self && !ShellHoverGate.suppressed ? NSCursor.resizeLeftRight : .arrow).set()
     }
 
-    var onDragClose: (() -> Void)?
     var onResizeBegan: (() -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
     var onResizeEnded: (() -> Void)?
@@ -390,12 +379,6 @@ final class EdgeDragStrip: NSView {
             let rawWidth = initialWidth + next.locationInWindow.x - origin
             switch next.type {
             case .leftMouseDragged:
-                if range.shouldClose(rawWidth: rawWidth) {
-                    onWidthChange?(range.minimum)
-                    onResizeEnded?()
-                    onDragClose?()
-                    return
-                }
                 onWidthChange?(range.clamped(rawWidth))
             case .leftMouseUp:
                 onWidthChange?(range.clamped(rawWidth))

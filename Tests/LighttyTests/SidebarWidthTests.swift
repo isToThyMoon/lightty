@@ -1,7 +1,7 @@
 import XCTest
 @testable import lightty
 
-/// 两条侧栏的可拖宽度守同一套规则：区间钳制、越界才拖关、偏好按区间读回。
+/// 两条侧栏的可拖宽度守同一套规则：区间钳制、偏好按区间读回。
 final class SidebarWidthTests: XCTestCase {
     /// 滚动条在拖动条下面时只让出滑块：空轨道和贴边一带都拖侧栏边线，长列表也抓得住。
     @MainActor

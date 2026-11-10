@@ -32,7 +32,7 @@ enum PrimarySidebarWidthPreference {
 }
 
 /// Stable panel chrome; mode contents present shared app models and own only their UI state.
-/// 右边线可调宽，越过最小宽度继续左拖则关闭（与第二侧栏同一手势）。
+/// 右边线只调宽，不关闭（与第二侧栏同一手势）。
 final class PrimarySidebar: NSView {
     var onRequestClose: (() -> Void)?
     var onModeChanged: ((PrimarySidebarMode) -> Void)?
@@ -59,7 +59,6 @@ final class PrimarySidebar: NSView {
         search.target = self; search.action = #selector(searchContent)
         create.target = self; create.action = #selector(newTask)
         collapse.target = self; collapse.action = #selector(closePanel)
-        dragStrip.onDragClose = { [weak self] in self?.onRequestClose?() }
         dragStrip.onResizeBegan = { [weak self] in self?.onResizeBegan?() }
         dragStrip.onWidthChange = { [weak self] width in self?.onWidthChange?(width) }
         dragStrip.onResizeEnded = { [weak self] in self?.onResizeEnded?() }

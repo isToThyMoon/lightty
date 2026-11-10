@@ -1090,7 +1090,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     //   卡片关着时回到标题栏、紧挨缩放键，点了展开。同一语义，随卡片挪位。
     // 标签页侧栏由吸边半胶囊控制（同形镜像）：开着时吸在其右边线中点的关闭钮；
     // 关着时吸在主区左缘中点的展开钮（鼠标靠近边缘带才增强）。
-    // 标签页侧栏右边线同时负责调宽与越界左拖关闭。
+    // 标签页侧栏右边线只负责调宽，不关闭。
 
     /// task 卡片开关（标题栏按钮 / 菜单「任务侧栏」）
     func toggleSidebar() {
@@ -1172,7 +1172,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
               let themeFrame = contentView.superview else { return }
         let titlebarContainer = titlebarContainer(in: window, themeFrame: themeFrame)
         let sidebar = TabSidebarView(topInset: tabSidebarTopInset(in: window))
-        sidebar.onCloseRequested = { [weak self] in self?.closeTabSidebar() }
         sidebar.onResizeBegan = { [weak self] in self?.beginTabSidebarResize() }
         sidebar.onWidthChange = { [weak self] width in
             self?.resizeTabSidebar(to: width)
