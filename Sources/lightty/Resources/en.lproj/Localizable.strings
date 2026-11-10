@@ -134,10 +134,10 @@
 "This folder" = "This folder";
 "Other folders" = "Other folders";
 "Open document" = "Open document";
-"↩ Bind · esc Close" = "↩ Bind · esc Close";
-"↩ Bind · ⌘↩ New · esc Close" = "↩ Bind · ⌘↩ New · esc Close";
-"↩ New · esc Close" = "↩ New · esc Close";
-"esc Close" = "esc Close";
+"↩ Bind" = "↩ Bind";
+"↩ Bind · ⌘↩ New" = "↩ Bind · ⌘↩ New";
+"↩ New" = "↩ New";
+"Back" = "Back";
 "Task" = "Task";
 "Not set" = "Not set";
 "Choose task" = "Choose task";

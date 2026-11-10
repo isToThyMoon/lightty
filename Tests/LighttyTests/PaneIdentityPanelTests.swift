@@ -135,6 +135,7 @@ final class PaneIdentityPanelTests: XCTestCase {
 
             let (picker, pickerHost) = makePanel(task: "mobile 开发")
             picker.openTaskPicker()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.8)) // 等翻页动画走完；切外观后第一帧可能卡几百毫秒
             try save(pickerHost, "identity-picker-\(appearanceName)")
             let search = try XCTUnwrap(picker.descendants.compactMap { $0 as? NSTextField }
                 .first { $0.placeholderAttributedString?.string == L("Search name or folder, or type a new name") })

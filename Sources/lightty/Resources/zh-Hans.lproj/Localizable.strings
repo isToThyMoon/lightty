@@ -134,10 +134,10 @@
 "This folder" = "此目录";
 "Other folders" = "其他目录";
 "Open document" = "打开文档";
-"↩ Bind · esc Close" = "↩ 绑定 · esc 关闭";
-"↩ Bind · ⌘↩ New · esc Close" = "↩ 绑定 · ⌘↩ 新建 · esc 关闭";
-"↩ New · esc Close" = "↩ 新建 · esc 关闭";
-"esc Close" = "esc 关闭";
+"↩ Bind" = "↩ 绑定";
+"↩ Bind · ⌘↩ New" = "↩ 绑定 · ⌘↩ 新建";
+"↩ New" = "↩ 新建";
+"Back" = "返回";
 "Task" = "任务";
 "Not set" = "未选择";
 "Choose task" = "选择任务";
