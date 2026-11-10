@@ -29,6 +29,23 @@ import Testing
         processExited: false, candidates: [], home: home) == nil)
 }
 
+/// 续接后的 Codex 在第一个 hook 之前只有终端信号兜底的状态，里面没有会话 ID。
+/// 它不能把恢复来的关联冲掉，否则下一次快照写成无会话，再重启就不续接了。
+@Test func terminalSignalStatusKeepsResumedIdentity() {
+    let home = URL(fileURLWithPath: "/home")
+    let key = AgentSessionKey(agent: .codex, sourceRoot: "/home/.codex", nativeID: "thread")
+    let resumed = PaneSessionAssociation(key: key, configuration: .standard, workingDirectory: "/work")
+    let signal = PaneStatus(ts: Date(), state: .attention, agent: "codex", event: PaneStatusStore.fallbackEvent)
+    #expect(PaneSessionAssociation.resolve(status: signal, fallback: resumed,
+        processExited: false, candidates: [], home: home) == resumed)
+    let other = PaneSessionAssociation(key: .init(agent: .claude, sourceRoot: "/home/.claude", nativeID: "c"),
+        configuration: .standard, workingDirectory: "/work")
+    #expect(PaneSessionAssociation.resolve(status: signal, fallback: other,
+        processExited: false, candidates: [], home: home) == nil)
+    #expect(PaneSessionAssociation.resolve(status: signal, fallback: nil,
+        processExited: false, candidates: [], home: home) == nil)
+}
+
 @Test func hookSourceRootSurvivesWireRoundTrip() throws {
     let status = PaneStatus(ts: Date(timeIntervalSince1970: 100), state: .idle,
         agent: "codex", sessionID: "fixture", sourceRoot: "/custom/codex",

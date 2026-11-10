@@ -13,7 +13,12 @@ struct PaneSessionAssociation: Equatable {
         guard !processExited else { return nil }
         guard let status else { return fallback }
         guard status.event != "SessionEnd", let name = status.agent,
-              let agent = SessionAgent(rawValue: name), let id = status.sessionID, !id.isEmpty else { return nil }
+              let agent = SessionAgent(rawValue: name) else { return nil }
+        // Terminal-signal fallbacks (Codex title / OSC 9 before its first hook after a resume)
+        // carry no session id. They describe activity, not identity: keep the known association.
+        guard let id = status.sessionID, !id.isEmpty else {
+            return fallback?.key.agent == agent ? fallback : nil
+        }
         let key: AgentSessionKey
         if let root = status.sourceRoot, !root.isEmpty {
             key = .init(agent: agent, sourceRoot: root, nativeID: id)
