@@ -659,11 +659,10 @@ final class PrimarySidebarTests: XCTestCase {
         let knobHit = sidebar.hitTest(onKnob)
         XCTAssertTrue(knobHit === scroll || knobHit?.isDescendant(of: scroll) == true,
                       "The scroll view, not the edge resize strip, owns the knob")
-        // 常驻轨道用于翻页，不能被侧栏的调宽热区截走。
+        // 空轨道归调宽热区：长列表的边线也要抓得住。
         let onTrack = sidebar.convert(NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), from: scroller)
         XCTAssertFalse(knob.contains(sidebar.convert(onTrack, to: scroller)))
-        let trackHit = sidebar.hitTest(onTrack)
-        XCTAssertTrue(trackHit === scroller || trackHit?.isDescendant(of: scroller) == true)
+        XCTAssertTrue(sidebar.hitTest(onTrack) is EdgeDragStrip)
     }
 
     /// 会话行拖放的落点规则表：

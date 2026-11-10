@@ -311,19 +311,20 @@ final class EdgeRevealStrip: NSView {
 /// 向左拖过阈值即关闭。同时保留边缘 hover 感应。两侧栏共用，区间由宿主给。
 final class EdgeDragStrip: NSView {
     var range: SidebarWidthRange
+    /// 贴边这一带不让给滚动条，在滑块外侧（滑块画在槽中线、6pt 宽）。
+    static let edgeGrabWidth: CGFloat = 6
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        // The scroller lives at the edge too. A legacy (always shown) scroller keeps the
-        // whole track: it is visible and clicking it pages. An overlay scroller spans the
-        // same rail while invisible, so only its knob keeps priority; yielding all of it
-        // would leave nowhere to grab the edge of a scrollable list.
+        // The list's scroller rail sits under the inner part of this strip. The outermost
+        // band always drags: yielding the whole track made any scrollable list's edge
+        // ungrabbable. Inward, only the knob keeps priority; the empty track drags too.
+        if convert(point, from: superview).x >= bounds.maxX - Self.edgeGrabWidth { return hit }
         for sibling in superview?.subviews ?? [] where sibling !== self {
             for scroll in Self.scrollViews(under: sibling) {
                 guard let scroller = scroll.verticalScroller, !scroller.isHiddenOrHasHiddenAncestor,
                       scroller.isEnabled else { continue }
-                let owned = scroller.scrollerStyle == .legacy ? scroller.bounds : scroller.rect(for: .knob)
-                if owned.contains(scroller.convert(point, from: superview)) { return nil }
+                if scroller.rect(for: .knob).contains(scroller.convert(point, from: superview)) { return nil }
             }
         }
         return hit
@@ -338,10 +339,23 @@ final class EdgeDragStrip: NSView {
     init(range: SidebarWidthRange) {
         self.range = range
         super.init(frame: .zero)
-        HoverCursor.installResizeLeftRight(on: self)
+        // 光标跟着点击归属走：压在滑块上时按下去是滚动，不能显示调宽光标。
+        // 只有 cursorUpdate 的区域进入后不再更新，指针在条内上下移到滑块要靠 mouseMoved。
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.cursorUpdate, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self))
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func cursorUpdate(with event: NSEvent) { updateCursor(event) }
+    override func mouseMoved(with event: NSEvent) { updateCursor(event) }
+
+    private func updateCursor(_ event: NSEvent) {
+        guard let superview else { return }
+        let point = superview.convert(event.locationInWindow, from: nil)
+        (hitTest(point) === self && !ShellHoverGate.suppressed ? NSCursor.resizeLeftRight : .arrow).set()
+    }
 
     var onDragClose: (() -> Void)?
     var onResizeBegan: (() -> Void)?

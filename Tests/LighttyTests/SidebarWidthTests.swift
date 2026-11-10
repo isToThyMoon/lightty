@@ -3,9 +3,9 @@ import XCTest
 
 /// 两条侧栏的可拖宽度守同一套规则：区间钳制、越界才拖关、偏好按区间读回。
 final class SidebarWidthTests: XCTestCase {
-    /// 原生常驻滚动条的轨道用于翻页；短列表的空槽仍然可以拖动侧栏边线。
+    /// 滚动条在拖动条下面时只让出滑块：空轨道和贴边一带都拖侧栏边线，长列表也抓得住。
     @MainActor
-    func testDragStripYieldsScrollableTrack() throws {
+    func testDragStripYieldsOnlyTheKnob() throws {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
         let scroll = SidebarListScrollView(frame: NSRect(x: 12, y: 0, width: 186, height: 400))
         let document = NSView(frame: NSRect(x: 0, y: 0, width: 160, height: 2000))
@@ -25,7 +25,8 @@ final class SidebarWidthTests: XCTestCase {
         XCTAssertTrue(strip.frame.contains(onKnob))
         XCTAssertNil(strip.hitTest(onKnob), "滑块上让给滚动条")
         let offKnob = NSPoint(x: 193, y: knob.midY < 200 ? 390 : 10)
-        XCTAssertNil(strip.hitTest(offKnob), "可滚动时轨道用于翻页")
+        XCTAssertTrue(strip.hitTest(offKnob) === strip, "空轨道拖边线")
+        XCTAssertTrue(strip.hitTest(NSPoint(x: 198, y: knob.midY)) === strip, "贴边一带压着滑块也拖边线")
 
         document.frame.size.height = 100
         scroll.tile()
