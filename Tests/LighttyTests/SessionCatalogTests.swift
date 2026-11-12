@@ -14,10 +14,12 @@ final class SessionCatalogTests: XCTestCase {
             // 桌面端同一来源，originator 不同。回归：漏了它，新会话的标题到不了 pane 和列表。
             ["id": "tui-157", "source": "vscode", "originator": "codex-tui", "name": "打个招呼", "preview": "你好"],
             ["id": "desktop-2", "source": "vscode", "originator": "Codex Desktop"],
+            // lightty 先于界面连上后台进程时，终端会话被记成 lightty 的名字（0.167.2 实测）。
+            ["id": "tui-first-client", "source": "vscode", "originator": "lightty"],
         ]]
         let rows = try CodexSessionProvider.decode(page, source: source, archived: false)
-        XCTAssertEqual(rows.map(\.key.nativeID), ["thread-1", "tui-157"])
-        XCTAssertEqual(rows.last?.title, "打个招呼")
+        XCTAssertEqual(rows.map(\.key.nativeID), ["thread-1", "tui-157", "tui-first-client"])
+        XCTAssertEqual(rows[1].title, "打个招呼")
         XCTAssertEqual(rows.first?.updatedAt, Date(timeIntervalSince1970: 1000))
         XCTAssertThrowsError(try CodexSessionProvider.decode([:], source: source, archived: false))
     }

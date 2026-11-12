@@ -51,7 +51,7 @@ struct CodexSessionProvider: AgentSessionProvider {
     static func isTerminalThread(_ record: [String: Any]) -> Bool {
         switch record["source"] as? String {
         case "cli": return true
-        case "vscode": return record["originator"] as? String == CodexAgent.terminalOriginator
+        case "vscode": return (record["originator"] as? String).map(CodexAgent.terminalOriginators.contains) ?? false
         default: return false
         }
     }

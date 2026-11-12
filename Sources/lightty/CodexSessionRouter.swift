@@ -155,8 +155,10 @@ final class CodexSessionRouter {
             self.diagnostic(.init(.daemonConnection, .handshakeTimeout, agent: .codex))
             channel.close()
         }
+        // 报终端界面的名字：后台进程把第一个握手客户端的名字记成之后所有新会话的 `originator`，
+        // lightty 先连上时报自己的名字，终端建的会话就都被当成外来会话（见 `CodexAgent.terminalOriginators`）。
         channel.request("initialize", params: [
-            "clientInfo": ["name": "lightty", "version": "0.1.0"],
+            "clientInfo": ["name": CodexAgent.terminalOriginator, "version": "0.1.0"],
             "capabilities": ["experimentalApi": false],
         ]) { [weak self, weak channel] result in
             guard let self, let channel, result != nil else { return }

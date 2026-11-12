@@ -18,6 +18,11 @@ public enum CodexAgent {
     /// `app-server-protocol/src/protocol/v2/thread_data.rs`（`Thread.originator`）。
     public static let terminalOriginator = "codex-tui"
 
+    /// 共享后台进程只认**第一个**握手客户端的名字当所有新会话的 `originator`。lightty 曾以
+    /// `lightty` 先连上（开机时界面都因没网退出），之后终端建的会话全记成它，被列表当外来会话
+    /// 筛掉。lightty 从不建会话，这个名字下的会话都出自终端界面；新连接已改报 `terminalOriginator`。
+    public static let terminalOriginators: Set<String> = [terminalOriginator, "lightty"]
+
     public static let spec = AgentSpec(
         executableName: "codex",
         configurationVariable: "CODEX_HOME",

@@ -8,6 +8,8 @@ app-server 后台进程里（`codex app-server --listen unix:// --managed-daemon
 后台进程的拉起者退出后它被系统收养，父进程链上没有终端。载荷里唯一可靠的身份是 `session_id`。
 
 lightty 不改 Codex 的运行方式，通过官方连接确定会话所属 pane，并接收回合状态。
+
+握手时 lightty 报 `codex-tui`（`CodexAgent.terminalOriginator`）：后台进程把第一个握手客户端的名字记成之后所有新会话的 `originator`，lightty 先于界面连上时若报自己的名字，终端建的会话会被列表筛掉。0.167.2 实测：开机续接因没网全部失败，lightty 先连上，此后新会话都记成 `lightty`；列表仍把 `lightty` 当终端会话（`CodexAgent.terminalOriginators`）收进来。
 这一节只作用于 Codex，Claude 的 hook 不查路由记录：
 
 ```
