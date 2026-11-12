@@ -442,3 +442,37 @@ struct SessionModelTests {
         #expect(f.library.paneState(for: id)?.sessionKey == record.key)
     }
 }
+
+/// 重启续接的 Agent 没等到这段会话的 hook 就出错退出（开机还没联网、登录过期），
+/// 不是用户退出：会话留着记为无法恢复，快照照存，下次重启再续接。
+/// 正常退出（0）或已经被 hook 确认过的会话，退出照常解绑。
+@MainActor
+struct FailedRestoreTests {
+    @Test func failedResumeKeepsTheSessionForTheNextRestart() async throws {
+        let f = try SessionModelFixture()
+        defer { f.close() }
+        let record = f.record()
+        let intent = f.association(record)
+
+        let failed = f.pane()
+        f.library.associate(.restoring(intent), with: failed)
+        f.library.commandFinished(in: failed, at: Date(), exitCode: 1)
+        #expect(f.library.paneState(for: failed)?.binding == .unavailable(intent))
+
+        let quit = f.pane()
+        f.library.associate(.restoring(intent), with: quit)
+        f.library.commandFinished(in: quit, at: Date(), exitCode: 0)
+        #expect(f.library.paneState(for: quit)?.binding == PaneSessionState.Binding.none)
+
+        let unknown = f.pane()
+        f.library.associate(.restoring(intent), with: unknown)
+        f.library.commandFinished(in: unknown, at: Date())
+        #expect(f.library.paneState(for: unknown)?.binding == PaneSessionState.Binding.none)
+
+        let confirmed = f.pane()
+        f.library.associate(.restoring(intent), with: confirmed)
+        try await f.status(.idle, event: "SessionStart", pane: confirmed, record: record)
+        f.library.commandFinished(in: confirmed, at: Date(), exitCode: 1)
+        #expect(f.library.paneState(for: confirmed)?.binding == PaneSessionState.Binding.none)
+    }
+}

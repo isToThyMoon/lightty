@@ -160,10 +160,31 @@ final class PaneView: NSView {
         sessionState.processIdentity
     }
 
-    private func shellCommandFinished(at date: Date) {
-        sessionLibrary.commandFinished(in: dragIdentifier, at: date)
+    private func shellCommandFinished(at date: Date, exitCode: Int?) {
+        let before = sessionState.binding
+        sessionLibrary.commandFinished(in: dragIdentifier, at: date, exitCode: exitCode)
         applySessionState()
         WorkspaceStore.shared.scheduleSave()
+        if case .restoring(let association) = before, sessionState.binding == .unavailable(association) {
+            scheduleRestoreRetry(association, failedAt: Date())
+        }
+    }
+
+    /// 重启续接失败（多半是开机还没联网）后，等有网自动再续一次；只试一次，免得登录过期这类
+    /// 有网也好不了的错误反复刷屏。这期间用户在终端里敲过字或粘贴过，就不替他按键。
+    private var restoreRetried = false
+    private func scheduleRestoreRetry(_ association: PaneSessionAssociation, failedAt: Date) {
+        guard !restoreRetried else { return }
+        restoreRetried = true
+        NetworkReadiness.shared.whenOnline { [weak self] in
+            guard let self, self.window != nil,
+                  self.sessionState.binding == .unavailable(association),
+                  (self.terminal.lastTypedAt ?? .distantPast) < failedAt,
+                  self.terminal.resendLaunchInput() else { return }
+            self.sessionLibrary.associate(.restoring(association), with: self.dragIdentifier)
+            self.applySessionState()
+            WorkspaceStore.shared.scheduleSave()
+        }
     }
     let header = PaneHeaderView()
     let terminal: TerminalSurfaceView
@@ -258,7 +279,9 @@ final class PaneView: NSView {
             guard let self else { return }
             self.onClose?(self)
         }
-        terminal.onCommandFinished = { [weak self] date in self?.shellCommandFinished(at: date) }
+        terminal.onCommandFinished = { [weak self] date, exitCode in
+            self?.shellCommandFinished(at: date, exitCode: exitCode)
+        }
         terminal.onSubmit = { [weak self] in
             guard let self else { return }
             self.sessionLibrary.noteSubmit(in: self.dragIdentifier)

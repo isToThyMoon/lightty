@@ -636,7 +636,9 @@ final class GhosttyRuntime {
         case GHOSTTY_ACTION_COMMAND_FINISHED:
             guard let view = targetView() else { return false }
             let finishedAt = Date()
-            DispatchQueue.main.async { [weak view] in view?.commandFinished(at: finishedAt) }
+            let code = action.action.command_finished.exit_code
+            let exitCode: Int? = code < 0 ? nil : Int(code)
+            DispatchQueue.main.async { [weak view] in view?.commandFinished(at: finishedAt, exitCode: exitCode) }
             return true
 
         // MARK: - 进度

@@ -280,12 +280,21 @@ final class SessionLibrary {
         reconcilePane(id)
     }
 
-    func commandFinished(in id: UUID, at date: Date) {
+    func commandFinished(in id: UUID, at date: Date, exitCode: Int? = nil) {
         // 前台命令回到了 shell：agent 已退出，它写的标题不再算数，pane 名回来
         forgetAgentTitle(in: id)
         statusStore.forgetCodexSubmit(in: id)
+        // 重启续接还没被这段会话的 hook 确认就出错退出（开机还没联网、登录过期）：不是用户
+        // 主动退出，保留会话、记为无法恢复，下次重启再续接。读在 statusStore 改写之前。
+        let confirmed = runtime.panes[id]?.status?.sessionID?.isEmpty == false
         guard let input = runtime.inputs[id], date >= input.associatedAt,
               statusStore.commandFinished(for: id, at: date) else { reconcilePane(id); return }
+        if case .restoring(let association) = input.intent, !confirmed, let exitCode, exitCode != 0 {
+            runtime.inputs[id]?.intent = .unavailable(association)
+            runtime.inputs[id]?.supersededStatus = statusStore.status(for: id)
+            reconcilePane(id)
+            return
+        }
         runtime.inputs[id]?.intent = .none
         reconcilePane(id)
     }

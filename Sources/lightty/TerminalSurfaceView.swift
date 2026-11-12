@@ -138,12 +138,15 @@ final class TerminalSurfaceView: NSView {
     /// 待 shell 就绪后要发的 agent 启动/续接命令；发一次即清。
     private var pendingReadyInput: String?
     private var sentReadyInput = false
-    var onCommandFinished: ((Date) -> Void)?
+    var onCommandFinished: ((Date, Int?) -> Void)?
+    /// 用户最后一次往终端里敲字或粘贴的时间。自动重发命令前看它：用户动过就不替他按键。
+    private(set) var lastTypedAt: Date?
 
     /// Shell integration reports command completion, not arbitrary terminal text.
-    func commandFinished(at date: Date) {
+    /// `exitCode` is nil when the shell did not report one.
+    func commandFinished(at date: Date, exitCode: Int? = nil) {
         guard launchConfiguration.initialInput == nil || sentReadyInput else { return }
-        onCommandFinished?(date)
+        onCommandFinished?(date, exitCode)
     }
 
     init(configuration: TerminalSurfaceConfiguration = .init()) {
@@ -463,6 +466,7 @@ final class TerminalSurfaceView: NSView {
     // MARK: - 键盘（直接对齐 Ghostty SurfaceView_AppKit）
 
     override func keyDown(with event: NSEvent) {
+        lastTypedAt = Date()
         onInteraction?()
         // 36 主键盘回车、76 小键盘回车
         if !event.isARepeat, event.keyCode == 36 || event.keyCode == 76, markedText.length == 0 {
@@ -1051,6 +1055,14 @@ final class TerminalSurfaceView: NSView {
         sendReturn()
     }
 
+    /// 把启动命令（重启续接）再发一次。只用于续接失败后的自动重试，见 `PaneView`。
+    @discardableResult
+    func resendLaunchInput() -> Bool {
+        guard sentReadyInput, let command = launchConfiguration.initialInput, surface != nil else { return false }
+        sendText(command.hasSuffix("\n") ? String(command.dropLast()) : command)
+        return sendReturn()
+    }
+
     private static func normalizedWorkingDirectory(_ rawValue: String?) -> String? {
         guard let rawValue, !rawValue.isEmpty else { return nil }
         if rawValue.hasPrefix("file://"),
@@ -1080,6 +1092,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
+        lastTypedAt = Date()
         onInteraction?()
         performBindingAction("paste_from_clipboard")
     }
@@ -1089,6 +1102,7 @@ final class TerminalSurfaceView: NSView {
     }
 
     @objc func pasteSelection(_ sender: Any?) {
+        lastTypedAt = Date()
         onInteraction?()
         performBindingAction("paste_from_selection")
     }
